@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.25)
 #
 
 project(
-  "Project"
+  "memix"
   VERSION 0.1.0
   LANGUAGES CXX
 )
@@ -59,27 +59,7 @@ endif()
 # Find all headers and implementation files
 include(cmake/SourcesAndHeaders.cmake)
 
-if(${PROJECT_NAME}_BUILD_EXECUTABLE)
-  add_executable(${PROJECT_NAME} ${exe_sources})
-
-  if(${PROJECT_NAME}_VERBOSE_OUTPUT)
-    verbose_message("Found the following sources:")
-    foreach(source IN LISTS exe_sources)
-      verbose_message("* ${source}")
-    endforeach()
-  endif()
-
-  if(${PROJECT_NAME}_ENABLE_UNIT_TESTING)
-    add_library(${PROJECT_NAME}_LIB ${headers} ${sources})
-
-    if(${PROJECT_NAME}_VERBOSE_OUTPUT)
-      verbose_message("Found the following headers:")
-      foreach(header IN LISTS headers)
-        verbose_message("* ${header}")
-      endforeach()
-    endif()
-  endif()
-elseif(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
+if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
   add_library(${PROJECT_NAME} INTERFACE)
 
   if(${PROJECT_NAME}_VERBOSE_OUTPUT)
@@ -107,6 +87,31 @@ else()
   endif()
 endif()
 
+set(bin_targets)
+if(${PROJECT_NAME}_BUILD_EXECUTABLE)
+  if(${PROJECT_NAME}_VERBOSE_OUTPUT)
+    verbose_message("Found the following executable entrypoints:")
+    foreach(bin_source IN LISTS bin_sources)
+      verbose_message("* ${bin_source}")
+    endforeach()
+  endif()
+
+  foreach(bin_source IN LISTS bin_sources)
+    get_filename_component(bin_name ${bin_source} NAME_WE)
+    set(bin_target ${PROJECT_NAME}_${bin_name})
+
+    add_executable(${bin_target} ${bin_source})
+    set_target_properties(
+      ${bin_target}
+      PROPERTIES
+      OUTPUT_NAME ${bin_name}
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
+    )
+
+    list(APPEND bin_targets ${bin_target})
+  endforeach()
+endif()
+
 set_target_properties(
   ${PROJECT_NAME}
   PROPERTIES
@@ -114,15 +119,6 @@ set_target_properties(
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE}"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
 )
-if(${PROJECT_NAME}_BUILD_EXECUTABLE AND ${PROJECT_NAME}_ENABLE_UNIT_TESTING)
-  set_target_properties(
-    ${PROJECT_NAME}_LIB
-    PROPERTIES
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE}"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE}"
-    OUTPUT_NAME ${PROJECT_NAME}
-  )
-endif()
 
 message(STATUS "Added all header and implementation files.\n")
 
@@ -134,11 +130,10 @@ if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
   project_apply_cxx_standard(${PROJECT_NAME} INTERFACE)
 else()
   project_apply_cxx_standard(${PROJECT_NAME} PUBLIC)
-
-  if(${PROJECT_NAME}_BUILD_EXECUTABLE AND ${PROJECT_NAME}_ENABLE_UNIT_TESTING)
-    project_apply_cxx_standard(${PROJECT_NAME}_LIB PUBLIC)
-  endif()
 endif()
+foreach(bin_target IN LISTS bin_targets)
+  project_apply_cxx_standard(${bin_target} PRIVATE)
+endforeach()
 include(cmake/CompilerWarnings.cmake)
 set_project_warnings(${PROJECT_NAME})
 verbose_message("Applied compiler warnings. Using standard C++${PROJECT_CXX_STANDARD}.\n")
@@ -154,25 +149,28 @@ include(cmake/Doxygen.cmake)
 #
 
 # Identify and link with the specific "packages" the project uses
-#CPMAddPackage(
-#  NAME dependency1
-#  GITHUB_REPOSITORY owner/dependency1
-#  VERSION 1.2.3
-#  OPTIONS
-#    "DEPENDENCY1_BUILD_TESTS OFF"
-#)
-#target_link_libraries(
-#  ${PROJECT_NAME}
-#  PUBLIC
-#    dependency1::dependency1
-#)
-#if(${PROJECT_NAME}_BUILD_EXECUTABLE AND ${PROJECT_NAME}_ENABLE_UNIT_TESTING)
-#  target_link_libraries(
-#    ${PROJECT_NAME}_LIB
-#    PUBLIC
-#      dependency1::dependency1
-#  )
-#endif()
+if(${PROJECT_NAME}_BUILD_EXECUTABLE)
+  CPMAddPackage(
+    NAME CLI11
+    GITHUB_REPOSITORY CLIUtils/CLI11
+    VERSION 2.5.0
+    OPTIONS
+      "CLI11_PRECOMPILED OFF"
+  )
+
+  if(NOT TARGET CLI11::CLI11)
+    find_package(CLI11 CONFIG REQUIRED)
+  endif()
+
+  foreach(bin_target IN LISTS bin_targets)
+    target_link_libraries(
+      ${bin_target}
+      PRIVATE
+        ${PROJECT_NAME}
+        CLI11::CLI11
+    )
+  endforeach()
+endif()
 
 # For Windows, it is necessary to link with the MultiThreaded library.
 # Depending on how the rest of the project's dependencies are linked, it might be necessary
@@ -199,6 +197,7 @@ if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
     INTERFACE
     $<INSTALL_INTERFACE:include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
   )
 else()
   target_include_directories(
@@ -206,19 +205,10 @@ else()
     PUBLIC
     $<INSTALL_INTERFACE:include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
-  if(${PROJECT_NAME}_BUILD_EXECUTABLE AND ${PROJECT_NAME}_ENABLE_UNIT_TESTING)
-    target_include_directories(
-      ${PROJECT_NAME}_LIB
-      PUBLIC
-      $<INSTALL_INTERFACE:include>
-      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-      PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-  endif()
 endif()
 
 message(STATUS "Finished setting up include directories.")
@@ -227,11 +217,7 @@ message(STATUS "Finished setting up include directories.")
 # Provide alias to library for
 #
 
-if(${PROJECT_NAME}_BUILD_EXECUTABLE)
-  add_executable(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
-else()
-  add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
-endif()
+add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 verbose_message("Project is now aliased as ${PROJECT_NAME}::${PROJECT_NAME}.\n")
 
@@ -262,6 +248,15 @@ install(
   PUBLIC_HEADER DESTINATION
   include
 )
+
+if(bin_targets)
+  install(
+    TARGETS
+    ${bin_targets}
+    RUNTIME DESTINATION
+    ${CMAKE_INSTALL_BINDIR}
+  )
+endif()
 
 install(
   EXPORT

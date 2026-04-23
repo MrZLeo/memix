@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  PROJECT_NAME: "modern-cpp-template"
+  PROJECT_NAME: "memix"
   BUILD_TYPE: Release
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
 

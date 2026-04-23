@@ -1,3 +1,3 @@
-#include "project/tmp.hpp"
+#include "memix/tmp.hpp"
 
-int tmp::add(int a, int b) { return a + b; }
+int memix::add(int lhs, int rhs) { return lhs + rhs; }

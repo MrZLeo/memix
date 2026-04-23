@@ -1,16 +1,15 @@
 set(sources
-    src/tmp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tmp.cpp
 )
 
-set(exe_sources
-		src/main.cpp
-		${sources}
+file(GLOB bin_sources CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/bin/*.cpp
 )
 
 set(headers
-    include/project/tmp.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/memix/tmp.hpp
 )
 
 set(test_sources
-  src/tmp_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/src/tmp_test.cpp
 )

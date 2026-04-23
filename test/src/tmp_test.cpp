@@ -1,9 +1,9 @@
-#include "project/tmp.hpp"
+#include "memix/tmp.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
-TEST_CASE("tmp::add sums two integers", "[tmp]")
+TEST_CASE("memix::add sums two integers", "[memix]")
 {
-  REQUIRE(tmp::add(1, 2) == 3);
-  REQUIRE(tmp::add(-2, 2) == 0);
+  REQUIRE(memix::add(1, 2) == 3);
+  REQUIRE(memix::add(-2, 2) == 0);
 }
