@@ -22,6 +22,13 @@ include(cmake/CPM.cmake)
 include(cmake/ProjectStandard.cmake)
 
 project_detect_cxx_standard(PROJECT_CXX_STANDARD)
+if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
+  message(
+    FATAL_ERROR
+    "${PROJECT_NAME}_BUILD_HEADERS_ONLY is not supported because memix now has compiled store sources. "
+    "Configure with -D${PROJECT_NAME}_BUILD_HEADERS_ONLY=OFF."
+  )
+endif()
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Debug")
 endif()
@@ -148,6 +155,34 @@ include(cmake/Doxygen.cmake)
 # Model project dependencies
 #
 
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+CPMAddPackage(
+  NAME simdjson
+  GITHUB_REPOSITORY simdjson/simdjson
+  GIT_TAG v4.6.2
+  DOWNLOAD_ONLY YES
+)
+
+target_sources(
+  ${PROJECT_NAME}
+  PRIVATE
+    ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp
+)
+
+set_source_files_properties(
+  ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp
+  PROPERTIES
+    COMPILE_OPTIONS "-w"
+)
+
+target_include_directories(
+  ${PROJECT_NAME}
+  SYSTEM PRIVATE
+    ${simdjson_SOURCE_DIR}/singleheader
+)
+
+target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::Crypto)
+
 # Identify and link with the specific "packages" the project uses
 if(${PROJECT_NAME}_BUILD_EXECUTABLE)
   CPMAddPackage(
@@ -157,17 +192,32 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
     OPTIONS
       "CLI11_PRECOMPILED OFF"
   )
+  CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    GIT_TAG v1.17.0
+    OPTIONS
+      "SPDLOG_BUILD_EXAMPLE OFF"
+      "SPDLOG_BUILD_TESTS OFF"
+      "SPDLOG_INSTALL OFF"
+  )
 
   if(NOT TARGET CLI11::CLI11)
     find_package(CLI11 CONFIG REQUIRED)
   endif()
 
   foreach(bin_target IN LISTS bin_targets)
+    target_include_directories(
+      ${bin_target}
+      SYSTEM PRIVATE
+        ${simdjson_SOURCE_DIR}/singleheader
+    )
     target_link_libraries(
       ${bin_target}
       PRIVATE
         ${PROJECT_NAME}
         CLI11::CLI11
+        spdlog::spdlog
     )
   endforeach()
 endif()

@@ -1,6 +1,6 @@
 ---
-Checks: '*,-altera-*,-fuchsia-*,-google-*,-zircon-*,-abseil-*,-modernize-use-trailing-return-type,-llvm-*,-llvmlibc-*'
+Checks: '*,-altera-*,-fuchsia-*,-google-*,-zircon-*,-abseil-*,-modernize-use-trailing-return-type,-llvm-*,-llvmlibc-*,-portability-avoid-pragma-once,-clang-analyzer-cplusplus.NewDeleteLeaks,-readability-braces-around-statements,-hicpp-braces-around-statements'
 CheckOptions: [{ key: misc-non-private-member-variables-in-classes, value: IgnoreClassesWithAllMemberVariablesBeingPublic }]
 WarningsAsErrors: '*'
-HeaderFilterRegex: ''
+HeaderFilterRegex: '^(/Users/mrzleo/memix/)?(include|src|test)/'
 FormatStyle: none

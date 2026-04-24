@@ -5,16 +5,20 @@
 * `include/` and `src/` contain the `memix` library
 * `src/bin/*.cpp` are auto-discovered and built as executables
 
-The sample CLI uses [Lyra](https://www.bfgroup.xyz/Lyra/) for argument parsing.
+The sample CLI uses [CLI11](https://github.com/CLIUtils/CLI11) for argument
+parsing.
 
 ## Dependencies
 
 The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 
-* [Lyra 1.7.0](https://github.com/bfgroup/Lyra/releases/tag/1.7.0) for CLI parsing
+* [CLI11 2.5.0](https://github.com/CLIUtils/CLI11/releases/tag/v2.5.0) for CLI parsing
+* [simdjson 4.6.2](https://github.com/simdjson/simdjson/releases/tag/v4.6.2) for metadata JSON parsing and writing
+* [spdlog 1.17.0](https://github.com/gabime/spdlog/releases/tag/v1.17.0) for executable logging
 * [Catch2 3.11.0](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) for tests
 
-Lyra itself is an official header-only library, but `memix` consumes it through its upstream CMake project and public target `bfg::lyra` instead of vendoring the generated single-header amalgamation.
+The immutable store uses OpenSSL libcrypto through CMake's `OpenSSL::Crypto`
+target for SHA-256 content hashing.
 
 ## Build
 
@@ -30,10 +34,26 @@ The default build always produces the `memix` library and also builds every `src
 ## Run
 
 ```bash
-./build/bin/Debug/memix-store --lhs 4 --rhs 5
+./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type agents README.md
+./build/bin/Debug/memix-store --store-root /tmp/memix-store list
+./build/bin/Debug/memix-store --store-root /tmp/memix-store list --json
 ./build/bin/Debug/memix-store --version
 ./build/bin/Debug/memix-store --help
 ```
+
+`memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
+then `$HOME/.memix`. The supported immutable object types are `agents`, `chat`,
+and `documents`.
+
+For a manual smoke check against the real default store root, run:
+
+```bash
+./build/bin/Debug/memix-store ingest --type agents README.md
+./build/bin/Debug/memix-store list --type agents
+```
+
+That writes outside the repository, so use `--store-root` when you want an
+isolated test store.
 
 ## Tests
 
