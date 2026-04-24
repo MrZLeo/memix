@@ -58,12 +58,12 @@ jobs:
         echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         submodules: recursive
 
     - name: cache CPM downloads
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ env.CPM_SOURCE_CACHE }}
         key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
@@ -72,8 +72,15 @@ jobs:
       if: ${{ runner.os == 'Windows' }}
       run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE"
 
+    - name: configure (Linux)
+      if: ${{ runner.os == 'Linux' }}
+      env:
+        CC: gcc-14
+        CXX: g++-14
+      run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE"
+
     - name: configure
-      if: ${{ runner.os != 'Windows' }}
+      if: ${{ runner.os != 'Windows' && runner.os != 'Linux' }}
       run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE"
       
     - name: build (Windows)
@@ -113,14 +120,14 @@ jobs:
         tar -cvzf $HOME/artifact.tar.gz .
 
     - name: upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: ${{ runner.os == 'Windows' }}
       with:
         name: ${{ runner.os }}-${{ steps.version_win.outputs.name }}
         path: '~/artifact.*'
 
     - name: upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: ${{ runner.os != 'Windows' }}
       with:
         name: ${{ runner.os }}-${{ steps.version.outputs.name }}
@@ -150,7 +157,7 @@ jobs:
         prerelease: false
 
     - name: download artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: "Linux-${{ steps.version.outputs.name }}"
         path: ./
@@ -166,7 +173,7 @@ jobs:
         asset_content_type: application/x-tar
 
     - name: download artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: "Windows-${{ steps.version.outputs.name }}"
         path: ./
@@ -182,7 +189,7 @@ jobs:
         asset_content_type: application/zip
 
     - name: download artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: "macOS-${{ steps.version.outputs.name }}"
         path: ./

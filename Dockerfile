@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     cppcheck \
     curl \
     doxygen \
+    g++-14 \
+    gcc-14 \
     git \
     graphviz \
     make \
@@ -23,3 +25,6 @@ RUN apt-get update && apt-get install -y \
     vim \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+ENV CC=gcc-14
+ENV CXX=g++-14
