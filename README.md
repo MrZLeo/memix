@@ -34,7 +34,8 @@ The default build always produces the `memix` library and also builds every `src
 ## Run
 
 ```bash
-./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type agents README.md
+./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type agents --dest README.md README.md
+./build/bin/Debug/memix-store --store-root /tmp/memix-store agents tree
 ./build/bin/Debug/memix-store --store-root /tmp/memix-store list
 ./build/bin/Debug/memix-store --store-root /tmp/memix-store list --json
 ./build/bin/Debug/memix-store --version
@@ -48,9 +49,16 @@ and `documents`.
 For a manual smoke check against the real default store root, run:
 
 ```bash
-./build/bin/Debug/memix-store ingest --type agents README.md
+./build/bin/Debug/memix-store ingest --type agents --dest README.md README.md
+./build/bin/Debug/memix-store agents tree
 ./build/bin/Debug/memix-store list --type agents
 ```
+
+Agents ingest requires a source path plus `--dest`, the logical destination
+inside the agents tree. Commands under `agents` operate on that logical tree.
+Refs such as `refs/agents/latest` and `refs/agents/generations/000001` are
+small mutable files containing immutable generation ids; each generation then
+points at its immutable root tree.
 
 That writes outside the repository, so use `--store-root` when you want an
 isolated test store.

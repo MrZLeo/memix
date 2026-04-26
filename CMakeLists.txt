@@ -129,6 +129,8 @@ set_target_properties(
 
 message(STATUS "Added all header and implementation files.\n")
 
+project_enable_clang_tidy_for_targets(${PROJECT_NAME} ${bin_targets})
+
 #
 # Set the project standard and warnings
 #
@@ -173,6 +175,7 @@ set_source_files_properties(
   ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp
   PROPERTIES
     COMPILE_OPTIONS "-w"
+    SKIP_LINTING TRUE
 )
 
 target_include_directories(
