@@ -1,0 +1,1 @@
+- Always use Ninja as cmake generator
