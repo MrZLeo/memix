@@ -1,5 +1,7 @@
 #include "memix/store.hpp"
 
+#include "enum_text.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -2183,56 +2185,25 @@ StoreVoid collect_agent_files(const fs::path &root, std::string_view tree_id,
 namespace memix {
 
 std::string_view to_string(MemoryObjectType type) noexcept {
-  switch (type) {
-  case MemoryObjectType::Agents:
-    return "agents";
-  case MemoryObjectType::Chat:
-    return "chat";
-  case MemoryObjectType::Documents:
-    return "documents";
-  }
-  return "agents";
+  return detail::enum_token(type);
 }
 
 std::optional<MemoryObjectType>
 parse_memory_object_type(std::string_view value) noexcept {
-  if (value == "agents")
-    return MemoryObjectType::Agents;
-  if (value == "chat")
-    return MemoryObjectType::Chat;
-  if (value == "documents")
-    return MemoryObjectType::Documents;
-
-  return std::nullopt;
+  return detail::parse_enum_token<MemoryObjectType>(value);
 }
 
 std::vector<MemoryObjectType> memory_object_types() {
-  return {
-      MemoryObjectType::Agents,
-      MemoryObjectType::Chat,
-      MemoryObjectType::Documents,
-  };
+  return detail::enum_values<MemoryObjectType>();
 }
 
 std::string_view to_string(AgentTreeEntryKind kind) noexcept {
-  switch (kind) {
-  case AgentTreeEntryKind::Blob:
-    return "blob";
-  case AgentTreeEntryKind::Tree:
-    return "tree";
-  }
-  return "blob";
+  return detail::enum_token(kind);
 }
 
 std::optional<AgentTreeEntryKind>
 parse_agent_tree_entry_kind(std::string_view value) noexcept {
-  if (value == "blob") {
-    return AgentTreeEntryKind::Blob;
-  }
-  if (value == "tree") {
-    return AgentTreeEntryKind::Tree;
-  }
-  return std::nullopt;
+  return detail::parse_enum_token<AgentTreeEntryKind>(value);
 }
 
 std::expected<fs::path, StoreError> default_store_root() {

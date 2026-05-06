@@ -126,6 +126,12 @@ void make_object_mutable_for_corruption(const fs::path &object_dir) {
 
 TEST_CASE("memory object type helpers accept only supported v1 types",
           "[store]") {
+  REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Agents))
+          == "agents");
+  REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Chat))
+          == "chat");
+  REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Documents))
+          == "documents");
   REQUIRE(memix::parse_memory_object_type("agents")
           == memix::MemoryObjectType::Agents);
   REQUIRE(memix::parse_memory_object_type("chat")
@@ -133,8 +139,33 @@ TEST_CASE("memory object type helpers accept only supported v1 types",
   REQUIRE(memix::parse_memory_object_type("documents")
           == memix::MemoryObjectType::Documents);
   REQUIRE_FALSE(memix::parse_memory_object_type("pdf").has_value());
-  REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Agents))
-          == "agents");
+  REQUIRE_FALSE(memix::parse_memory_object_type("Agents").has_value());
+
+  const std::vector expected_types{
+      memix::MemoryObjectType::Agents,
+      memix::MemoryObjectType::Chat,
+      memix::MemoryObjectType::Documents,
+  };
+  REQUIRE(memix::memory_object_types() == expected_types);
+
+  REQUIRE(memix::to_string(static_cast<memix::MemoryObjectType>(255)).empty());
+}
+
+TEST_CASE("agent tree entry kind helpers accept only supported v1 kinds",
+          "[store]") {
+  REQUIRE(std::string(memix::to_string(memix::AgentTreeEntryKind::Blob))
+          == "blob");
+  REQUIRE(std::string(memix::to_string(memix::AgentTreeEntryKind::Tree))
+          == "tree");
+  REQUIRE(memix::parse_agent_tree_entry_kind("blob")
+          == memix::AgentTreeEntryKind::Blob);
+  REQUIRE(memix::parse_agent_tree_entry_kind("tree")
+          == memix::AgentTreeEntryKind::Tree);
+  REQUIRE_FALSE(memix::parse_agent_tree_entry_kind("TREE").has_value());
+  REQUIRE_FALSE(memix::parse_agent_tree_entry_kind("directory").has_value());
+
+  REQUIRE(memix::to_string(static_cast<memix::AgentTreeEntryKind>(255))
+              .empty());
 }
 
 TEST_CASE("default store root follows MEMIX_STORE_HOME then XDG then HOME",

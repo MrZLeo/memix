@@ -164,6 +164,14 @@ CPMAddPackage(
   GIT_TAG v4.6.2
   DOWNLOAD_ONLY YES
 )
+CPMAddPackage(
+  NAME magic_enum
+  GITHUB_REPOSITORY Neargye/magic_enum
+  GIT_TAG v0.9.7
+  OPTIONS
+    "MAGIC_ENUM_OPT_BUILD_EXAMPLES OFF"
+    "MAGIC_ENUM_OPT_BUILD_TESTS OFF"
+)
 
 target_sources(
   ${PROJECT_NAME}
@@ -182,6 +190,7 @@ target_include_directories(
   ${PROJECT_NAME}
   SYSTEM PRIVATE
     ${simdjson_SOURCE_DIR}/singleheader
+    ${magic_enum_SOURCE_DIR}/include
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::Crypto)
