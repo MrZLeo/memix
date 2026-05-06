@@ -1,6 +1,6 @@
 #include "memix/store.hpp"
 
-#include "enum_text.hpp"
+#include "common.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,7 +18,6 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <random>
 #include <ranges>
 #include <span>
 #include <string>
@@ -47,16 +46,41 @@ constexpr std::string_view kAgentUpdateLock = "agents-update";
 constexpr std::string_view kAgentsLatestRef = "agents/latest";
 constexpr std::string_view kJsonSuffix = ".json";
 constexpr std::size_t kSha256DigestBytes = 32;
-constexpr std::size_t kSha256HexDigestLength = kSha256DigestBytes * 2;
 constexpr std::size_t kHashReadBufferBytes = 8192;
 constexpr std::size_t kTimestampBufferBytes = 21;
-constexpr int kTempDirAttempts = 32;
 constexpr std::uint64_t kDecimalRadix = 10;
 
-template <typename Value>
-using StoreResult = std::expected<Value, memix::StoreError>;
+struct MemoryObjectTypeToken {
+  memix::MemoryObjectType value;
+  std::string_view token;
+};
 
-using StoreVoid = std::expected<void, memix::StoreError>;
+struct AgentTreeEntryKindToken {
+  memix::AgentTreeEntryKind value;
+  std::string_view token;
+};
+
+constexpr std::array kMemoryObjectTypeTokens{
+    MemoryObjectTypeToken{memix::MemoryObjectType::Agents, "agents"},
+    MemoryObjectTypeToken{memix::MemoryObjectType::Chat, "chat"},
+    MemoryObjectTypeToken{memix::MemoryObjectType::Documents, "documents"},
+};
+
+constexpr std::array kAgentTreeEntryKindTokens{
+    AgentTreeEntryKindToken{memix::AgentTreeEntryKind::Blob, "blob"},
+    AgentTreeEntryKindToken{memix::AgentTreeEntryKind::Tree, "tree"},
+};
+
+template <typename Value>
+using StoreResult = memix::detail::Result<Value>;
+
+using StoreVoid = memix::detail::VoidResult;
+
+namespace expected_fs = memix::detail::expected_fs;
+
+using memix::detail::apply_read_only_directory_permissions;
+using memix::detail::apply_read_only_file_permissions;
+using memix::detail::filesystem_error_message;
 
 struct AgentTreeEntryJson {
   std::string_view name;
@@ -91,116 +115,8 @@ std::optional<std::string> env_value(const char *name) {
 }
 
 std::unexpected<memix::StoreError> store_error(std::string message) {
-  return std::unexpected(memix::StoreError{.message = std::move(message)});
+  return memix::detail::unexpected_error(std::move(message));
 }
-
-template <typename... Paths>
-std::string filesystem_error_message(std::string_view operation,
-                                     const std::error_code &error,
-                                     const Paths &...paths) {
-  static_assert(sizeof...(Paths) > 0,
-                "filesystem errors must include at least one path");
-
-  std::string message{operation};
-  std::string_view separator = " `";
-  const auto append_path = [&message, &separator](const fs::path &path) {
-    message += std::format("{}{}`", separator, path.string());
-    separator = " to `";
-  };
-  (append_path(paths), ...);
-  return std::format("{}: {}", message, error.message());
-}
-
-namespace expected_fs {
-
-template <typename Value, typename... Paths>
-StoreResult<Value> fs_result(Value value, const std::error_code &error,
-                             std::string_view operation,
-                             const Paths &...paths) {
-  if (error) {
-    return store_error(filesystem_error_message(operation, error, paths...));
-  }
-  return value;
-}
-
-template <typename... Paths>
-StoreVoid fs_void(const std::error_code &error, std::string_view operation,
-                  const Paths &...paths) {
-  if (error) {
-    return store_error(filesystem_error_message(operation, error, paths...));
-  }
-  return {};
-}
-
-StoreResult<bool> exists(const fs::path &path) {
-  std::error_code error;
-  const bool value = fs::exists(path, error);
-  return fs_result(value, error, "failed to inspect", path);
-}
-
-StoreResult<bool> is_directory(const fs::path &path) {
-  std::error_code error;
-  const bool value = fs::is_directory(path, error);
-  return fs_result(value, error, "failed to inspect directory", path);
-}
-
-StoreResult<bool> is_regular_file(const fs::path &path) {
-  std::error_code error;
-  const bool value = fs::is_regular_file(path, error);
-  return fs_result(value, error, "failed to inspect file", path);
-}
-
-StoreResult<std::uintmax_t> file_size(const fs::path &path) {
-  std::error_code error;
-  const std::uintmax_t value = fs::file_size(path, error);
-  return fs_result(value, error, "failed to read file size for", path);
-}
-
-StoreResult<bool> create_directories(const fs::path &path) {
-  std::error_code error;
-  const bool value = fs::create_directories(path, error);
-  return fs_result(value, error, "failed to create directory", path);
-}
-
-StoreResult<bool> create_directory(const fs::path &path) {
-  std::error_code error;
-  const bool value = fs::create_directory(path, error);
-  return fs_result(value, error, "failed to create directory", path);
-}
-
-StoreResult<bool> copy_file(const fs::path &source, const fs::path &destination,
-                            fs::copy_options options) {
-  std::error_code error;
-  const bool value = fs::copy_file(source, destination, options, error);
-  return fs_result(value, error, "failed to copy file", source, destination);
-}
-
-StoreVoid rename(const fs::path &source, const fs::path &destination) {
-  std::error_code error;
-  fs::rename(source, destination, error);
-  return fs_void(error, "failed to rename", source, destination);
-}
-
-StoreResult<bool> remove(const fs::path &path) {
-  std::error_code error;
-  const bool value = fs::remove(path, error);
-  return fs_result(value, error, "failed to remove", path);
-}
-
-StoreResult<std::uintmax_t> remove_all(const fs::path &path) {
-  std::error_code error;
-  const std::uintmax_t value = fs::remove_all(path, error);
-  return fs_result(value, error, "failed to remove", path);
-}
-
-StoreVoid permissions(const fs::path &path, fs::perms permissions,
-                      fs::perm_options options) {
-  std::error_code error;
-  fs::permissions(path, permissions, options, error);
-  return fs_void(error, "failed to set permissions", path);
-}
-
-} // namespace expected_fs
 
 StoreVoid require_regular_file(const fs::path &path,
                                std::string missing_message) {
@@ -223,15 +139,6 @@ StoreVoid require_directory(const fs::path &path, std::string missing_message) {
         }
         return {};
       });
-}
-
-std::string hex_encode(std::span<const unsigned char> bytes) {
-  std::string output;
-  output.reserve(bytes.size() * 2);
-  for (const unsigned char byte : bytes) {
-    output += std::format("{:02x}", static_cast<unsigned int>(byte));
-  }
-  return output;
 }
 
 StoreResult<std::string> sha256_file(const fs::path &path) {
@@ -276,7 +183,7 @@ StoreResult<std::string> sha256_file(const fs::path &path) {
     return store_error("sha256 digest produced an unexpected length");
   }
 
-  return hex_encode(
+  return memix::detail::hex_encode(
       std::span<const unsigned char>{digest.data(), digest_length});
 }
 
@@ -298,32 +205,7 @@ StoreResult<SourceFileMetadata> regular_file_metadata(const fs::path &path) {
 }
 
 StoreResult<std::string> sha256_text(std::string_view text) {
-  using DigestContext = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-  const DigestContext digest_context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-  if (!digest_context) {
-    return store_error("failed to allocate sha256 context");
-  }
-  if (EVP_DigestInit_ex(digest_context.get(), EVP_sha256(), nullptr) != 1) {
-    return store_error("failed to initialize sha256 context");
-  }
-  if (!text.empty()
-      && EVP_DigestUpdate(digest_context.get(), text.data(), text.size())
-             != 1) {
-    return store_error("failed to update sha256 digest");
-  }
-
-  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-  unsigned int digest_length = 0;
-  if (EVP_DigestFinal_ex(digest_context.get(), digest.data(), &digest_length)
-      != 1) {
-    return store_error("failed to finalize sha256 digest");
-  }
-  if (digest_length != kSha256DigestBytes) {
-    return store_error("sha256 digest produced an unexpected length");
-  }
-
-  return hex_encode(
-      std::span<const unsigned char>{digest.data(), digest_length});
+  return memix::detail::sha256_text(text);
 }
 
 std::string simdjson_error_text(simdjson::error_code error) {
@@ -332,17 +214,12 @@ std::string simdjson_error_text(simdjson::error_code error) {
 
 StoreResult<std::string>
 json_from_builder(const simdjson::builder::string_builder &builder) {
-  if (!builder.validate_unicode()) {
-    return store_error("metadata JSON contains invalid UTF-8");
-  }
-
-  std::string_view output;
-  const simdjson::error_code error = builder.view().get(output);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("failed to build metadata JSON: {}",
-                                   simdjson_error_text(error)));
-  }
-  return std::string(output);
+  return memix::detail::json_from_builder(
+      builder,
+      memix::detail::JsonBuilderMessages{
+          .invalid_utf8_message = "metadata JSON contains invalid UTF-8",
+          .build_error_prefix = "failed to build metadata JSON",
+      });
 }
 
 StoreResult<std::string> metadata_json_for(const memix::StoredObject &object) {
@@ -425,31 +302,11 @@ agent_generation_json_for(AgentGenerationJsonRequest request) {
 }
 
 StoreResult<std::string> read_text_file(const fs::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    return store_error(
-        std::format("failed to open metadata `{}`", path.string()));
-  }
-  std::string output{std::istreambuf_iterator<char>(input),
-                     std::istreambuf_iterator<char>()};
-  if (input.bad()) {
-    return store_error(
-        std::format("failed to read metadata `{}`", path.string()));
-  }
-  return output;
+  return memix::detail::read_text_file(path, "metadata");
 }
 
 StoreVoid write_text_file(const fs::path &path, std::string_view contents) {
-  std::ofstream output(path, std::ios::binary);
-  if (!output) {
-    return store_error(
-        std::format("failed to open `{}` for writing", path.string()));
-  }
-  output << contents;
-  if (!output) {
-    return store_error(std::format("failed to write `{}`", path.string()));
-  }
-  return {};
+  return memix::detail::write_text_file(path, contents);
 }
 
 template <typename Value>
@@ -537,13 +394,7 @@ require_agent_tree_entry_kind(simdjson::dom::object fields,
 }
 
 bool is_lower_hex_sha256(std::string_view value) noexcept {
-  if (value.size() != kSha256HexDigestLength) {
-    return false;
-  }
-  return std::ranges::all_of(value, [](char character) {
-    return (character >= '0' && character <= '9')
-        || (character >= 'a' && character <= 'f');
-  });
+  return memix::detail::is_lower_hex_sha256(value);
 }
 
 fs::path type_dir_for(const fs::path &root, memix::MemoryObjectType type) {
@@ -589,17 +440,6 @@ StoreVoid ensure_directory(const fs::path &path, fs::perms permissions) {
   return {};
 }
 
-StoreVoid apply_read_only_file_permissions(const fs::path &path) {
-  return expected_fs::permissions(path, fs::perms::owner_read,
-                                  fs::perm_options::replace);
-}
-
-StoreVoid apply_read_only_directory_permissions(const fs::path &path) {
-  return expected_fs::permissions(path,
-                                  fs::perms::owner_read | fs::perms::owner_exec,
-                                  fs::perm_options::replace);
-}
-
 StoreResult<std::string> utc_timestamp() {
   const auto now = std::chrono::system_clock::now();
   const std::time_t time = std::chrono::system_clock::to_time_t(now);
@@ -623,22 +463,12 @@ StoreResult<std::string> utc_timestamp() {
 
 StoreResult<fs::path> unique_temp_dir(const fs::path &type_dir,
                                       std::string_view hash) {
-  std::random_device random_device;
-  for (int attempt = 0; attempt < kTempDirAttempts; ++attempt) {
-    const auto now = std::chrono::steady_clock::now().time_since_epoch();
-    const auto nanos =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-    fs::path candidate =
-        type_dir / std::format(".tmp-{}-{}-{}", hash, nanos, random_device());
-    const StoreResult<bool> exists = expected_fs::exists(candidate);
-    if (!exists) {
-      return std::unexpected(exists.error());
-    }
-    if (!*exists) {
-      return candidate;
-    }
-  }
-  return store_error("failed to allocate a temporary object directory");
+  return memix::detail::unique_temp_dir(
+      type_dir,
+      memix::detail::TempDirOptions{
+          .prefix = hash,
+          .failure_message = "failed to allocate a temporary object directory",
+      });
 }
 
 StoreResult<memix::StoredObject>
@@ -2185,25 +2015,50 @@ StoreVoid collect_agent_files(const fs::path &root, std::string_view tree_id,
 namespace memix {
 
 std::string_view to_string(MemoryObjectType type) noexcept {
-  return detail::enum_token(type);
+  for (const MemoryObjectTypeToken mapping : kMemoryObjectTypeTokens) {
+    if (mapping.value == type) {
+      return mapping.token;
+    }
+  }
+  return {};
 }
 
 std::optional<MemoryObjectType>
 parse_memory_object_type(std::string_view value) noexcept {
-  return detail::parse_enum_token<MemoryObjectType>(value);
+  for (const MemoryObjectTypeToken mapping : kMemoryObjectTypeTokens) {
+    if (mapping.token == value) {
+      return mapping.value;
+    }
+  }
+  return std::nullopt;
 }
 
 std::vector<MemoryObjectType> memory_object_types() {
-  return detail::enum_values<MemoryObjectType>();
+  std::vector<MemoryObjectType> types;
+  types.reserve(kMemoryObjectTypeTokens.size());
+  for (const MemoryObjectTypeToken mapping : kMemoryObjectTypeTokens) {
+    types.push_back(mapping.value);
+  }
+  return types;
 }
 
 std::string_view to_string(AgentTreeEntryKind kind) noexcept {
-  return detail::enum_token(kind);
+  for (const AgentTreeEntryKindToken mapping : kAgentTreeEntryKindTokens) {
+    if (mapping.value == kind) {
+      return mapping.token;
+    }
+  }
+  return {};
 }
 
 std::optional<AgentTreeEntryKind>
 parse_agent_tree_entry_kind(std::string_view value) noexcept {
-  return detail::parse_enum_token<AgentTreeEntryKind>(value);
+  for (const AgentTreeEntryKindToken mapping : kAgentTreeEntryKindTokens) {
+    if (mapping.token == value) {
+      return mapping.value;
+    }
+  }
+  return std::nullopt;
 }
 
 std::expected<fs::path, StoreError> default_store_root() {

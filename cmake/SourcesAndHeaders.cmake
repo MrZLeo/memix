@@ -1,6 +1,11 @@
 set(sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/view.cpp
+)
+
+set(private_headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/common.hpp
 )
 
 file(GLOB bin_sources CONFIGURE_DEPENDS
