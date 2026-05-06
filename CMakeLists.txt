@@ -165,11 +165,20 @@ function(memix_disable_exceptions target)
   endif()
 endfunction()
 
+function(memix_enable_msvc_conforming_preprocessor target)
+  if(NOT TARGET ${target})
+    message(FATAL_ERROR "Cannot enable the MSVC conforming preprocessor for unknown target `${target}`.")
+  endif()
+
+  target_compile_options(${target} PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:preprocessor>")
+endfunction()
+
 if(NOT ${PROJECT_NAME}_BUILD_HEADERS_ONLY)
   memix_disable_exceptions(${PROJECT_NAME})
 endif()
 foreach(bin_target IN LISTS bin_targets)
   memix_disable_exceptions(${bin_target})
+  memix_enable_msvc_conforming_preprocessor(${bin_target})
 endforeach()
 
 #
