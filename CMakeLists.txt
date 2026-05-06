@@ -152,6 +152,26 @@ include(cmake/CompilerWarnings.cmake)
 set_project_warnings(${PROJECT_NAME})
 verbose_message("Applied compiler warnings. Using standard C++${PROJECT_CXX_STANDARD}.\n")
 
+function(memix_disable_exceptions target)
+  if(NOT TARGET ${target})
+    message(FATAL_ERROR "Cannot disable exceptions for unknown target `${target}`.")
+  endif()
+
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /EHs-c-)
+    target_compile_definitions(${target} PRIVATE _HAS_EXCEPTIONS=0)
+  else()
+    target_compile_options(${target} PRIVATE -fno-exceptions)
+  endif()
+endfunction()
+
+if(NOT ${PROJECT_NAME}_BUILD_HEADERS_ONLY)
+  memix_disable_exceptions(${PROJECT_NAME})
+endif()
+foreach(bin_target IN LISTS bin_targets)
+  memix_disable_exceptions(${bin_target})
+endforeach()
+
 #
 # Enable Doxygen
 #
@@ -197,39 +217,64 @@ target_link_libraries(
 # Identify and link with the specific "packages" the project uses
 if(${PROJECT_NAME}_BUILD_EXECUTABLE)
   CPMAddPackage(
-    NAME CLI11
-    GITHUB_REPOSITORY CLIUtils/CLI11
-    VERSION 2.5.0
+    NAME argum
+    GITHUB_REPOSITORY gershnik/argum
+    GIT_TAG v2.8
+    GIT_SHALLOW TRUE
     OPTIONS
-      "CLI11_PRECOMPILED OFF"
+      "ARGUM_NO_TESTS ON"
   )
   CPMAddPackage(
     NAME spdlog
     GITHUB_REPOSITORY gabime/spdlog
     GIT_TAG v1.17.0
     OPTIONS
+      "SPDLOG_NO_EXCEPTIONS ON"
       "SPDLOG_BUILD_EXAMPLE OFF"
       "SPDLOG_BUILD_TESTS OFF"
       "SPDLOG_INSTALL OFF"
   )
 
-  if(NOT TARGET CLI11::CLI11)
-    find_package(CLI11 CONFIG REQUIRED)
+  if(NOT TARGET argum::argum)
+    find_package(argum CONFIG REQUIRED)
+  endif()
+  if(NOT TARGET spdlog::spdlog)
+    find_package(spdlog CONFIG REQUIRED)
   endif()
 
   foreach(bin_target IN LISTS bin_targets)
     target_include_directories(
       ${bin_target}
+      PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    if(DEFINED argum_SOURCE_DIR)
+      target_include_directories(
+        ${bin_target}
+        SYSTEM PRIVATE
+          ${argum_SOURCE_DIR}/inc
+      )
+    endif()
+    target_include_directories(
+      ${bin_target}
       SYSTEM PRIVATE
         ${simdjson_SOURCE_DIR}/singleheader
+    )
+    target_compile_definitions(
+      ${bin_target}
+      PRIVATE
+        ARGUM_USE_EXPECTED=1
+        SPDLOG_NO_EXCEPTIONS=1
     )
     target_link_libraries(
       ${bin_target}
       PRIVATE
         ${PROJECT_NAME}
-        CLI11::CLI11
         spdlog::spdlog
     )
+    if(NOT DEFINED argum_SOURCE_DIR)
+      target_link_libraries(${bin_target} PRIVATE argum::argum)
+    endif()
   endforeach()
 endif()
 
