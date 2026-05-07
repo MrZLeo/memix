@@ -20,6 +20,7 @@
 #include <argum/expected.h>
 #include <argum/parser.h>
 #include <simdjson.h>
+#include <spdlog/logger.h>
 
 namespace {
 

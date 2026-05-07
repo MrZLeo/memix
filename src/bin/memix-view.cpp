@@ -19,6 +19,7 @@
 #include <argum/data.h>
 #include <argum/expected.h>
 #include <argum/parser.h>
+#include <spdlog/logger.h>
 
 namespace {
 
