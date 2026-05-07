@@ -207,33 +207,31 @@ ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
 
 std::vector<ExpressionSelectorJson>
 expression_selector_json(const std::vector<memix::ViewSelector> &selectors) {
-  std::vector<ExpressionSelectorJson> output;
-  output.reserve(selectors.size());
-  for (const memix::ViewSelector &selector : selectors) {
-    output.push_back(ExpressionSelectorJson{
-        .agent_path = selector.agent_path.generic_string(),
-        .scope_label = selector.scope_label,
-        .required = selector.required,
-    });
-  }
-  return output;
+  return selectors
+       | std::views::transform([](const memix::ViewSelector &selector) {
+           return ExpressionSelectorJson{
+               .agent_path = selector.agent_path.generic_string(),
+               .scope_label = selector.scope_label,
+               .required = selector.required,
+           };
+         })
+       | std::ranges::to<std::vector>();
 }
 
 std::vector<ManifestInputJson>
 manifest_input_json(const std::vector<ResolvedInput> &inputs) {
-  std::vector<ManifestInputJson> output;
-  output.reserve(inputs.size());
-  for (const ResolvedInput &input : inputs) {
-    output.push_back(ManifestInputJson{
-        .agent_path = input.selector.agent_path.generic_string(),
-        .scope_label = input.selector.scope_label,
-        .required = input.selector.required,
-        .selected = input.selected,
-        .blob_id = input.blob.transform(
-            [](const memix::StoredObject &blob) { return blob.id; }),
-    });
-  }
-  return output;
+  return inputs
+       | std::views::transform([](const ResolvedInput &input) {
+           return ManifestInputJson{
+               .agent_path = input.selector.agent_path.generic_string(),
+               .scope_label = input.selector.scope_label,
+               .required = input.selector.required,
+               .selected = input.selected,
+               .blob_id = input.blob.transform(
+                   [](const memix::StoredObject &blob) { return blob.id; }),
+           };
+         })
+       | std::ranges::to<std::vector>();
 }
 
 ViewResult<std::string>
@@ -377,12 +375,9 @@ resolve_all_agent_inputs(const memix::Store &store,
     return std::unexpected(files.error());
   }
 
-  std::vector<ResolvedInput> inputs;
-  inputs.reserve(files->size());
-  for (const memix::AgentFile &file : *files) {
-    inputs.push_back(selected_input_from_agent_file(file));
-  }
-  return inputs;
+  return *files | std::views::transform([](const memix::AgentFile &file) {
+    return selected_input_from_agent_file(file);
+  }) | std::ranges::to<std::vector>();
 }
 
 ViewResult<std::vector<ResolvedInput>>

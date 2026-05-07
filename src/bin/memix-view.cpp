@@ -8,9 +8,11 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <print>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -210,20 +212,31 @@ build_expression(const ViewCliOptions &options) {
     expression.agent_ref = options.ref;
   }
 
-  for (const std::filesystem::path &path : options.include_paths) {
-    expression.selectors.push_back(memix::ViewSelector{
-        .agent_path = path,
-        .scope_label = std::nullopt,
-        .required = true,
-    });
-  }
-  for (const std::filesystem::path &path : options.include_optional_paths) {
-    expression.selectors.push_back(memix::ViewSelector{
-        .agent_path = path,
-        .scope_label = std::nullopt,
-        .required = false,
-    });
-  }
+  expression.selectors.reserve(options.include_paths.size()
+                               + options.include_optional_paths.size());
+  const auto required_selectors =
+      options.include_paths
+      | std::views::transform([](const std::filesystem::path &path) {
+          return memix::ViewSelector{
+              .agent_path = path,
+              .scope_label = std::nullopt,
+              .required = true,
+          };
+        });
+  std::ranges::copy(required_selectors,
+                    std::back_inserter(expression.selectors));
+
+  const auto optional_selectors =
+      options.include_optional_paths
+      | std::views::transform([](const std::filesystem::path &path) {
+          return memix::ViewSelector{
+              .agent_path = path,
+              .scope_label = std::nullopt,
+              .required = false,
+          };
+        });
+  std::ranges::copy(optional_selectors,
+                    std::back_inserter(expression.selectors));
   return expression;
 }
 

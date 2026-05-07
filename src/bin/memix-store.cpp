@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <print>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -57,16 +58,12 @@ struct StoreCliOptions {
 };
 
 std::string supported_types_message() {
-  std::string message;
-  const std::vector<memix::MemoryObjectType> types =
-      memix::memory_object_types();
-  for (const memix::MemoryObjectType type : types) {
-    if (!message.empty()) {
-      message += "|";
-    }
-    message += memix::to_string(type);
-  }
-  return message;
+  return memix::memory_object_types()
+       | std::views::transform([](memix::MemoryObjectType type) {
+           return memix::to_string(type);
+         })
+       | std::views::join_with('|')
+       | std::ranges::to<std::string>();
 }
 
 std::unexpected<memix::StoreError> store_error(std::string message) {

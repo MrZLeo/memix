@@ -10,6 +10,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <expected>
 #include <filesystem>
@@ -19,8 +20,10 @@
 #include <iterator>
 #include <memory>
 #include <print>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace memix::cli_detail {
@@ -87,22 +90,16 @@ read_file_contents(const std::filesystem::path &path) {
 }
 
 inline std::string short_id(std::string_view value) {
-  return std::string(value.substr(0, std::min(value.size(), kShortIdLength)));
+  return value
+       | std::views::take(kShortIdLength)
+       | std::ranges::to<std::string>();
 }
 
 inline std::string
 join_json_documents_as_array(const std::vector<std::string> &documents) {
-  std::string output = "[";
-  bool needs_comma = false;
-  for (const std::string &document : documents) {
-    if (needs_comma) {
-      output += ",";
-    }
-    output += document;
-    needs_comma = true;
-  }
-  output += "]";
-  return output;
+  return std::format("[{}]", documents
+                                 | std::views::join_with(',')
+                                 | std::ranges::to<std::string>());
 }
 
 struct CommonOptions {
@@ -143,20 +140,33 @@ struct PathIdTableLayout {
   int id_column_width = 0;
 };
 
+template <typename Text>
+concept string_view_like = std::convertible_to<Text, std::string_view>;
+
+template <typename Formatter, typename Entry>
+concept entry_text_formatter =
+    std::regular_invocable<Formatter &, const Entry &>
+    && string_view_like<std::invoke_result_t<Formatter &, const Entry &>>;
+
 template <typename Entry, typename PathText, typename IdText>
+  requires entry_text_formatter<PathText, Entry>
+        && entry_text_formatter<IdText, Entry>
 void print_path_id_table(const std::vector<Entry> &entries,
                          PathIdTableLayout layout, PathText path_text,
                          IdText id_text) {
   std::size_t path_width = layout.minimum_path_width;
   for (const Entry &entry : entries) {
-    path_width = std::max(path_width, path_text(entry).size());
+    const auto path = path_text(entry);
+    path_width = std::max(path_width, std::string_view{path}.size());
   }
 
   std::println("{:<{}}{:<{}}", "PATH", path_width + 2, "ID",
                layout.id_column_width);
   for (const Entry &entry : entries) {
-    std::println("{:<{}}{:<{}}", path_text(entry), path_width + 2,
-                 short_id(id_text(entry)), layout.id_column_width);
+    const auto path = path_text(entry);
+    const auto id = id_text(entry);
+    std::println("{:<{}}{:<{}}", std::string_view{path}, path_width + 2,
+                 short_id(std::string_view{id}), layout.id_column_width);
   }
 }
 

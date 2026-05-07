@@ -2046,12 +2046,9 @@ parse_memory_object_type(std::string_view value) noexcept {
 }
 
 std::vector<MemoryObjectType> memory_object_types() {
-  std::vector<MemoryObjectType> types;
-  types.reserve(kMemoryObjectTypeTokens.size());
-  for (const MemoryObjectTypeToken mapping : kMemoryObjectTypeTokens) {
-    types.push_back(mapping.value);
-  }
-  return types;
+  return kMemoryObjectTypeTokens
+       | std::views::transform(&MemoryObjectTypeToken::value)
+       | std::ranges::to<std::vector>();
 }
 
 std::string_view to_string(AgentTreeEntryKind kind) noexcept {
