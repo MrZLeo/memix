@@ -37,8 +37,8 @@ jobs:
             name: "macOS 26 Clang",
             artifact_ext: '.tar.gz',
             os: macos-26,
-            cc: "clang",
-            cxx: "clang++",
+            cc: "/Library/Developer/CommandLineTools/usr/bin/clang",
+            cxx: "/Library/Developer/CommandLineTools/usr/bin/clang++",
           }
 
     steps:
@@ -68,6 +68,18 @@ jobs:
         path: ${{ env.CPM_SOURCE_CACHE }}
         key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
 
+    - name: select Xcode Command Line Tools
+      if: ${{ runner.os == 'macOS' }}
+      run: sudo xcode-select --switch /Library/Developer/CommandLineTools
+
+    - name: show compiler
+      if: ${{ runner.os == 'macOS' }}
+      env:
+        CXX: ${{ matrix.config.cxx }}
+      run: |
+        xcode-select --print-path
+        "$CXX" --version
+
     - name: configure (Windows)
       if: ${{ runner.os == 'Windows' }}
       run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE"
@@ -81,7 +93,10 @@ jobs:
 
     - name: configure
       if: ${{ runner.os != 'Windows' && runner.os != 'Linux' }}
-      run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE"
+      env:
+        CC: ${{ matrix.config.cc }}
+        CXX: ${{ matrix.config.cxx }}
+      run: cmake -G Ninja -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE"
       
     - name: build (Windows)
       if: ${{ runner.os == 'Windows' }}

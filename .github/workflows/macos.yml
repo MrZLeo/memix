@@ -10,6 +10,8 @@ env:
   BUILD_TYPE: Release
   INSTALL_LOCATION: .local
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+  CC: /Library/Developer/CommandLineTools/usr/bin/clang
+  CXX: /Library/Developer/CommandLineTools/usr/bin/clang++
 
 jobs:
   build:
@@ -26,8 +28,16 @@ jobs:
         path: ${{ env.CPM_SOURCE_CACHE }}
         key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
 
+    - name: select Xcode Command Line Tools
+      run: sudo xcode-select --switch /Library/Developer/CommandLineTools
+
+    - name: show compiler
+      run: |
+        xcode-select --print-path
+        "$CXX" --version
+
     - name: configure
-      run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/$INSTALL_LOCATION -DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE
+      run: cmake -G Ninja -Bbuild -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/$INSTALL_LOCATION -DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE
       
     - name: build
       run: cmake --build build --config $BUILD_TYPE -j4
