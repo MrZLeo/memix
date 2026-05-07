@@ -1,1 +1,2 @@
 - Always use Ninja as cmake generator
+- Use /opt/homebrew/Cellar/llvm/22.1.4/bin/clang-tidy as clang-tidy
