@@ -61,14 +61,29 @@ struct AgentTreeEntryKindToken {
 };
 
 constexpr std::array kMemoryObjectTypeTokens{
-    MemoryObjectTypeToken{memix::MemoryObjectType::Agents, "agents"},
-    MemoryObjectTypeToken{memix::MemoryObjectType::Chat, "chat"},
-    MemoryObjectTypeToken{memix::MemoryObjectType::Documents, "documents"},
+    MemoryObjectTypeToken{
+        .value = memix::MemoryObjectType::Agents,
+        .token = "agents",
+    },
+    MemoryObjectTypeToken{
+        .value = memix::MemoryObjectType::Chat,
+        .token = "chat",
+    },
+    MemoryObjectTypeToken{
+        .value = memix::MemoryObjectType::Documents,
+        .token = "documents",
+    },
 };
 
 constexpr std::array kAgentTreeEntryKindTokens{
-    AgentTreeEntryKindToken{memix::AgentTreeEntryKind::Blob, "blob"},
-    AgentTreeEntryKindToken{memix::AgentTreeEntryKind::Tree, "tree"},
+    AgentTreeEntryKindToken{
+        .value = memix::AgentTreeEntryKind::Blob,
+        .token = "blob",
+    },
+    AgentTreeEntryKindToken{
+        .value = memix::AgentTreeEntryKind::Tree,
+        .token = "tree",
+    },
 };
 
 template <typename Value>
@@ -81,6 +96,7 @@ namespace expected_fs = memix::detail::expected_fs;
 using memix::detail::apply_read_only_directory_permissions;
 using memix::detail::apply_read_only_file_permissions;
 using memix::detail::filesystem_error_message;
+using memix::detail::is_lower_hex_sha256;
 
 struct AgentTreeEntryJson {
   std::string_view name;
@@ -391,10 +407,6 @@ require_agent_tree_entry_kind(simdjson::dom::object fields,
         }
         return *parsed_kind;
       });
-}
-
-bool is_lower_hex_sha256(std::string_view value) noexcept {
-  return memix::detail::is_lower_hex_sha256(value);
 }
 
 fs::path type_dir_for(const fs::path &root, memix::MemoryObjectType type) {
@@ -839,7 +851,7 @@ public:
   }
 
   TemporaryDirectoryCleanup &
-  operator=(TemporaryDirectoryCleanup &&other) noexcept = delete;
+  operator=(TemporaryDirectoryCleanup &&other) = delete;
 
   ~TemporaryDirectoryCleanup() {
     if (!active_) {
