@@ -29,7 +29,7 @@ constexpr int kTypeColumnWidth = 11;
 constexpr int kIdColumnWidth = 14;
 constexpr int kSizeColumnWidth = 10;
 constexpr int kTimestampColumnWidth = 21;
-constexpr int kAgentPathColumnWidth = 24;
+constexpr int kContextPathColumnWidth = 24;
 constexpr std::uintmax_t kSizeUnitBaseBytes = 1024;
 constexpr double kSizeUnitBase = 1024.0;
 constexpr std::size_t kJsonIndentSpaces = 2;
@@ -48,7 +48,7 @@ struct StoreCliOptions {
   StoreCommand command = StoreCommand::None;
   std::vector<std::filesystem::path> ingest_paths;
   std::string ingest_type_name;
-  std::filesystem::path ingest_agent_dest;
+  std::filesystem::path ingest_context_dest;
   std::string ingest_message;
   std::string list_type_name;
   bool list_json = false;
@@ -117,17 +117,17 @@ void print_table(const std::vector<memix::StoredObject> &objects) {
   }
 }
 
-void print_agent_tree_table(const std::vector<memix::AgentFile> &files) {
+void print_agent_tree_table(const std::vector<memix::StoreFile> &files) {
   memix::cli_detail::print_path_id_table(
       files,
       memix::cli_detail::PathIdTableLayout{
-          .minimum_path_width = kAgentPathColumnWidth,
+          .minimum_path_width = kContextPathColumnWidth,
           .id_column_width = kIdColumnWidth,
       },
-      [](const memix::AgentFile &file) {
-        return file.agent_path.generic_string();
+      [](const memix::StoreFile &file) {
+        return file.context_path.generic_string();
       },
-      [](const memix::AgentFile &file) -> std::string_view {
+      [](const memix::StoreFile &file) -> std::string_view {
         return file.blob.id;
       });
 }
@@ -264,19 +264,17 @@ run_ingest(const StoreCliOptions &options,
     return std::unexpected(store.error());
   }
 
-  if (*type == memix::MemoryObjectType::Agents) {
-    if (options.ingest_agent_dest.empty()) {
-      return memix::cli_detail::unexpected_error(
-          "ingest --type agents requires --dest with a logical agents path");
-    }
+  if (!options.ingest_context_dest.empty()) {
     if (options.ingest_paths.size() != 1) {
       return memix::cli_detail::unexpected_error(
-          "ingest --type agents expects exactly one source path");
+          "ingest with --dest expects exactly one source path");
     }
-    const std::expected<memix::AgentIngestResult, memix::StoreError> result =
-        store->ingest_agent_file({
+
+    const std::expected<memix::FileIngestResult, memix::StoreError> result =
+        store->ingest_file({
+            .type = *type,
             .source_path = options.ingest_paths.front(),
-            .agent_path = options.ingest_agent_dest,
+            .context_path = options.ingest_context_dest,
             .message = options.ingest_message,
         });
     if (!result) {
@@ -286,17 +284,13 @@ run_ingest(const StoreCliOptions &options,
                  result->blob.inserted ? "ingested" : "exists",
                  memix::to_string(result->blob.object.type),
                  result->blob.object.id, result->blob.object.filename,
-                 result->agent_path.generic_string(), result->generation.id);
+                 result->context_path.generic_string(), result->generation.id);
     return {};
   }
 
-  if (!options.ingest_agent_dest.empty()) {
-    return memix::cli_detail::unexpected_error(
-        "--dest is only valid with --type agents");
-  }
   if (!options.ingest_message.empty()) {
     return memix::cli_detail::unexpected_error(
-        "--message is only valid with --type agents");
+        "--message is only valid when ingest uses --dest");
   }
 
   for (const auto &path : options.ingest_paths) {
@@ -323,8 +317,8 @@ memix::cli_detail::VoidResult run_agents_cat(const StoreCliOptions &options) {
     return std::unexpected(store.error());
   }
   const std::expected<memix::StoredObject, memix::StoreError> object =
-      store->read_agent_file(options.agent_cat_path,
-                             optional_generation(options.agent_cat_generation));
+      store->read_file(memix::MemoryObjectType::Agents, options.agent_cat_path,
+                       optional_generation(options.agent_cat_generation));
   if (!object) {
     return memix::cli_detail::unexpected_error(object.error());
   }
@@ -343,9 +337,9 @@ memix::cli_detail::VoidResult run_agents_tree(const StoreCliOptions &options) {
   if (!store) {
     return std::unexpected(store.error());
   }
-  const std::expected<std::vector<memix::AgentFile>, memix::StoreError> files =
-      store->list_agent_files(
-          optional_generation(options.agent_tree_generation));
+  const std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
+      store->list_files(memix::MemoryObjectType::Agents,
+                        optional_generation(options.agent_tree_generation));
   if (!files) {
     return memix::cli_detail::unexpected_error(files.error());
   }
@@ -383,15 +377,14 @@ void add_ingest_command(Argum::Parser &parser, StoreCliOptions &options) {
   parser.add(
       Argum::Option("--dest")
           .argName("TEXT")
-          .help("Logical destination path inside the agents tree. Required "
-                "when --type agents.")
+          .help("Logical destination path inside the type's canonical context "
+                "tree.")
           .handler([&options](std::string_view value) {
-            options.ingest_agent_dest = std::filesystem::path(value);
+            options.ingest_context_dest = std::filesystem::path(value);
           }));
   parser.add(Argum::Option("--message")
                  .argName("TEXT")
-                 .help("Agent generation message. Only valid with --type "
-                       "agents.")
+                 .help("Context generation message. Only valid with --dest.")
                  .handler([&options](std::string_view value) {
                    options.ingest_message = value;
                  }));

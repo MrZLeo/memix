@@ -78,14 +78,15 @@ std::string read_file(const fs::path &path) {
           std::istreambuf_iterator<char>()};
 }
 
-memix::AgentIngestResult ingest_agent(const memix::Store &store,
-                                      const fs::path &source,
-                                      const fs::path &agent_path,
-                                      std::string_view message) {
-  const std::expected<memix::AgentIngestResult, memix::StoreError> result =
-      store.ingest_agent_file({
+memix::FileIngestResult ingest_agent(const memix::Store &store,
+                                     const fs::path &source,
+                                     const fs::path &agent_path,
+                                     std::string_view message) {
+  const std::expected<memix::FileIngestResult, memix::StoreError> result =
+      store.ingest_file({
+          .type = memix::MemoryObjectType::Agents,
           .source_path = source,
-          .agent_path = agent_path,
+          .context_path = agent_path,
           .message = message,
       });
   REQUIRE(result.has_value());

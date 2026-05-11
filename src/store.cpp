@@ -37,13 +37,16 @@ namespace {
 constexpr std::string_view kHashAlgorithm = "sha256";
 constexpr std::string_view kContentPath = "object";
 constexpr std::string_view kMetadataFilename = "metadata.json";
-constexpr std::string_view kAgentBlobsDir = "blobs";
-constexpr std::string_view kAgentTreesDir = "trees";
-constexpr std::string_view kAgentGenerationsDir = "generations";
+constexpr std::string_view kBlobsDir = "blobs";
+constexpr std::string_view kTreesDir = "trees";
+constexpr std::string_view kGenerationsDir = "generations";
 constexpr std::string_view kRefsDir = "refs";
 constexpr std::string_view kLocksDir = ".locks";
-constexpr std::string_view kAgentUpdateLock = "agents-update";
-constexpr std::string_view kAgentsLatestRef = "agents/latest";
+constexpr std::string_view kLatestRef = "latest";
+constexpr std::string_view kContextTreeKind = "context_tree";
+constexpr std::string_view kContextGenerationKind = "context_generation";
+constexpr std::string_view kLegacyContextTreeKind = "agent_tree";
+constexpr std::string_view kLegacyContextGenerationKind = "agent_generation";
 constexpr std::string_view kJsonSuffix = ".json";
 constexpr std::size_t kSha256DigestBytes = 32;
 constexpr std::size_t kHashReadBufferBytes = 8192;
@@ -55,8 +58,8 @@ struct MemoryObjectTypeToken {
   std::string_view token;
 };
 
-struct AgentTreeEntryKindToken {
-  memix::AgentTreeEntryKind value;
+struct ContextTreeEntryKindToken {
+  memix::ContextTreeEntryKind value;
   std::string_view token;
 };
 
@@ -75,13 +78,13 @@ constexpr std::array kMemoryObjectTypeTokens{
     },
 };
 
-constexpr std::array kAgentTreeEntryKindTokens{
-    AgentTreeEntryKindToken{
-        .value = memix::AgentTreeEntryKind::Blob,
+constexpr std::array kContextTreeEntryKindTokens{
+    ContextTreeEntryKindToken{
+        .value = memix::ContextTreeEntryKind::Blob,
         .token = "blob",
     },
-    AgentTreeEntryKindToken{
-        .value = memix::AgentTreeEntryKind::Tree,
+    ContextTreeEntryKindToken{
+        .value = memix::ContextTreeEntryKind::Tree,
         .token = "tree",
     },
 };
@@ -98,7 +101,7 @@ using memix::detail::apply_read_only_file_permissions;
 using memix::detail::filesystem_error_message;
 using memix::detail::is_lower_hex_sha256;
 
-struct AgentTreeEntryJson {
+struct ContextTreeEntryJson {
   std::string_view name;
   std::string_view kind;
   std::string_view id;
@@ -106,7 +109,7 @@ struct AgentTreeEntryJson {
 
 template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
-                AgentTreeEntryJson entry) {
+                ContextTreeEntryJson entry) {
   builder.start_object();
   builder.template append_key_value<"name">(entry.name);
   builder.append_comma();
@@ -118,6 +121,10 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
 
 std::string type_to_owned_string(memix::MemoryObjectType type) {
   return std::string(memix::to_string(type));
+}
+
+std::string_view context_label(memix::MemoryObjectType type) {
+  return memix::to_string(type);
 }
 
 std::optional<std::string> env_value(const char *name) {
@@ -266,10 +273,11 @@ StoreResult<std::string> metadata_json_for(const memix::StoredObject &object) {
 }
 
 StoreResult<std::string>
-agent_tree_json_for(const std::vector<memix::AgentTreeEntry> &entries) {
+context_tree_json_for(memix::MemoryObjectType type,
+                      const std::vector<memix::ContextTreeEntry> &entries) {
   const auto json_entries =
-      entries | std::views::transform([](const memix::AgentTreeEntry &entry) {
-        return AgentTreeEntryJson{
+      entries | std::views::transform([](const memix::ContextTreeEntry &entry) {
+        return ContextTreeEntryJson{
             .name = entry.name,
             .kind = memix::to_string(entry.kind),
             .id = entry.id,
@@ -282,14 +290,17 @@ agent_tree_json_for(const std::vector<memix::AgentTreeEntry> &entries) {
   builder.append_comma();
   builder.append_key_value<"object_version">(1);
   builder.append_comma();
-  builder.append_key_value<"kind">("agent_tree");
+  builder.append_key_value<"kind">(kContextTreeKind);
+  builder.append_comma();
+  builder.append_key_value<"type">(memix::to_string(type));
   builder.append_comma();
   builder.append_key_value<"entries">(json_entries);
   builder.end_object();
   return json_from_builder(builder);
 }
 
-struct AgentGenerationJsonRequest {
+struct ContextGenerationJsonRequest {
+  memix::MemoryObjectType type;
   std::string_view root_tree;
   std::optional<std::string_view> parent;
   std::string_view created_at;
@@ -297,14 +308,16 @@ struct AgentGenerationJsonRequest {
 };
 
 StoreResult<std::string>
-agent_generation_json_for(AgentGenerationJsonRequest request) {
+context_generation_json_for(ContextGenerationJsonRequest request) {
   simdjson::builder::string_builder builder;
   builder.start_object();
   builder.append_key_value<"schema_version">(1);
   builder.append_comma();
   builder.append_key_value<"object_version">(1);
   builder.append_comma();
-  builder.append_key_value<"kind">("agent_generation");
+  builder.append_key_value<"kind">(kContextGenerationKind);
+  builder.append_comma();
+  builder.append_key_value<"type">(memix::to_string(request.type));
   builder.append_comma();
   builder.append_key_value<"root_tree">(request.root_tree);
   builder.append_comma();
@@ -393,17 +406,43 @@ require_memory_object_type(simdjson::dom::object fields, std::string_view key) {
       });
 }
 
-StoreResult<memix::AgentTreeEntryKind>
-require_agent_tree_entry_kind(simdjson::dom::object fields,
-                              std::string_view key) {
+StoreVoid validate_optional_memory_object_type(simdjson::dom::object fields,
+                                               std::string_view key,
+                                               memix::MemoryObjectType type,
+                                               std::string_view subject) {
+  std::string_view type_text;
+  const simdjson::error_code error = fields.at_key(key).get(type_text);
+  if (error == simdjson::NO_SUCH_FIELD) {
+    return {};
+  }
+  if (error != simdjson::SUCCESS) {
+    return store_error(std::format("{} field `{}` must be a string: {}",
+                                   subject, key, simdjson_error_text(error)));
+  }
+  const std::optional<memix::MemoryObjectType> parsed_type =
+      memix::parse_memory_object_type(type_text);
+  if (!parsed_type.has_value()) {
+    return store_error(
+        std::format("{} has unsupported type `{}`", subject, type_text));
+  }
+  if (*parsed_type != type) {
+    return store_error(
+        std::format("{} type does not match its store directory", subject));
+  }
+  return {};
+}
+
+StoreResult<memix::ContextTreeEntryKind>
+require_context_tree_entry_kind(simdjson::dom::object fields,
+                                std::string_view key) {
   return require_string(fields, key)
       .and_then([](std::string_view kind_text)
-                    -> StoreResult<memix::AgentTreeEntryKind> {
-        const std::optional<memix::AgentTreeEntryKind> parsed_kind =
-            memix::parse_agent_tree_entry_kind(kind_text);
+                    -> StoreResult<memix::ContextTreeEntryKind> {
+        const std::optional<memix::ContextTreeEntryKind> parsed_kind =
+            memix::parse_context_tree_entry_kind(kind_text);
         if (!parsed_kind.has_value()) {
           return store_error(std::format(
-              "agent tree entry has unsupported kind `{}`", kind_text));
+              "context tree entry has unsupported kind `{}`", kind_text));
         }
         return *parsed_kind;
       });
@@ -413,20 +452,17 @@ fs::path type_dir_for(const fs::path &root, memix::MemoryObjectType type) {
   return root / std::string(memix::to_string(type));
 }
 
-fs::path agents_dir_for(const fs::path &root) {
-  return type_dir_for(root, memix::MemoryObjectType::Agents);
+fs::path blobs_dir_for(const fs::path &root, memix::MemoryObjectType type) {
+  return type_dir_for(root, type) / std::string(kBlobsDir);
 }
 
-fs::path agent_blobs_dir_for(const fs::path &root) {
-  return agents_dir_for(root) / std::string(kAgentBlobsDir);
+fs::path trees_dir_for(const fs::path &root, memix::MemoryObjectType type) {
+  return type_dir_for(root, type) / std::string(kTreesDir);
 }
 
-fs::path agent_trees_dir_for(const fs::path &root) {
-  return agents_dir_for(root) / std::string(kAgentTreesDir);
-}
-
-fs::path agent_generations_dir_for(const fs::path &root) {
-  return agents_dir_for(root) / std::string(kAgentGenerationsDir);
+fs::path generations_dir_for(const fs::path &root,
+                             memix::MemoryObjectType type) {
+  return type_dir_for(root, type) / std::string(kGenerationsDir);
 }
 
 fs::path refs_dir_for(const fs::path &root) {
@@ -435,6 +471,14 @@ fs::path refs_dir_for(const fs::path &root) {
 
 fs::path locks_dir_for(const fs::path &root) {
   return root / std::string(kLocksDir);
+}
+
+std::string latest_ref_name(memix::MemoryObjectType type) {
+  return std::format("{}/{}", memix::to_string(type), kLatestRef);
+}
+
+std::string update_lock_name(memix::MemoryObjectType type) {
+  return std::format("{}-update", memix::to_string(type));
 }
 
 StoreVoid ensure_directory(const fs::path &path, fs::perms permissions) {
@@ -687,9 +731,7 @@ bool is_temp_store_entry(const fs::path &path) {
 StoreResult<std::vector<memix::StoredObject>>
 read_objects_for_type(const fs::path &root, memix::MemoryObjectType type) {
   std::vector<memix::StoredObject> objects;
-  const fs::path type_dir = type == memix::MemoryObjectType::Agents
-                              ? agent_blobs_dir_for(root)
-                              : type_dir_for(root, type);
+  const fs::path type_dir = blobs_dir_for(root, type);
   const StoreResult<bool> exists = expected_fs::exists(type_dir);
   if (!exists) {
     return std::unexpected(exists.error());
@@ -888,9 +930,10 @@ acquire_directory_lock(const fs::path &lock_path, std::string_view lock_name) {
 }
 
 StoreResult<TemporaryDirectoryCleanup>
-acquire_agent_update_lock(const fs::path &root) {
+acquire_type_update_lock(const fs::path &root, memix::MemoryObjectType type) {
   return acquire_directory_lock(
-      locks_dir_for(root) / std::string(kAgentUpdateLock), "agent update");
+      locks_dir_for(root) / update_lock_name(type),
+      std::format("{} update", memix::to_string(type)));
 }
 
 StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
@@ -1139,14 +1182,16 @@ logical_path_components(LogicalPathParseRequest request) {
 }
 
 StoreResult<std::vector<std::string>>
-agent_path_components(const fs::path &agent_path) {
-  const fs::path::string_type &native_path = agent_path.native();
+context_path_components(memix::MemoryObjectType type,
+                        const fs::path &context_path) {
+  const fs::path::string_type &native_path = context_path.native();
   if (native_path.contains(static_cast<fs::path::value_type>('\\'))) {
-    return store_error("agent path must not contain backslashes");
+    return store_error(std::format("{} path must not contain backslashes",
+                                   context_label(type)));
   }
   return logical_path_components({
-      .path = agent_path.generic_string(),
-      .label = "agent path",
+      .path = context_path.generic_string(),
+      .label = std::format("{} path", context_label(type)),
   });
 }
 
@@ -1166,12 +1211,12 @@ fs::path path_from_components(const std::vector<std::string> &components) {
   return result;
 }
 
-struct AgentObjectIdValidation {
+struct ContextObjectIdValidation {
   std::string_view object_id;
   std::string_view object_kind;
 };
 
-StoreVoid validate_agent_object_id(AgentObjectIdValidation validation) {
+StoreVoid validate_context_object_id(ContextObjectIdValidation validation) {
   if (!is_lower_hex_sha256(validation.object_id)) {
     return store_error(std::format("{} id is not a lowercase sha256 digest",
                                    validation.object_kind));
@@ -1179,20 +1224,20 @@ StoreVoid validate_agent_object_id(AgentObjectIdValidation validation) {
   return {};
 }
 
-StoreVoid
-validate_agent_tree_entries(const std::vector<memix::AgentTreeEntry> &entries) {
+StoreVoid validate_context_tree_entries(
+    const std::vector<memix::ContextTreeEntry> &entries) {
   std::optional<std::string_view> previous_name;
-  for (const memix::AgentTreeEntry &entry : entries) {
+  for (const memix::ContextTreeEntry &entry : entries) {
     if (!valid_logical_component(entry.name)) {
       return store_error(std::format(
-          "agent tree contains invalid entry name `{}`", entry.name));
+          "context tree contains invalid entry name `{}`", entry.name));
     }
     if (previous_name.has_value() && entry.name <= *previous_name) {
-      return store_error("agent tree entries must be sorted and unique");
+      return store_error("context tree entries must be sorted and unique");
     }
-    const StoreVoid id_valid = validate_agent_object_id({
+    const StoreVoid id_valid = validate_context_object_id({
         .object_id = entry.id,
-        .object_kind = "agent tree entry",
+        .object_kind = "context tree entry",
     });
     if (!id_valid) {
       return std::unexpected(id_valid.error());
@@ -1202,32 +1247,32 @@ validate_agent_tree_entries(const std::vector<memix::AgentTreeEntry> &entries) {
   return {};
 }
 
-StoreResult<std::vector<memix::AgentTreeEntry>>
-canonical_agent_tree_entries(std::vector<memix::AgentTreeEntry> entries) {
-  std::ranges::sort(entries, {}, &memix::AgentTreeEntry::name);
-  return validate_agent_tree_entries(entries).transform(
+StoreResult<std::vector<memix::ContextTreeEntry>>
+canonical_context_tree_entries(std::vector<memix::ContextTreeEntry> entries) {
+  std::ranges::sort(entries, {}, &memix::ContextTreeEntry::name);
+  return validate_context_tree_entries(entries).transform(
       [&entries] { return std::move(entries); });
 }
 
-StoreResult<memix::StoredObject>
-read_agent_blob_object(const fs::path &root, std::string_view object_id) {
-  return validate_agent_object_id({
-                                      .object_id = object_id,
-                                      .object_kind = "agent blob",
-                                  })
-      .and_then([&root, object_id] {
-        return read_existing_object(agent_blobs_dir_for(root)
-                                        / std::string(object_id),
-                                    memix::MemoryObjectType::Agents);
+StoreResult<memix::StoredObject> read_blob_object(const fs::path &root,
+                                                  memix::MemoryObjectType type,
+                                                  std::string_view object_id) {
+  return validate_context_object_id({
+                                        .object_id = object_id,
+                                        .object_kind = "blob",
+                                    })
+      .and_then([&root, type, object_id] {
+        return read_existing_object(
+            blobs_dir_for(root, type) / std::string(object_id), type);
       });
 }
 
-StoreResult<memix::AgentTreeEntry>
-agent_tree_entry_from_json(simdjson::dom::element entry_element) {
+StoreResult<memix::ContextTreeEntry>
+context_tree_entry_from_json(simdjson::dom::element entry_element) {
   simdjson::dom::object entry_fields;
   const simdjson::error_code error = entry_element.get(entry_fields);
   if (error != simdjson::SUCCESS) {
-    return store_error(std::format("agent tree entry must be an object: {}",
+    return store_error(std::format("context tree entry must be an object: {}",
                                    simdjson_error_text(error)));
   }
 
@@ -1235,8 +1280,8 @@ agent_tree_entry_from_json(simdjson::dom::element entry_element) {
   if (!name) {
     return std::unexpected(name.error());
   }
-  const StoreResult<memix::AgentTreeEntryKind> entry_kind =
-      require_agent_tree_entry_kind(entry_fields, "kind");
+  const StoreResult<memix::ContextTreeEntryKind> entry_kind =
+      require_context_tree_entry_kind(entry_fields, "kind");
   if (!entry_kind) {
     return std::unexpected(entry_kind.error());
   }
@@ -1244,24 +1289,25 @@ agent_tree_entry_from_json(simdjson::dom::element entry_element) {
   if (!entry_id) {
     return std::unexpected(entry_id.error());
   }
-  return memix::AgentTreeEntry{
+  return memix::ContextTreeEntry{
       .name = *name,
       .kind = *entry_kind,
       .id = *entry_id,
   };
 }
 
-StoreResult<memix::AgentTree>
-read_agent_tree_object(const fs::path &root, std::string_view object_id) {
-  const StoreVoid id_valid = validate_agent_object_id({
+StoreResult<memix::ContextTree>
+read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
+                         std::string_view object_id) {
+  const StoreVoid id_valid = validate_context_object_id({
       .object_id = object_id,
-      .object_kind = "agent tree",
+      .object_kind = "context tree",
   });
   if (!id_valid) {
     return std::unexpected(id_valid.error());
   }
   const fs::path object_path =
-      agent_trees_dir_for(root) / std::format("{}{}", object_id, kJsonSuffix);
+      trees_dir_for(root, type) / std::format("{}{}", object_id, kJsonSuffix);
   const StoreResult<std::string> tree_text = read_text_file(object_path);
   if (!tree_text) {
     return std::unexpected(tree_text.error());
@@ -1271,7 +1317,7 @@ read_agent_tree_object(const fs::path &root, std::string_view object_id) {
     return std::unexpected(actual_hash.error());
   }
   if (*actual_hash != object_id) {
-    return store_error(std::format("agent tree hash does not match `{}`",
+    return store_error(std::format("context tree hash does not match `{}`",
                                    object_path.string()));
   }
 
@@ -1280,7 +1326,7 @@ read_agent_tree_object(const fs::path &root, std::string_view object_id) {
   simdjson::dom::element document;
   simdjson::error_code error = parser.parse(padded_json).get(document);
   if (error != simdjson::SUCCESS) {
-    return store_error(std::format("invalid agent tree JSON `{}`: {}",
+    return store_error(std::format("invalid context tree JSON `{}`: {}",
                                    object_path.string(),
                                    simdjson_error_text(error)));
   }
@@ -1288,12 +1334,13 @@ read_agent_tree_object(const fs::path &root, std::string_view object_id) {
   simdjson::dom::object fields;
   error = document.get(fields);
   if (error != simdjson::SUCCESS) {
-    return store_error(std::format("agent tree JSON must be an object `{}`: {}",
-                                   object_path.string(),
-                                   simdjson_error_text(error)));
+    return store_error(
+        std::format("context tree JSON must be an object `{}`: {}",
+                    object_path.string(), simdjson_error_text(error)));
   }
 
-  memix::AgentTree tree;
+  memix::ContextTree tree;
+  tree.type = type;
   tree.id = std::string(object_id);
   tree.object_path = object_path;
 
@@ -1313,13 +1360,21 @@ read_agent_tree_object(const fs::path &root, std::string_view object_id) {
   if (!kind) {
     return std::unexpected(kind.error());
   }
-  if (*kind != "agent_tree") {
+  if (*kind != kContextTreeKind
+      && !(type == memix::MemoryObjectType::Agents
+           && *kind == kLegacyContextTreeKind)) {
     return store_error(
-        std::format("agent tree has unsupported kind `{}`", *kind));
+        std::format("context tree has unsupported kind `{}`", *kind));
+  }
+  const StoreVoid type_valid = validate_optional_memory_object_type(
+      fields, "type", type, "context tree");
+  if (!type_valid) {
+    return std::unexpected(type_valid.error());
   }
 
   if (tree.schema_version != 1 || tree.object_version != 1) {
-    return store_error("agent tree schema or object version is not supported");
+    return store_error(
+        "context tree schema or object version is not supported");
   }
 
   const StoreResult<simdjson::dom::array> entries =
@@ -1328,30 +1383,31 @@ read_agent_tree_object(const fs::path &root, std::string_view object_id) {
     return std::unexpected(entries.error());
   }
   for (const simdjson::dom::element entry_element : *entries) {
-    StoreResult<memix::AgentTreeEntry> tree_entry =
-        agent_tree_entry_from_json(entry_element);
+    StoreResult<memix::ContextTreeEntry> tree_entry =
+        context_tree_entry_from_json(entry_element);
     if (!tree_entry) {
       return std::unexpected(tree_entry.error());
     }
     tree.entries.push_back(std::move(*tree_entry));
   }
 
-  const StoreVoid entries_valid = validate_agent_tree_entries(tree.entries);
+  const StoreVoid entries_valid = validate_context_tree_entries(tree.entries);
   if (!entries_valid) {
     return std::unexpected(entries_valid.error());
   }
   return tree;
 }
 
-StoreResult<memix::AgentTree>
-write_agent_tree_object(const fs::path &root,
-                        std::vector<memix::AgentTreeEntry> entries) {
-  StoreResult<std::vector<memix::AgentTreeEntry>> canonical_entries =
-      canonical_agent_tree_entries(std::move(entries));
+StoreResult<memix::ContextTree>
+write_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
+                          std::vector<memix::ContextTreeEntry> entries) {
+  StoreResult<std::vector<memix::ContextTreeEntry>> canonical_entries =
+      canonical_context_tree_entries(std::move(entries));
   if (!canonical_entries) {
     return std::unexpected(canonical_entries.error());
   }
-  const StoreResult<std::string> json = agent_tree_json_for(*canonical_entries);
+  const StoreResult<std::string> json =
+      context_tree_json_for(type, *canonical_entries);
   if (!json) {
     return std::unexpected(json.error());
   }
@@ -1361,29 +1417,32 @@ write_agent_tree_object(const fs::path &root,
   }
 
   const fs::path object_path =
-      agent_trees_dir_for(root) / std::format("{}{}", *hash, kJsonSuffix);
+      trees_dir_for(root, type) / std::format("{}{}", *hash, kJsonSuffix);
   const StoreVoid written =
       write_immutable_text_file_if_absent(object_path, *json);
   if (!written) {
     return std::unexpected(written.error());
   }
-  return memix::AgentTree{
+  return memix::ContextTree{
+      .type = type,
       .id = *hash,
       .entries = std::move(*canonical_entries),
       .object_path = object_path,
   };
 }
 
-StoreResult<memix::AgentGeneration>
-read_agent_generation_object(const fs::path &root, std::string_view object_id) {
-  const StoreVoid id_valid = validate_agent_object_id({
+StoreResult<memix::ContextGeneration>
+read_context_generation_object(const fs::path &root,
+                               memix::MemoryObjectType type,
+                               std::string_view object_id) {
+  const StoreVoid id_valid = validate_context_object_id({
       .object_id = object_id,
-      .object_kind = "agent generation",
+      .object_kind = "context generation",
   });
   if (!id_valid) {
     return std::unexpected(id_valid.error());
   }
-  const fs::path object_path = agent_generations_dir_for(root)
+  const fs::path object_path = generations_dir_for(root, type)
                              / std::format("{}{}", object_id, kJsonSuffix);
   const StoreResult<std::string> generation_text = read_text_file(object_path);
   if (!generation_text) {
@@ -1394,8 +1453,8 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
     return std::unexpected(actual_hash.error());
   }
   if (*actual_hash != object_id) {
-    return store_error(std::format("agent generation hash does not match `{}`",
-                                   object_path.string()));
+    return store_error(std::format(
+        "context generation hash does not match `{}`", object_path.string()));
   }
 
   const simdjson::padded_string padded_json(*generation_text);
@@ -1403,7 +1462,7 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
   simdjson::dom::element document;
   simdjson::error_code error = parser.parse(padded_json).get(document);
   if (error != simdjson::SUCCESS) {
-    return store_error(std::format("invalid agent generation JSON `{}`: {}",
+    return store_error(std::format("invalid context generation JSON `{}`: {}",
                                    object_path.string(),
                                    simdjson_error_text(error)));
   }
@@ -1412,11 +1471,12 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
   error = document.get(fields);
   if (error != simdjson::SUCCESS) {
     return store_error(
-        std::format("agent generation JSON must be an object `{}`: {}",
+        std::format("context generation JSON must be an object `{}`: {}",
                     object_path.string(), simdjson_error_text(error)));
   }
 
-  memix::AgentGeneration generation;
+  memix::ContextGeneration generation;
+  generation.type = type;
   generation.id = std::string(object_id);
   generation.object_path = object_path;
 
@@ -1436,13 +1496,20 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
   if (!kind) {
     return std::unexpected(kind.error());
   }
-  if (*kind != "agent_generation") {
+  if (*kind != kContextGenerationKind
+      && !(type == memix::MemoryObjectType::Agents
+           && *kind == kLegacyContextGenerationKind)) {
     return store_error(
-        std::format("agent generation has unsupported kind `{}`", *kind));
+        std::format("context generation has unsupported kind `{}`", *kind));
+  }
+  const StoreVoid type_valid = validate_optional_memory_object_type(
+      fields, "type", type, "context generation");
+  if (!type_valid) {
+    return std::unexpected(type_valid.error());
   }
   if (generation.schema_version != 1 || generation.object_version != 1) {
     return store_error(
-        "agent generation schema or object version is not supported");
+        "context generation schema or object version is not supported");
   }
 
   const StoreResult<std::string> root_tree =
@@ -1450,9 +1517,9 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
   if (!root_tree) {
     return std::unexpected(root_tree.error());
   }
-  const StoreVoid root_tree_valid = validate_agent_object_id({
+  const StoreVoid root_tree_valid = validate_context_object_id({
       .object_id = *root_tree,
-      .object_kind = "agent generation root tree",
+      .object_kind = "context generation root tree",
   });
   if (!root_tree_valid) {
     return std::unexpected(root_tree_valid.error());
@@ -1472,9 +1539,9 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
           std::format("metadata field `parent` must be null or a string: {}",
                       simdjson_error_text(error)));
     }
-    const StoreVoid parent_valid = validate_agent_object_id({
+    const StoreVoid parent_valid = validate_context_object_id({
         .object_id = parent,
-        .object_kind = "agent generation parent",
+        .object_kind = "context generation parent",
     });
     if (!parent_valid) {
       return std::unexpected(parent_valid.error());
@@ -1497,27 +1564,27 @@ read_agent_generation_object(const fs::path &root, std::string_view object_id) {
   return generation;
 }
 
-StoreResult<memix::AgentGeneration>
-write_agent_generation_object(const fs::path &root, std::string_view root_tree,
-                              std::optional<std::string_view> parent,
-                              std::string_view message) {
-  const StoreVoid root_tree_valid = validate_agent_object_id({
+StoreResult<memix::ContextGeneration> write_context_generation_object(
+    const fs::path &root, memix::MemoryObjectType type,
+    std::string_view root_tree, std::optional<std::string_view> parent,
+    std::string_view message) {
+  const StoreVoid root_tree_valid = validate_context_object_id({
       .object_id = root_tree,
-      .object_kind = "agent generation root tree",
+      .object_kind = "context generation root tree",
   });
   if (!root_tree_valid) {
     return std::unexpected(root_tree_valid.error());
   }
   if (parent.has_value()) {
-    const StoreVoid parent_valid = validate_agent_object_id({
+    const StoreVoid parent_valid = validate_context_object_id({
         .object_id = *parent,
-        .object_kind = "agent generation parent",
+        .object_kind = "context generation parent",
     });
     if (!parent_valid) {
       return std::unexpected(parent_valid.error());
     }
-    StoreResult<memix::AgentGeneration> parent_generation =
-        read_agent_generation_object(root, *parent);
+    StoreResult<memix::ContextGeneration> parent_generation =
+        read_context_generation_object(root, type, *parent);
     if (!parent_generation) {
       return std::unexpected(parent_generation.error());
     }
@@ -1526,7 +1593,8 @@ write_agent_generation_object(const fs::path &root, std::string_view root_tree,
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
-  const StoreResult<std::string> json = agent_generation_json_for({
+  const StoreResult<std::string> json = context_generation_json_for({
+      .type = type,
       .root_tree = root_tree,
       .parent = parent,
       .created_at = *created_at,
@@ -1541,13 +1609,14 @@ write_agent_generation_object(const fs::path &root, std::string_view root_tree,
   }
 
   const fs::path object_path =
-      agent_generations_dir_for(root) / std::format("{}{}", *hash, kJsonSuffix);
+      generations_dir_for(root, type) / std::format("{}{}", *hash, kJsonSuffix);
   const StoreVoid written =
       write_immutable_text_file_if_absent(object_path, *json);
   if (!written) {
     return std::unexpected(written.error());
   }
-  return memix::AgentGeneration{
+  return memix::ContextGeneration{
+      .type = type,
       .id = *hash,
       .root_tree = std::string(root_tree),
       .parent = parent.transform(
@@ -1558,21 +1627,21 @@ write_agent_generation_object(const fs::path &root, std::string_view root_tree,
   };
 }
 
-std::vector<memix::AgentTreeEntry>::iterator
-find_agent_tree_entry(std::vector<memix::AgentTreeEntry> &entries,
-                      std::string_view name) {
-  return std::ranges::find(entries, name, &memix::AgentTreeEntry::name);
+std::vector<memix::ContextTreeEntry>::iterator
+find_context_tree_entry(std::vector<memix::ContextTreeEntry> &entries,
+                        std::string_view name) {
+  return std::ranges::find(entries, name, &memix::ContextTreeEntry::name);
 }
 
-std::vector<memix::AgentTreeEntry>::const_iterator
-find_agent_tree_entry(const std::vector<memix::AgentTreeEntry> &entries,
-                      std::string_view name) {
-  return std::ranges::find(entries, name, &memix::AgentTreeEntry::name);
+std::vector<memix::ContextTreeEntry>::const_iterator
+find_context_tree_entry(const std::vector<memix::ContextTreeEntry> &entries,
+                        std::string_view name) {
+  return std::ranges::find(entries, name, &memix::ContextTreeEntry::name);
 }
 
-void upsert_agent_tree_entry(std::vector<memix::AgentTreeEntry> &entries,
-                             memix::AgentTreeEntry replacement) {
-  auto entry = find_agent_tree_entry(entries, replacement.name);
+void upsert_context_tree_entry(std::vector<memix::ContextTreeEntry> &entries,
+                               memix::ContextTreeEntry replacement) {
+  auto entry = find_context_tree_entry(entries, replacement.name);
   if (entry == entries.end()) {
     entries.push_back(std::move(replacement));
     return;
@@ -1580,49 +1649,52 @@ void upsert_agent_tree_entry(std::vector<memix::AgentTreeEntry> &entries,
   *entry = std::move(replacement);
 }
 
-struct AgentTreeRewriteFrame {
+struct ContextTreeRewriteFrame {
   std::string name;
-  std::vector<memix::AgentTreeEntry> entries;
+  std::vector<memix::ContextTreeEntry> entries;
 };
 
-StoreResult<std::optional<std::string>> next_agent_tree_id_for_ingest_component(
-    const std::vector<memix::AgentTreeEntry> &entries, std::string_view name,
+StoreResult<std::optional<std::string>>
+next_context_tree_id_for_ingest_component(
+    const std::vector<memix::ContextTreeEntry> &entries, std::string_view name,
     bool is_leaf) {
-  const auto entry = find_agent_tree_entry(entries, name);
+  const auto entry = find_context_tree_entry(entries, name);
   if (entry == entries.end()) {
     return std::optional<std::string>{};
   }
   if (is_leaf) {
-    if (entry->kind != memix::AgentTreeEntryKind::Blob) {
+    if (entry->kind != memix::ContextTreeEntryKind::Blob) {
       return store_error(
           std::format("agent path component `{}` conflicts with a tree", name));
     }
     return std::optional<std::string>{};
   }
-  if (entry->kind != memix::AgentTreeEntryKind::Tree) {
+  if (entry->kind != memix::ContextTreeEntryKind::Tree) {
     return store_error(
         std::format("agent path component `{}` conflicts with a file", name));
   }
   return std::optional<std::string>{entry->id};
 }
 
-StoreResult<std::string> attach_blob_to_agent_tree(
-    const fs::path &root, std::optional<std::string_view> tree_id,
-    std::span<const std::string> path_components, std::string_view blob_id) {
+StoreResult<std::string>
+attach_blob_to_context_tree(const fs::path &root, memix::MemoryObjectType type,
+                            std::optional<std::string_view> tree_id,
+                            std::span<const std::string> path_components,
+                            std::string_view blob_id) {
   if (path_components.empty()) {
     return store_error("agent path must contain at least one component");
   }
 
   std::optional<std::string> current_tree_id = tree_id.transform(
       [](std::string_view value) { return std::string(value); });
-  std::vector<AgentTreeRewriteFrame> frames;
+  std::vector<ContextTreeRewriteFrame> frames;
 
   for (auto component = path_components.begin();
        component != path_components.end(); ++component) {
-    std::vector<memix::AgentTreeEntry> entries;
+    std::vector<memix::ContextTreeEntry> entries;
     if (current_tree_id.has_value()) {
-      StoreResult<memix::AgentTree> tree =
-          read_agent_tree_object(root, *current_tree_id);
+      StoreResult<memix::ContextTree> tree =
+          read_context_tree_object(root, type, *current_tree_id);
       if (!tree) {
         return std::unexpected(tree.error());
       }
@@ -1632,12 +1704,12 @@ StoreResult<std::string> attach_blob_to_agent_tree(
     const std::string_view name = *component;
     const bool is_leaf = std::next(component) == path_components.end();
     StoreResult<std::optional<std::string>> next_tree_id =
-        next_agent_tree_id_for_ingest_component(entries, name, is_leaf);
+        next_context_tree_id_for_ingest_component(entries, name, is_leaf);
     if (!next_tree_id) {
       return std::unexpected(next_tree_id.error());
     }
 
-    frames.push_back(AgentTreeRewriteFrame{
+    frames.push_back(ContextTreeRewriteFrame{
         .name = std::string(name),
         .entries = std::move(entries),
     });
@@ -1646,17 +1718,17 @@ StoreResult<std::string> attach_blob_to_agent_tree(
 
   std::string child_id = std::string(blob_id);
   bool child_is_blob = true;
-  for (AgentTreeRewriteFrame &frame : std::views::reverse(frames)) {
-    upsert_agent_tree_entry(frame.entries,
-                            memix::AgentTreeEntry{
-                                .name = frame.name,
-                                .kind = child_is_blob
-                                          ? memix::AgentTreeEntryKind::Blob
-                                          : memix::AgentTreeEntryKind::Tree,
-                                .id = child_id,
-                            });
-    StoreResult<memix::AgentTree> new_tree =
-        write_agent_tree_object(root, std::move(frame.entries));
+  for (ContextTreeRewriteFrame &frame : std::views::reverse(frames)) {
+    upsert_context_tree_entry(frame.entries,
+                              memix::ContextTreeEntry{
+                                  .name = frame.name,
+                                  .kind = child_is_blob
+                                            ? memix::ContextTreeEntryKind::Blob
+                                            : memix::ContextTreeEntryKind::Tree,
+                                  .id = child_id,
+                              });
+    StoreResult<memix::ContextTree> new_tree =
+        write_context_tree_object(root, type, std::move(frame.entries));
     if (!new_tree) {
       return std::unexpected(new_tree.error());
     }
@@ -1674,8 +1746,28 @@ StoreResult<fs::path> ref_path_for(const fs::path &root,
       });
 }
 
+StoreResult<memix::MemoryObjectType>
+type_for_ref_name(std::string_view ref_name) {
+  return ref_name_components(ref_name).and_then(
+      [](const std::vector<std::string> &components)
+          -> StoreResult<memix::MemoryObjectType> {
+        const std::optional<memix::MemoryObjectType> type =
+            memix::parse_memory_object_type(components.front());
+        if (!type.has_value()) {
+          return store_error(
+              std::format("ref name starts with unsupported object type `{}`",
+                          components.front()));
+        }
+        return *type;
+      });
+}
+
 StoreResult<std::optional<std::string>>
 read_ref_value(const fs::path &root, std::string_view ref_name) {
+  const StoreResult<memix::MemoryObjectType> type = type_for_ref_name(ref_name);
+  if (!type) {
+    return std::unexpected(type.error());
+  }
   const StoreResult<fs::path> path = ref_path_for(root, ref_name);
   if (!path) {
     return std::unexpected(path.error());
@@ -1704,15 +1796,15 @@ read_ref_value(const fs::path &root, std::string_view ref_name) {
          && (contents->back() == '\n' || contents->back() == '\r')) {
     contents->pop_back();
   }
-  const StoreVoid ref_valid = validate_agent_object_id({
+  const StoreVoid ref_valid = validate_context_object_id({
       .object_id = *contents,
       .object_kind = "ref target generation",
   });
   if (!ref_valid) {
     return std::unexpected(ref_valid.error());
   }
-  StoreResult<memix::AgentGeneration> generation =
-      read_agent_generation_object(root, *contents);
+  StoreResult<memix::ContextGeneration> generation =
+      read_context_generation_object(root, *type, *contents);
   if (!generation) {
     return std::unexpected(generation.error());
   }
@@ -1725,15 +1817,19 @@ read_ref_value(const fs::path &root, std::string_view ref_name) {
 StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
                               std::optional<std::string_view> expected_old,
                               std::string_view new_generation) {
-  const StoreVoid new_generation_valid = validate_agent_object_id({
+  const StoreResult<memix::MemoryObjectType> type = type_for_ref_name(ref_name);
+  if (!type) {
+    return std::unexpected(type.error());
+  }
+  const StoreVoid new_generation_valid = validate_context_object_id({
       .object_id = new_generation,
       .object_kind = "new generation",
   });
   if (!new_generation_valid) {
     return std::unexpected(new_generation_valid.error());
   }
-  StoreResult<memix::AgentGeneration> generation =
-      read_agent_generation_object(root, new_generation);
+  StoreResult<memix::ContextGeneration> generation =
+      read_context_generation_object(root, *type, new_generation);
   if (!generation) {
     return std::unexpected(generation.error());
   }
@@ -1840,15 +1936,18 @@ parse_generation_ref_number(std::string_view name) {
   return parsed;
 }
 
-StoreResult<std::string> next_agent_generation_ref_name(const fs::path &root) {
-  const fs::path generation_refs =
-      refs_dir_for(root) / "agents" / std::string(kAgentGenerationsDir);
+StoreResult<std::string>
+next_generation_ref_name(const fs::path &root, memix::MemoryObjectType type) {
+  const fs::path generation_refs = refs_dir_for(root)
+                                 / std::string(memix::to_string(type))
+                                 / std::string(kGenerationsDir);
   const StoreResult<bool> exists = expected_fs::exists(generation_refs);
   if (!exists) {
     return std::unexpected(exists.error());
   }
   if (!*exists) {
-    return "agents/generations/000001";
+    return std::format("{}/{}/{:06}", memix::to_string(type), kGenerationsDir,
+                       1);
   }
   const StoreResult<bool> is_directory =
       expected_fs::is_directory(generation_refs);
@@ -1886,133 +1985,140 @@ StoreResult<std::string> next_agent_generation_ref_name(const fs::path &root) {
     return store_error(filesystem_error_message(
         "failed to list directory", iterator_error, generation_refs));
   }
-  return std::format("agents/generations/{:06}", max_generation + 1);
+  return std::format("{}/{}/{:06}", memix::to_string(type), kGenerationsDir,
+                     max_generation + 1);
 }
 
 StoreResult<std::string>
-root_tree_id_for_generation(const fs::path &root,
+root_tree_id_for_generation(const fs::path &root, memix::MemoryObjectType type,
                             std::string_view generation_id) {
-  return validate_agent_object_id({
-                                      .object_id = generation_id,
-                                      .object_kind = "agent generation",
-                                  })
-      .and_then([&root, generation_id] {
-        return read_agent_generation_object(root, generation_id);
+  return validate_context_object_id({
+                                        .object_id = generation_id,
+                                        .object_kind = "context generation",
+                                    })
+      .and_then([&root, type, generation_id] {
+        return read_context_generation_object(root, type, generation_id);
       })
-      .transform([](const memix::AgentGeneration &generation) {
+      .transform([](const memix::ContextGeneration &generation) {
         return generation.root_tree;
       });
 }
 
-StoreResult<std::string> latest_agent_root_tree_id(const fs::path &root) {
+StoreResult<std::string> latest_root_tree_id(const fs::path &root,
+                                             memix::MemoryObjectType type) {
   StoreResult<std::optional<std::string>> latest =
-      read_ref_value(root, kAgentsLatestRef);
+      read_ref_value(root, latest_ref_name(type));
   if (!latest) {
     return std::unexpected(latest.error());
   }
   if (!latest->has_value()) {
-    return store_error("agents/latest ref does not exist");
+    return store_error(
+        std::format("{}/latest ref does not exist", memix::to_string(type)));
   }
-  return root_tree_id_for_generation(root, **latest);
+  return root_tree_id_for_generation(root, type, **latest);
 }
 
 StoreResult<std::string>
-requested_agent_root_tree_id(const fs::path &root,
-                             std::optional<std::string_view> generation_id) {
+requested_root_tree_id(const fs::path &root, memix::MemoryObjectType type,
+                       std::optional<std::string_view> generation_id) {
   if (generation_id.has_value()) {
-    return root_tree_id_for_generation(root, *generation_id);
+    return root_tree_id_for_generation(root, type, *generation_id);
   }
-  return latest_agent_root_tree_id(root);
+  return latest_root_tree_id(root, type);
 }
 
-struct AgentFileResolveRequest {
+struct ContextFileResolveRequest {
   std::reference_wrapper<const fs::path> root;
-  std::reference_wrapper<const fs::path> agent_path;
+  memix::MemoryObjectType type;
+  std::reference_wrapper<const fs::path> context_path;
   std::string_view root_tree_id;
 };
 
 StoreResult<memix::StoredObject>
-resolve_agent_file(AgentFileResolveRequest request) {
+resolve_context_file(ContextFileResolveRequest request) {
   const StoreResult<std::vector<std::string>> components =
-      agent_path_components(request.agent_path.get());
+      context_path_components(request.type, request.context_path.get());
   if (!components) {
     return std::unexpected(components.error());
   }
   std::string tree_id = std::string(request.root_tree_id);
   for (auto component = components->begin(); component != components->end();
        ++component) {
-    StoreResult<memix::AgentTree> current_tree =
-        read_agent_tree_object(request.root.get(), tree_id);
+    StoreResult<memix::ContextTree> current_tree =
+        read_context_tree_object(request.root.get(), request.type, tree_id);
     if (!current_tree) {
       return std::unexpected(current_tree.error());
     }
     const std::string_view name = *component;
     const auto entry = std::ranges::find(current_tree->entries, name,
-                                         &memix::AgentTreeEntry::name);
+                                         &memix::ContextTreeEntry::name);
     if (entry == current_tree->entries.end()) {
-      return store_error(
-          std::format("agent path does not exist `{}`",
-                      request.agent_path.get().generic_string()));
+      return store_error(std::format(
+          "{} path does not exist `{}`", context_label(request.type),
+          request.context_path.get().generic_string()));
     }
     const bool is_last = std::next(component) == components->end();
     if (is_last) {
-      if (entry->kind != memix::AgentTreeEntryKind::Blob) {
-        return store_error(
-            std::format("agent path is not a file `{}`",
-                        request.agent_path.get().generic_string()));
+      if (entry->kind != memix::ContextTreeEntryKind::Blob) {
+        return store_error(std::format(
+            "{} path is not a file `{}`", context_label(request.type),
+            request.context_path.get().generic_string()));
       }
-      return read_agent_blob_object(request.root.get(), entry->id);
+      return read_blob_object(request.root.get(), request.type, entry->id);
     }
-    if (entry->kind != memix::AgentTreeEntryKind::Tree) {
+    if (entry->kind != memix::ContextTreeEntryKind::Tree) {
       return store_error(
           std::format("agent path component `{}` is not a tree", name));
     }
     tree_id = entry->id;
   }
-  return store_error("agent path resolution failed");
+  return store_error(
+      std::format("{} path resolution failed", context_label(request.type)));
 }
 
-struct AgentFileVisit {
+struct ContextFileVisit {
   fs::path path;
-  memix::AgentTreeEntryKind kind = memix::AgentTreeEntryKind::Tree;
+  memix::ContextTreeEntryKind kind = memix::ContextTreeEntryKind::Tree;
   std::string object_id;
 };
 
-StoreVoid collect_agent_files(const fs::path &root, std::string_view tree_id,
-                              const fs::path &prefix,
-                              std::vector<memix::AgentFile> &files) {
-  std::vector<AgentFileVisit> pending;
-  pending.push_back(AgentFileVisit{
+StoreVoid collect_context_files(const fs::path &root, std::string_view tree_id,
+                                memix::MemoryObjectType type,
+                                const fs::path &prefix,
+                                std::vector<memix::StoreFile> &files) {
+  std::vector<ContextFileVisit> pending;
+  pending.push_back(ContextFileVisit{
       .path = prefix,
-      .kind = memix::AgentTreeEntryKind::Tree,
+      .kind = memix::ContextTreeEntryKind::Tree,
       .object_id = std::string(tree_id),
   });
 
   while (!pending.empty()) {
-    AgentFileVisit visit = std::move(pending.back());
+    ContextFileVisit visit = std::move(pending.back());
     pending.pop_back();
 
-    if (visit.kind == memix::AgentTreeEntryKind::Blob) {
+    if (visit.kind == memix::ContextTreeEntryKind::Blob) {
       StoreResult<memix::StoredObject> blob =
-          read_agent_blob_object(root, visit.object_id);
+          read_blob_object(root, type, visit.object_id);
       if (!blob) {
         return std::unexpected(blob.error());
       }
-      files.push_back(memix::AgentFile{
-          .agent_path = std::move(visit.path),
+      files.push_back(memix::StoreFile{
+          .type = type,
+          .context_path = std::move(visit.path),
           .blob = std::move(*blob),
       });
       continue;
     }
 
-    StoreResult<memix::AgentTree> tree =
-        read_agent_tree_object(root, visit.object_id);
+    StoreResult<memix::ContextTree> tree =
+        read_context_tree_object(root, type, visit.object_id);
     if (!tree) {
       return std::unexpected(tree.error());
     }
-    for (const memix::AgentTreeEntry &entry :
+    for (const memix::ContextTreeEntry &entry :
          std::views::reverse(tree->entries)) {
-      pending.push_back(AgentFileVisit{
+      pending.push_back(ContextFileVisit{
           .path = visit.path / entry.name,
           .kind = entry.kind,
           .object_id = entry.id,
@@ -2051,8 +2157,8 @@ std::vector<MemoryObjectType> memory_object_types() {
        | std::ranges::to<std::vector>();
 }
 
-std::string_view to_string(AgentTreeEntryKind kind) noexcept {
-  for (const AgentTreeEntryKindToken mapping : kAgentTreeEntryKindTokens) {
+std::string_view to_string(ContextTreeEntryKind kind) noexcept {
+  for (const ContextTreeEntryKindToken mapping : kContextTreeEntryKindTokens) {
     if (mapping.value == kind) {
       return mapping.token;
     }
@@ -2060,9 +2166,9 @@ std::string_view to_string(AgentTreeEntryKind kind) noexcept {
   return {};
 }
 
-std::optional<AgentTreeEntryKind>
-parse_agent_tree_entry_kind(std::string_view value) noexcept {
-  for (const AgentTreeEntryKindToken mapping : kAgentTreeEntryKindTokens) {
+std::optional<ContextTreeEntryKind>
+parse_context_tree_entry_kind(std::string_view value) noexcept {
+  for (const ContextTreeEntryKindToken mapping : kContextTreeEntryKindTokens) {
     if (mapping.token == value) {
       return mapping.value;
     }
@@ -2093,12 +2199,12 @@ metadata_json(const StoredObject &object) {
 
 std::expected<IngestResult, StoreError>
 Store::ingest(MemoryObjectType type, const fs::path &source_path) const {
-  if (type == MemoryObjectType::Agents) {
-    return store_error(
-        "agent ingest requires a destination path; use ingest_agent_file");
-  }
+  return ingest_blob(type, source_path);
+}
 
-  const fs::path type_dir = type_dir_for(root_, type);
+std::expected<IngestResult, StoreError>
+Store::ingest_blob(MemoryObjectType type, const fs::path &source_path) const {
+  const fs::path type_dir = blobs_dir_for(root_, type);
 
   const StoreVoid directories_created =
       ensure_store_directories(root_, type_dir);
@@ -2113,53 +2219,37 @@ Store::ingest(MemoryObjectType type, const fs::path &source_path) const {
   });
 }
 
-std::expected<IngestResult, StoreError>
-Store::ingest_agent_blob(const fs::path &source_path) const {
-  const fs::path type_dir = agent_blobs_dir_for(root_);
-
-  const StoreVoid directories_created =
-      ensure_store_directories(root_, type_dir);
-  if (!directories_created) {
-    return std::unexpected(directories_created.error());
-  }
-
-  return publish_new_object(PublishRequest{
-      .type = MemoryObjectType::Agents,
-      .source_path = source_path,
-      .type_dir = type_dir,
-  });
-}
-
-std::expected<AgentIngestResult, StoreError>
-Store::ingest_agent_file(const AgentFileIngestRequest &request) const {
+std::expected<FileIngestResult, StoreError>
+Store::ingest_file(const FileIngestRequest &request) const {
   const StoreResult<std::vector<std::string>> components =
-      agent_path_components(request.agent_path);
+      context_path_components(request.type, request.context_path);
   if (!components) {
     return std::unexpected(components.error());
   }
 
   std::expected<IngestResult, StoreError> blob =
-      ingest_agent_blob(request.source_path);
+      ingest_blob(request.type, request.source_path);
   if (!blob) {
     return std::unexpected(blob.error());
   }
 
-  StoreResult<TemporaryDirectoryCleanup> agent_lock =
-      acquire_agent_update_lock(root_);
-  if (!agent_lock) {
-    return std::unexpected(agent_lock.error());
+  StoreResult<TemporaryDirectoryCleanup> update_lock =
+      acquire_type_update_lock(root_, request.type);
+  if (!update_lock) {
+    return std::unexpected(update_lock.error());
   }
 
+  const std::string latest_ref = latest_ref_name(request.type);
   StoreResult<std::optional<std::string>> previous_generation =
-      read_ref_value(root_, kAgentsLatestRef);
+      read_ref_value(root_, latest_ref);
   if (!previous_generation) {
     return std::unexpected(previous_generation.error());
   }
 
   std::optional<std::string> parent_root_tree_id;
   if (previous_generation->has_value()) {
-    StoreResult<AgentGeneration> parent =
-        read_agent_generation_object(root_, **previous_generation);
+    StoreResult<ContextGeneration> parent = read_context_generation_object(
+        root_, request.type, **previous_generation);
     if (!parent) {
       return std::unexpected(parent.error());
     }
@@ -2173,9 +2263,9 @@ Store::ingest_agent_file(const AgentFileIngestRequest &request) const {
       previous_generation->transform(
           [](std::string_view value) { return value; });
 
-  StoreResult<std::string> root_tree = attach_blob_to_agent_tree(
-      root_, parent_root_tree, std::span<const std::string>{*components},
-      blob->object.id);
+  StoreResult<std::string> root_tree = attach_blob_to_context_tree(
+      root_, request.type, parent_root_tree,
+      std::span<const std::string>{*components}, blob->object.id);
   if (!root_tree) {
     return std::unexpected(root_tree.error());
   }
@@ -2185,14 +2275,14 @@ Store::ingest_agent_file(const AgentFileIngestRequest &request) const {
   const std::string_view generation_message =
       request.message.empty() ? std::string_view(default_message)
                               : std::string_view(request.message);
-  StoreResult<AgentGeneration> generation = write_agent_generation_object(
-      root_, *root_tree, parent_generation, generation_message);
+  StoreResult<ContextGeneration> generation = write_context_generation_object(
+      root_, request.type, *root_tree, parent_generation, generation_message);
   if (!generation) {
     return std::unexpected(generation.error());
   }
 
   StoreResult<std::string> generation_ref =
-      next_agent_generation_ref_name(root_);
+      next_generation_ref_name(root_, request.type);
   if (!generation_ref) {
     return std::unexpected(generation_ref.error());
   }
@@ -2202,8 +2292,8 @@ Store::ingest_agent_file(const AgentFileIngestRequest &request) const {
     return std::unexpected(generation_ref_updated.error());
   }
 
-  StoreVoid ref_updated = update_ref_unlocked(
-      root_, kAgentsLatestRef, parent_generation, generation->id);
+  StoreVoid ref_updated =
+      update_ref_unlocked(root_, latest_ref, parent_generation, generation->id);
   if (!ref_updated) {
     const StoreError &ref_error = ref_updated.error();
     const StoreVoid rollback = remove_ref_unlocked(root_, *generation_ref);
@@ -2216,51 +2306,55 @@ Store::ingest_agent_file(const AgentFileIngestRequest &request) const {
   }
 
   std::optional<std::string> previous_generation_result = *previous_generation;
-  return AgentIngestResult{
+  return FileIngestResult{
       .blob = std::move(*blob),
       .generation = std::move(*generation),
       .previous_generation = std::move(previous_generation_result),
-      .agent_path = path_from_components(*components),
+      .type = request.type,
+      .context_path = path_from_components(*components),
   };
 }
 
 std::expected<StoredObject, StoreError>
-Store::read_agent_blob(std::string_view object_id) const {
-  return read_agent_blob_object(root_, object_id);
+Store::read_blob(MemoryObjectType type, std::string_view object_id) const {
+  return read_blob_object(root_, type, object_id);
 }
 
-std::expected<AgentTree, StoreError>
-Store::read_agent_tree(std::string_view object_id) const {
-  return read_agent_tree_object(root_, object_id);
+std::expected<ContextTree, StoreError>
+Store::read_tree(MemoryObjectType type, std::string_view object_id) const {
+  return read_context_tree_object(root_, type, object_id);
 }
 
-std::expected<AgentGeneration, StoreError>
-Store::read_agent_generation(std::string_view object_id) const {
-  return read_agent_generation_object(root_, object_id);
+std::expected<ContextGeneration, StoreError>
+Store::read_generation(MemoryObjectType type,
+                       std::string_view object_id) const {
+  return read_context_generation_object(root_, type, object_id);
 }
 
 std::expected<StoredObject, StoreError>
-Store::read_agent_file(const fs::path &agent_path,
-                       std::optional<std::string_view> generation) const {
+Store::read_file(MemoryObjectType type, const fs::path &context_path,
+                 std::optional<std::string_view> generation) const {
   StoreResult<std::string> root_tree_id =
-      requested_agent_root_tree_id(root_, generation);
+      requested_root_tree_id(root_, type, generation);
   if (!root_tree_id) {
     return std::unexpected(root_tree_id.error());
   }
-  return resolve_agent_file({
+  return resolve_context_file({
       .root = root_,
-      .agent_path = agent_path,
+      .type = type,
+      .context_path = context_path,
       .root_tree_id = *root_tree_id,
   });
 }
 
-std::expected<std::vector<AgentFile>, StoreError>
-Store::list_agent_files(std::optional<std::string_view> generation) const {
-  return requested_agent_root_tree_id(root_, generation)
-      .and_then([this](std::string_view tree_id)
-                    -> StoreResult<std::vector<AgentFile>> {
-        std::vector<AgentFile> files;
-        return collect_agent_files(root_, tree_id, fs::path{}, files)
+std::expected<std::vector<StoreFile>, StoreError>
+Store::list_files(MemoryObjectType type,
+                  std::optional<std::string_view> generation) const {
+  return requested_root_tree_id(root_, type, generation)
+      .and_then([this, type](std::string_view tree_id)
+                    -> StoreResult<std::vector<StoreFile>> {
+        std::vector<StoreFile> files;
+        return collect_context_files(root_, tree_id, type, fs::path{}, files)
             .transform([&files] { return std::move(files); });
       });
 }
@@ -2273,10 +2367,14 @@ Store::read_ref(std::string_view ref_name) const {
 StoreVoid Store::update_ref(std::string_view ref_name,
                             std::optional<std::string_view> expected_old,
                             std::string_view new_generation) const {
-  StoreResult<TemporaryDirectoryCleanup> agent_lock =
-      acquire_agent_update_lock(root_);
-  if (!agent_lock) {
-    return std::unexpected(agent_lock.error());
+  const StoreResult<MemoryObjectType> type = type_for_ref_name(ref_name);
+  if (!type) {
+    return std::unexpected(type.error());
+  }
+  StoreResult<TemporaryDirectoryCleanup> update_lock =
+      acquire_type_update_lock(root_, *type);
+  if (!update_lock) {
+    return std::unexpected(update_lock.error());
   }
   return update_ref_unlocked(root_, ref_name, expected_old, new_generation);
 }

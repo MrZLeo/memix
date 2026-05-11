@@ -22,11 +22,11 @@ std::string_view to_string(MemoryObjectType type) noexcept;
 std::optional<MemoryObjectType>
 parse_memory_object_type(std::string_view value) noexcept;
 
-enum class AgentTreeEntryKind : std::uint8_t { Blob, Tree };
+enum class ContextTreeEntryKind : std::uint8_t { Blob, Tree };
 std::vector<MemoryObjectType> memory_object_types();
-std::string_view to_string(AgentTreeEntryKind kind) noexcept;
-std::optional<AgentTreeEntryKind>
-parse_agent_tree_entry_kind(std::string_view value) noexcept;
+std::string_view to_string(ContextTreeEntryKind kind) noexcept;
+std::optional<ContextTreeEntryKind>
+parse_context_tree_entry_kind(std::string_view value) noexcept;
 
 std::expected<std::filesystem::path, StoreError> default_store_root();
 
@@ -53,23 +53,25 @@ struct IngestResult {
   bool inserted = false;
 };
 
-struct AgentTreeEntry {
+struct ContextTreeEntry {
   std::string name;
-  AgentTreeEntryKind kind = AgentTreeEntryKind::Blob;
+  ContextTreeEntryKind kind = ContextTreeEntryKind::Blob;
   std::string id;
 };
 
-struct AgentTree {
+struct ContextTree {
   int schema_version = 1;
   int object_version = 1;
+  MemoryObjectType type = MemoryObjectType::Agents;
   std::string id;
-  std::vector<AgentTreeEntry> entries;
+  std::vector<ContextTreeEntry> entries;
   std::filesystem::path object_path;
 };
 
-struct AgentGeneration {
+struct ContextGeneration {
   int schema_version = 1;
   int object_version = 1;
+  MemoryObjectType type = MemoryObjectType::Agents;
   std::string id;
   std::string root_tree;
   std::optional<std::string> parent;
@@ -78,21 +80,24 @@ struct AgentGeneration {
   std::filesystem::path object_path;
 };
 
-struct AgentIngestResult {
-  IngestResult blob;
-  AgentGeneration generation;
-  std::optional<std::string> previous_generation;
-  std::filesystem::path agent_path;
-};
-
-struct AgentFileIngestRequest {
+struct FileIngestRequest {
+  MemoryObjectType type = MemoryObjectType::Documents;
   std::filesystem::path source_path;
-  std::filesystem::path agent_path;
+  std::filesystem::path context_path;
   std::string_view message;
 };
 
-struct AgentFile {
-  std::filesystem::path agent_path;
+struct FileIngestResult {
+  IngestResult blob;
+  ContextGeneration generation;
+  std::optional<std::string> previous_generation;
+  MemoryObjectType type = MemoryObjectType::Documents;
+  std::filesystem::path context_path;
+};
+
+struct StoreFile {
+  MemoryObjectType type = MemoryObjectType::Documents;
+  std::filesystem::path context_path;
   StoredObject blob;
 };
 
@@ -108,27 +113,28 @@ public:
   ingest(MemoryObjectType type, const std::filesystem::path &source_path) const;
 
   [[nodiscard]] std::expected<IngestResult, StoreError>
-  ingest_agent_blob(const std::filesystem::path &source_path) const;
+  ingest_blob(MemoryObjectType type,
+              const std::filesystem::path &source_path) const;
 
-  [[nodiscard]] std::expected<AgentIngestResult, StoreError>
-  ingest_agent_file(const AgentFileIngestRequest &request) const;
+  [[nodiscard]] std::expected<FileIngestResult, StoreError>
+  ingest_file(const FileIngestRequest &request) const;
 
   [[nodiscard]] std::expected<StoredObject, StoreError>
-  read_agent_blob(std::string_view object_id) const;
+  read_blob(MemoryObjectType type, std::string_view object_id) const;
 
-  [[nodiscard]] std::expected<AgentTree, StoreError>
-  read_agent_tree(std::string_view object_id) const;
+  [[nodiscard]] std::expected<ContextTree, StoreError>
+  read_tree(MemoryObjectType type, std::string_view object_id) const;
 
-  [[nodiscard]] std::expected<AgentGeneration, StoreError>
-  read_agent_generation(std::string_view object_id) const;
+  [[nodiscard]] std::expected<ContextGeneration, StoreError>
+  read_generation(MemoryObjectType type, std::string_view object_id) const;
 
-  [[nodiscard]] std::expected<StoredObject, StoreError> read_agent_file(
-      const std::filesystem::path &agent_path,
-      std::optional<std::string_view> generation = std::nullopt) const;
+  [[nodiscard]] std::expected<StoredObject, StoreError>
+  read_file(MemoryObjectType type, const std::filesystem::path &context_path,
+            std::optional<std::string_view> generation = std::nullopt) const;
 
-  [[nodiscard]] std::expected<std::vector<AgentFile>, StoreError>
-  list_agent_files(
-      std::optional<std::string_view> generation = std::nullopt) const;
+  [[nodiscard]] std::expected<std::vector<StoreFile>, StoreError>
+  list_files(MemoryObjectType type,
+             std::optional<std::string_view> generation = std::nullopt) const;
 
   [[nodiscard]] std::expected<std::optional<std::string>, StoreError>
   read_ref(std::string_view ref_name) const;

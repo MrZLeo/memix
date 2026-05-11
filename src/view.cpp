@@ -325,8 +325,9 @@ resolve_agent_generation(const memix::Store &store,
   }
 
   if (expression.agent_generation.has_value()) {
-    const std::expected<memix::AgentGeneration, memix::StoreError> generation =
-        store.read_agent_generation(*expression.agent_generation);
+    const std::expected<memix::ContextGeneration, memix::StoreError>
+        generation = store.read_generation(memix::MemoryObjectType::Agents,
+                                           *expression.agent_generation);
     if (!generation) {
       return std::unexpected(generation.error());
     }
@@ -350,14 +351,15 @@ resolve_agent_generation(const memix::Store &store,
 }
 
 bool is_missing_agent_path_error(const memix::StoreError &error) {
-  return error.message.starts_with("agent path does not exist");
+  return error.message.starts_with("agents path does not exist")
+      || error.message.starts_with("agent path does not exist");
 }
 
-ResolvedInput selected_input_from_agent_file(const memix::AgentFile &file) {
+ResolvedInput selected_input_from_agent_file(const memix::StoreFile &file) {
   return ResolvedInput{
       .selector =
           memix::ViewSelector{
-              .agent_path = file.agent_path,
+              .agent_path = file.context_path,
               .scope_label = std::nullopt,
               .required = true,
           },
@@ -369,13 +371,14 @@ ResolvedInput selected_input_from_agent_file(const memix::AgentFile &file) {
 ViewResult<std::vector<ResolvedInput>>
 resolve_all_agent_inputs(const memix::Store &store,
                          std::string_view resolved_agent_generation) {
-  std::expected<std::vector<memix::AgentFile>, memix::StoreError> files =
-      store.list_agent_files(resolved_agent_generation);
+  std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
+      store.list_files(memix::MemoryObjectType::Agents,
+                       resolved_agent_generation);
   if (!files) {
     return std::unexpected(files.error());
   }
 
-  return *files | std::views::transform([](const memix::AgentFile &file) {
+  return *files | std::views::transform([](const memix::StoreFile &file) {
     return selected_input_from_agent_file(file);
   }) | std::ranges::to<std::vector>();
 }
@@ -388,7 +391,8 @@ resolve_selected_inputs(const memix::Store &store,
   inputs.reserve(expression.selectors.size());
   for (const memix::ViewSelector &selector : expression.selectors) {
     std::expected<memix::StoredObject, memix::StoreError> blob =
-        store.read_agent_file(selector.agent_path, resolved_agent_generation);
+        store.read_file(memix::MemoryObjectType::Agents, selector.agent_path,
+                        resolved_agent_generation);
     if (!blob) {
       if (!selector.required && is_missing_agent_path_error(blob.error())) {
         inputs.push_back(ResolvedInput{
