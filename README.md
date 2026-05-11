@@ -23,7 +23,7 @@ target for SHA-256 content hashing.
 ## Build
 
 ```bash
-cmake -S . -B build \
+cmake -G Ninja -S . -B build \
   -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
 
 cmake --build build
@@ -35,6 +35,7 @@ The default build always produces the `memix` library and also builds every `src
 
 ```bash
 ./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type agents --dest README.md README.md
+./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
 ./build/bin/Debug/memix-store --store-root /tmp/memix-store agents tree
 ./build/bin/Debug/memix-store --store-root /tmp/memix-store list
 ./build/bin/Debug/memix-store --store-root /tmp/memix-store list --json
@@ -44,7 +45,10 @@ The default build always produces the `memix` library and also builds every `src
 
 `memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
 then `$HOME/.memix`. The supported immutable object types are `agents`, `chat`,
-and `documents`.
+and `documents`. Stored bytes live as immutable SHA-256 blobs under each
+type's `blobs/` directory; when ingest uses `--dest`, memix also records the
+blob in that type's canonical context tree and advances the type's latest
+generation ref.
 
 For a manual smoke check against the real default store root, run:
 
@@ -54,11 +58,12 @@ For a manual smoke check against the real default store root, run:
 ./build/bin/Debug/memix-store list --type agents
 ```
 
-Agents ingest requires a source path plus `--dest`, the logical destination
-inside the agents tree. Commands under `agents` operate on that logical tree.
-Refs such as `refs/agents/latest` and `refs/agents/generations/000001` are
-small mutable files containing immutable generation ids; each generation then
-points at its immutable root tree.
+All object types can ingest plain blobs. Passing `--dest` stores the blob at a
+logical path inside that type's canonical context tree and advances its latest
+generation ref. Commands under `agents` operate on the agents logical tree. Refs
+such as `refs/agents/latest`, `refs/documents/latest`, and
+`refs/agents/generations/000001` are small mutable files containing immutable
+generation ids; each generation then points at its immutable root tree.
 
 That writes outside the repository, so use `--store-root` when you want an
 isolated test store.
@@ -66,7 +71,7 @@ isolated test store.
 ## Tests
 
 ```bash
-cmake -S . -B build -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
+cmake -G Ninja -S . -B build -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
 cmake --build build
 ctest --test-dir build -C Debug -VV
 ```
