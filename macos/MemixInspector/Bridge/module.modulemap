@@ -1,0 +1,4 @@
+module MemixInspectorBridge {
+  header "MMXStore.h"
+  export *
+}

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="base" x1="512" y1="64" x2="512" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1E2634"/>
+      <stop offset="1" stop-color="#090B10"/>
+    </linearGradient>
+    <radialGradient id="centerLight" cx="512" cy="474" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2E3749" stop-opacity=".56"/>
+      <stop offset=".58" stop-color="#1A202B" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#090B10" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glyphShadow" x="-18%" y="-18%" width="136%" height="136%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="20" stdDeviation="18" flood-color="#000000" flood-opacity=".30"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="url(#base)"/>
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="url(#centerLight)"/>
+
+  <g filter="url(#glyphShadow)" fill="none" stroke="#F7EEDF" stroke-width="56" stroke-linecap="round">
+    <path d="M558 311L666 374"/>
+    <path d="M708 450V574"/>
+    <path d="M666 650L558 713"/>
+    <path d="M466 713L358 650"/>
+    <path d="M316 574V450"/>
+    <path d="M358 374L466 311"/>
+  </g>
+
+  <rect x="472" y="472" width="80" height="80" rx="22" fill="#22A0FF"/>
+</svg>

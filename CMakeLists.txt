@@ -10,6 +10,8 @@ project(
   LANGUAGES CXX
 )
 
+option(${PROJECT_NAME}_BUILD_MACOS_INSPECTOR "Build the native macOS Memix Inspector app." OFF)
+
 #
 # Set project options
 #
@@ -335,6 +337,18 @@ message(STATUS "Finished setting up include directories.")
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 verbose_message("Project is now aliased as ${PROJECT_NAME}::${PROJECT_NAME}.\n")
+
+if(${PROJECT_NAME}_BUILD_MACOS_INSPECTOR)
+  if(NOT APPLE)
+    message(FATAL_ERROR "memix_BUILD_MACOS_INSPECTOR is only supported on Apple platforms.")
+  endif()
+  enable_language(OBJCXX)
+  if(POLICY CMP0157)
+    cmake_policy(SET CMP0157 NEW)
+  endif()
+  enable_language(Swift)
+  add_subdirectory(macos/MemixInspector)
+endif()
 
 #
 # Format the project using the `clang-format` target (i.e: cmake --build build --target clang-format)
