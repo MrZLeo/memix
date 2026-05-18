@@ -76,6 +76,12 @@ cmake --build build
 ctest --test-dir build -C Debug -VV
 ```
 
+## Homebrew
+
+The repository includes a Homebrew formula under `Formula/memix.rb`. It is
+intended for a `MrZLeo/homebrew-memix` tap and declares the Homebrew dependencies
+needed to build and run the CLI. See `Formula/README.md` for publishing steps.
+
 ## Common Options
 
 * `memix_BUILD_EXECUTABLE=ON`
