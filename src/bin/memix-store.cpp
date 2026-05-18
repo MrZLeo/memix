@@ -38,6 +38,8 @@ enum class StoreCommand : std::uint8_t {
   None,
   List,
   Ingest,
+  Cat,
+  Tree,
   Agents,
   AgentsCat,
   AgentsTree,
@@ -52,9 +54,11 @@ struct StoreCliOptions {
   std::string ingest_message;
   std::string list_type_name;
   bool list_json = false;
-  std::filesystem::path agent_cat_path;
-  std::string agent_cat_generation;
-  std::string agent_tree_generation;
+  std::string cat_type_name;
+  std::filesystem::path cat_path;
+  std::string cat_generation;
+  std::string tree_type_name;
+  std::string tree_generation;
 };
 
 std::string supported_types_message() {
@@ -117,7 +121,7 @@ void print_table(const std::vector<memix::StoredObject> &objects) {
   }
 }
 
-void print_agent_tree_table(const std::vector<memix::StoreFile> &files) {
+void print_context_tree_table(const std::vector<memix::StoreFile> &files) {
   memix::cli_detail::print_path_id_table(
       files,
       memix::cli_detail::PathIdTableLayout{
@@ -242,6 +246,20 @@ memix::cli_detail::VoidResult run_list(const StoreCliOptions &options) {
   return {};
 }
 
+struct CommandTypeRequest {
+  std::string_view command_name;
+  std::string_view type_name;
+};
+
+memix::cli_detail::Result<memix::MemoryObjectType>
+require_command_type(CommandTypeRequest request) {
+  if (request.type_name.empty()) {
+    return memix::cli_detail::unexpected_error(std::format(
+        "{} requires --type with an object type", request.command_name));
+  }
+  return require_type(request.type_name);
+}
+
 memix::cli_detail::VoidResult
 run_ingest(const StoreCliOptions &options,
            const std::shared_ptr<spdlog::logger> &logger) {
@@ -307,18 +325,25 @@ run_ingest(const StoreCliOptions &options,
   return {};
 }
 
-memix::cli_detail::VoidResult run_agents_cat(const StoreCliOptions &options) {
-  if (options.agent_cat_path.empty()) {
-    return memix::cli_detail::unexpected_error(
-        "agents cat expects an agent path");
+memix::cli_detail::VoidResult run_cat(const StoreCliOptions &options) {
+  const memix::cli_detail::Result<memix::MemoryObjectType> type =
+      require_command_type(CommandTypeRequest{
+          .command_name = "cat",
+          .type_name = options.cat_type_name,
+      });
+  if (!type) {
+    return std::unexpected(type.error());
+  }
+  if (options.cat_path.empty()) {
+    return memix::cli_detail::unexpected_error("cat expects a logical path");
   }
   const memix::cli_detail::Result<memix::Store> store = make_store(options);
   if (!store) {
     return std::unexpected(store.error());
   }
   const std::expected<memix::StoredObject, memix::StoreError> object =
-      store->read_file(memix::MemoryObjectType::Agents, options.agent_cat_path,
-                       optional_generation(options.agent_cat_generation));
+      store->read_file(*type, options.cat_path,
+                       optional_generation(options.cat_generation));
   if (!object) {
     return memix::cli_detail::unexpected_error(object.error());
   }
@@ -332,18 +357,25 @@ memix::cli_detail::VoidResult run_agents_cat(const StoreCliOptions &options) {
   return {};
 }
 
-memix::cli_detail::VoidResult run_agents_tree(const StoreCliOptions &options) {
+memix::cli_detail::VoidResult run_tree(const StoreCliOptions &options) {
+  const memix::cli_detail::Result<memix::MemoryObjectType> type =
+      require_command_type(CommandTypeRequest{
+          .command_name = "tree",
+          .type_name = options.tree_type_name,
+      });
+  if (!type) {
+    return std::unexpected(type.error());
+  }
   const memix::cli_detail::Result<memix::Store> store = make_store(options);
   if (!store) {
     return std::unexpected(store.error());
   }
   const std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
-      store->list_files(memix::MemoryObjectType::Agents,
-                        optional_generation(options.agent_tree_generation));
+      store->list_files(*type, optional_generation(options.tree_generation));
   if (!files) {
     return memix::cli_detail::unexpected_error(files.error());
   }
-  print_agent_tree_table(*files);
+  print_context_tree_table(*files);
   return {};
 }
 
@@ -390,28 +422,63 @@ void add_ingest_command(Argum::Parser &parser, StoreCliOptions &options) {
                  }));
 }
 
+void add_type_option(Argum::Parser &parser, std::string &type_name) {
+  parser.add(
+      Argum::Option("--type")
+          .argName("TEXT")
+          .help(std::format("Object type: {}", supported_types_message()))
+          .handler(
+              [&type_name](std::string_view value) { type_name = value; }));
+}
+
+void add_generation_option(Argum::Parser &parser, std::string &generation,
+                           std::string_view help) {
+  parser.add(Argum::Option("--generation")
+                 .argName("TEXT")
+                 .help(help)
+                 .handler([&generation](std::string_view value) {
+                   generation = value;
+                 }));
+}
+
+void add_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
+  add_type_option(parser, options.cat_type_name);
+  parser.add(Argum::Positional("path")
+                 .help("Logical path inside the selected type's context tree.")
+                 .occurs(Argum::neverOrOnce)
+                 .handler([&options](std::string_view value) {
+                   options.cat_path = std::filesystem::path(value);
+                 }));
+  add_generation_option(parser, options.cat_generation,
+                        "Generation id. Defaults to the selected type's "
+                        "latest ref.");
+}
+
+void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
+  add_type_option(parser, options.tree_type_name);
+  add_generation_option(parser, options.tree_generation,
+                        "Generation id. Defaults to the selected type's "
+                        "latest ref.");
+}
+
 void add_agents_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
+  options.cat_type_name =
+      std::string(memix::to_string(memix::MemoryObjectType::Agents));
   parser.add(Argum::Positional("agent-path")
                  .help("Logical path inside the agents tree.")
                  .occurs(Argum::neverOrOnce)
                  .handler([&options](std::string_view value) {
-                   options.agent_cat_path = std::filesystem::path(value);
+                   options.cat_path = std::filesystem::path(value);
                  }));
-  parser.add(Argum::Option("--generation")
-                 .argName("TEXT")
-                 .help("Generation id. Defaults to agents/latest.")
-                 .handler([&options](std::string_view value) {
-                   options.agent_cat_generation = value;
-                 }));
+  add_generation_option(parser, options.cat_generation,
+                        "Generation id. Defaults to agents/latest.");
 }
 
 void add_agents_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
-  parser.add(Argum::Option("--generation")
-                 .argName("TEXT")
-                 .help("Generation id. Defaults to agents/latest.")
-                 .handler([&options](std::string_view value) {
-                   options.agent_tree_generation = value;
-                 }));
+  options.tree_type_name =
+      std::string(memix::to_string(memix::MemoryObjectType::Agents));
+  add_generation_option(parser, options.tree_generation,
+                        "Generation id. Defaults to agents/latest.");
 }
 
 void add_agents_commands(Argum::Parser &parser, StoreCliOptions &options) {
@@ -441,7 +508,7 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: list, ingest, or agents.")
+          .help("Subcommand: list, ingest, cat, tree, or agents.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "list") {
@@ -454,13 +521,24 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
               add_ingest_command(parser, options);
               return {};
             }
+            if (value == "cat") {
+              options.command = StoreCommand::Cat;
+              add_cat_command(parser, options);
+              return {};
+            }
+            if (value == "tree") {
+              options.command = StoreCommand::Tree;
+              add_tree_command(parser, options);
+              return {};
+            }
             if (value == "agents") {
               add_agents_commands(parser, options);
               return {};
             }
-            return memix::cli_detail::argum_validation_error(std::format(
-                "unsupported command `{}`; expected list|ingest|agents",
-                value));
+            return memix::cli_detail::argum_validation_error(
+                std::format("unsupported command `{}`; expected "
+                            "list|ingest|cat|tree|agents",
+                            value));
           }));
 }
 
@@ -486,6 +564,22 @@ void print_ingest_help() {
   memix::cli_detail::add_common_options(parser, options.common);
   add_ingest_command(parser, options);
   std::print("{}", parser.formatHelp("memix-store ingest"));
+}
+
+void print_cat_help() {
+  Argum::Parser parser;
+  StoreCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_cat_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-store cat"));
+}
+
+void print_tree_help() {
+  Argum::Parser parser;
+  StoreCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_tree_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-store tree"));
 }
 
 void print_agents_help() {
@@ -520,6 +614,12 @@ void print_selected_help(StoreCommand command) {
   case StoreCommand::Ingest:
     print_ingest_help();
     return;
+  case StoreCommand::Cat:
+    print_cat_help();
+    return;
+  case StoreCommand::Tree:
+    print_tree_help();
+    return;
   case StoreCommand::Agents:
     print_agents_help();
     return;
@@ -543,13 +643,15 @@ dispatch(const StoreCliOptions &options,
     return run_list(options);
   case StoreCommand::Ingest:
     return run_ingest(options, logger);
+  case StoreCommand::Cat:
+  case StoreCommand::AgentsCat:
+    return run_cat(options);
+  case StoreCommand::Tree:
+  case StoreCommand::AgentsTree:
+    return run_tree(options);
   case StoreCommand::Agents:
     return memix::cli_detail::unexpected_error(
         "agents requires a subcommand: cat|tree");
-  case StoreCommand::AgentsCat:
-    return run_agents_cat(options);
-  case StoreCommand::AgentsTree:
-    return run_agents_tree(options);
   case StoreCommand::None:
     return memix::cli_detail::unexpected_error("a subcommand is required");
   }
