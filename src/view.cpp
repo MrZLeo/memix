@@ -30,7 +30,6 @@ constexpr std::string_view kExpressionsDir = "expressions";
 constexpr std::string_view kDerivationsDir = "derivations";
 constexpr std::string_view kManifestFilename = "manifest.json";
 constexpr std::string_view kTreeDir = "tree";
-constexpr std::string_view kDefaultAgentRef = "agents/latest";
 constexpr std::string_view kJsonSuffix = ".json";
 
 template <typename Value>
@@ -51,13 +50,13 @@ using memix::detail::sha256_text;
 using memix::detail::write_text_file;
 
 struct ExpressionSelectorJson {
-  std::string agent_path;
+  std::string source_path;
   std::optional<std::string> scope_label;
   bool required = true;
 };
 
 struct ManifestInputJson {
-  std::string agent_path;
+  std::string source_path;
   std::optional<std::string> scope_label;
   bool required = true;
   bool selected = false;
@@ -74,7 +73,7 @@ struct ManifestJsonRequest {
   std::string_view derivation_id;
   std::string_view expression_id;
   std::reference_wrapper<const memix::ViewExpression> expression;
-  std::string_view agent_generation;
+  std::string_view source_generation;
   std::reference_wrapper<const std::vector<ResolvedInput>> inputs;
 };
 
@@ -101,7 +100,7 @@ template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
                 const ExpressionSelectorJson &selector) {
   builder.start_object();
-  builder.template append_key_value<"agent_path">(selector.agent_path);
+  builder.template append_key_value<"source_path">(selector.source_path);
   builder.append_comma();
   builder.template append_key_value<"scope_label">(selector.scope_label);
   builder.append_comma();
@@ -113,7 +112,7 @@ template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
                 const ManifestInputJson &input) {
   builder.start_object();
-  builder.template append_key_value<"agent_path">(input.agent_path);
+  builder.template append_key_value<"source_path">(input.source_path);
   builder.append_comma();
   builder.template append_key_value<"scope_label">(input.scope_label);
   builder.append_comma();
@@ -195,6 +194,14 @@ fs::path tree_dir_for(const fs::path &derivation_dir) {
   return derivation_dir / std::string(kTreeDir);
 }
 
+std::string default_ref_for(memix::MemoryObjectType type) {
+  return std::format("{}/latest", memix::to_string(type));
+}
+
+std::string context_path_label([[maybe_unused]] memix::MemoryObjectType type) {
+  return "source path";
+}
+
 ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
                                      std::string_view prefix) {
   return memix::detail::unique_temp_dir(
@@ -210,7 +217,7 @@ expression_selector_json(const std::vector<memix::ViewSelector> &selectors) {
   return selectors
        | std::views::transform([](const memix::ViewSelector &selector) {
            return ExpressionSelectorJson{
-               .agent_path = selector.agent_path.generic_string(),
+               .source_path = selector.source_path.generic_string(),
                .scope_label = selector.scope_label,
                .required = selector.required,
            };
@@ -223,7 +230,7 @@ manifest_input_json(const std::vector<ResolvedInput> &inputs) {
   return inputs
        | std::views::transform([](const ResolvedInput &input) {
            return ManifestInputJson{
-               .agent_path = input.selector.agent_path.generic_string(),
+               .source_path = input.selector.source_path.generic_string(),
                .scope_label = input.selector.scope_label,
                .required = input.selector.required,
                .selected = input.selected,
@@ -236,7 +243,7 @@ manifest_input_json(const std::vector<ResolvedInput> &inputs) {
 
 ViewResult<std::string>
 expression_json_for(const memix::ViewExpression &expression,
-                    std::string_view resolved_agent_generation) {
+                    std::string_view resolved_source_generation) {
   simdjson::builder::string_builder builder;
   const std::vector<ExpressionSelectorJson> selectors =
       expression_selector_json(expression.selectors);
@@ -249,11 +256,14 @@ expression_json_for(const memix::ViewExpression &expression,
   builder.append_comma();
   builder.append_key_value<"view_kind">("file_tree");
   builder.append_comma();
+  builder.append_key_value<"source_type">(
+      memix::to_string(expression.source_type));
+  builder.append_comma();
   builder.append_key_value<"name">(expression.name);
   builder.append_comma();
   builder.append_key_value<"operator_version">(expression.operator_version);
   builder.append_comma();
-  builder.append_key_value<"agent_generation">(resolved_agent_generation);
+  builder.append_key_value<"source_generation">(resolved_source_generation);
   builder.append_comma();
   builder.append_key_value<"selectors">(selectors);
   builder.end_object();
@@ -263,7 +273,7 @@ expression_json_for(const memix::ViewExpression &expression,
 ViewResult<std::string>
 derivation_basis_json_for(std::string_view expression_id,
                           const memix::ViewExpression &expression,
-                          std::string_view resolved_agent_generation,
+                          std::string_view resolved_source_generation,
                           const std::vector<ResolvedInput> &inputs) {
   simdjson::builder::string_builder builder;
   const std::vector<ManifestInputJson> manifest_inputs =
@@ -275,11 +285,14 @@ derivation_basis_json_for(std::string_view expression_id,
   builder.append_comma();
   builder.append_key_value<"kind">("file_tree_derivation");
   builder.append_comma();
+  builder.append_key_value<"source_type">(
+      memix::to_string(expression.source_type));
+  builder.append_comma();
   builder.append_key_value<"expression_id">(expression_id);
   builder.append_comma();
   builder.append_key_value<"operator_version">(expression.operator_version);
   builder.append_comma();
-  builder.append_key_value<"agent_generation">(resolved_agent_generation);
+  builder.append_key_value<"source_generation">(resolved_source_generation);
   builder.append_comma();
   builder.append_key_value<"inputs">(manifest_inputs);
   builder.end_object();
@@ -306,7 +319,10 @@ ViewResult<std::string> manifest_json_for(ManifestJsonRequest request) {
   builder.append_key_value<"operator_version">(
       request.expression.get().operator_version);
   builder.append_comma();
-  builder.append_key_value<"agent_generation">(request.agent_generation);
+  builder.append_key_value<"source_type">(
+      memix::to_string(request.expression.get().source_type));
+  builder.append_comma();
+  builder.append_key_value<"source_generation">(request.source_generation);
   builder.append_comma();
   builder.append_key_value<"inputs">(manifest_inputs);
   builder.append_comma();
@@ -316,18 +332,18 @@ ViewResult<std::string> manifest_json_for(ManifestJsonRequest request) {
 }
 
 ViewResult<std::string>
-resolve_agent_generation(const memix::Store &store,
-                         const memix::ViewExpression &expression) {
-  if (expression.agent_ref.has_value()
-      && expression.agent_generation.has_value()) {
-    return view_error("view expression must set only one of agent_ref or "
-                      "agent_generation");
+resolve_source_generation(const memix::Store &store,
+                          const memix::ViewExpression &expression) {
+  if (expression.source_ref.has_value()
+      && expression.source_generation.has_value()) {
+    return view_error("view expression must set only one of source_ref or "
+                      "source_generation");
   }
 
-  if (expression.agent_generation.has_value()) {
+  if (expression.source_generation.has_value()) {
     const std::expected<memix::ContextGeneration, memix::StoreError>
-        generation = store.read_generation(memix::MemoryObjectType::Agents,
-                                           *expression.agent_generation);
+        generation = store.read_generation(expression.source_type,
+                                           *expression.source_generation);
     if (!generation) {
       return std::unexpected(generation.error());
     }
@@ -335,9 +351,9 @@ resolve_agent_generation(const memix::Store &store,
   }
 
   const std::string ref =
-      expression.agent_ref.value_or(std::string(kDefaultAgentRef));
+      expression.source_ref.value_or(default_ref_for(expression.source_type));
   if (ref.empty()) {
-    return view_error("view expression agent_ref must not be empty");
+    return view_error("view expression source_ref must not be empty");
   }
   const std::expected<std::optional<std::string>, memix::StoreError> value =
       store.read_ref(ref);
@@ -345,21 +361,22 @@ resolve_agent_generation(const memix::Store &store,
     return std::unexpected(value.error());
   }
   if (!value->has_value()) {
-    return view_error(std::format("agent ref `{}` does not exist", ref));
+    return view_error(std::format("source ref `{}` does not exist", ref));
   }
   return **value;
 }
 
-bool is_missing_agent_path_error(const memix::StoreError &error) {
-  return error.message.starts_with("agents path does not exist")
-      || error.message.starts_with("agent path does not exist");
+bool is_missing_source_path_error(memix::MemoryObjectType type,
+                                  const memix::StoreError &error) {
+  return error.message.starts_with(
+      std::format("{} path does not exist", memix::to_string(type)));
 }
 
-ResolvedInput selected_input_from_agent_file(const memix::StoreFile &file) {
+ResolvedInput selected_input_from_context_file(const memix::StoreFile &file) {
   return ResolvedInput{
       .selector =
           memix::ViewSelector{
-              .agent_path = file.context_path,
+              .source_path = file.context_path,
               .scope_label = std::nullopt,
               .required = true,
           },
@@ -369,32 +386,33 @@ ResolvedInput selected_input_from_agent_file(const memix::StoreFile &file) {
 }
 
 ViewResult<std::vector<ResolvedInput>>
-resolve_all_agent_inputs(const memix::Store &store,
-                         std::string_view resolved_agent_generation) {
+resolve_all_inputs(const memix::Store &store, memix::MemoryObjectType type,
+                   std::string_view resolved_source_generation) {
   std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
-      store.list_files(memix::MemoryObjectType::Agents,
-                       resolved_agent_generation);
+      store.list_files(type, resolved_source_generation);
   if (!files) {
     return std::unexpected(files.error());
   }
 
   return *files | std::views::transform([](const memix::StoreFile &file) {
-    return selected_input_from_agent_file(file);
+    return selected_input_from_context_file(file);
   }) | std::ranges::to<std::vector>();
 }
 
 ViewResult<std::vector<ResolvedInput>>
 resolve_selected_inputs(const memix::Store &store,
                         const memix::ViewExpression &expression,
-                        std::string_view resolved_agent_generation) {
+                        std::string_view resolved_source_generation) {
   std::vector<ResolvedInput> inputs;
   inputs.reserve(expression.selectors.size());
   for (const memix::ViewSelector &selector : expression.selectors) {
     std::expected<memix::StoredObject, memix::StoreError> blob =
-        store.read_file(memix::MemoryObjectType::Agents, selector.agent_path,
-                        resolved_agent_generation);
+        store.read_file(expression.source_type, selector.source_path,
+                        resolved_source_generation);
     if (!blob) {
-      if (!selector.required && is_missing_agent_path_error(blob.error())) {
+      if (!selector.required
+          && is_missing_source_path_error(expression.source_type,
+                                          blob.error())) {
         inputs.push_back(ResolvedInput{
             .selector = selector,
             .selected = false,
@@ -416,11 +434,12 @@ resolve_selected_inputs(const memix::Store &store,
 ViewResult<std::vector<ResolvedInput>>
 resolve_inputs(const memix::Store &store,
                const memix::ViewExpression &expression,
-               std::string_view resolved_agent_generation) {
+               std::string_view resolved_source_generation) {
   if (expression.selectors.empty()) {
-    return resolve_all_agent_inputs(store, resolved_agent_generation);
+    return resolve_all_inputs(store, expression.source_type,
+                              resolved_source_generation);
   }
-  return resolve_selected_inputs(store, expression, resolved_agent_generation);
+  return resolve_selected_inputs(store, expression, resolved_source_generation);
 }
 
 ViewVoid validate_expression(const memix::ViewExpression &expression) {
@@ -433,14 +452,16 @@ ViewVoid validate_expression(const memix::ViewExpression &expression) {
 
   std::vector<std::string> selector_paths;
   selector_paths.reserve(expression.selectors.size());
+  const std::string path_label = context_path_label(expression.source_type);
   for (const memix::ViewSelector &selector : expression.selectors) {
-    const std::string path = selector.agent_path.generic_string();
+    const std::string path = selector.source_path.generic_string();
     if (path.empty()) {
-      return view_error("view selector agent_path must not be empty");
+      return view_error(
+          std::format("view selector {} must not be empty", path_label));
     }
     if (std::ranges::find(selector_paths, path) != selector_paths.end()) {
-      return view_error(std::format(
-          "view expression selects duplicate agent path `{}`", path));
+      return view_error(std::format("view expression selects duplicate {} `{}`",
+                                    path_label, path));
     }
     selector_paths.push_back(path);
   }
@@ -542,7 +563,7 @@ ViewVoid write_expression_object(const memix::Store &store,
 }
 
 fs::path link_path_for(const fs::path &tree_dir, const ResolvedInput &input) {
-  return tree_dir / input.selector.agent_path;
+  return tree_dir / input.selector.source_path;
 }
 
 ViewResult<fs::path> symlink_target_for(const fs::path &link_path,
@@ -661,12 +682,11 @@ ViewVoid apply_writable_tree_permissions(const fs::path &tree_dir) {
   return {};
 }
 
-memix::ViewArtifact artifact_for(std::string derivation_id,
-                                 std::string expression_id,
-                                 std::string agent_generation,
-                                 const std::vector<ResolvedInput> &inputs,
-                                 const fs::path &derivation_dir,
-                                 bool inserted) {
+memix::ViewArtifact
+artifact_for(std::string derivation_id, std::string expression_id,
+             memix::MemoryObjectType source_type, std::string source_generation,
+             const std::vector<ResolvedInput> &inputs,
+             const fs::path &derivation_dir, bool inserted) {
   std::vector<std::string> input_blob_ids;
   for (const ResolvedInput &input : inputs) {
     if (input.selected && input.blob.has_value()) {
@@ -676,7 +696,8 @@ memix::ViewArtifact artifact_for(std::string derivation_id,
   return memix::ViewArtifact{
       .derivation_id = std::move(derivation_id),
       .expression_id = std::move(expression_id),
-      .agent_generation = std::move(agent_generation),
+      .source_type = source_type,
+      .source_generation = std::move(source_generation),
       .input_blob_ids = std::move(input_blob_ids),
       .manifest_path = derivation_dir / std::string(kManifestFilename),
       .tree_path = tree_dir_for(derivation_dir),
@@ -906,6 +927,53 @@ optional_string_field(simdjson::dom::object fields, std::string_view key) {
   return std::optional<std::string>{std::string(value)};
 }
 
+ViewResult<memix::MemoryObjectType>
+read_manifest_source_type(simdjson::dom::object fields) {
+  std::string_view source_type;
+  const simdjson::error_code error =
+      fields.at_key("source_type").get(source_type);
+  if (error == simdjson::NO_SUCH_FIELD) {
+    return memix::MemoryObjectType::Agents;
+  }
+  if (error != simdjson::SUCCESS) {
+    return view_error(std::format("manifest field `source_type` must be a "
+                                  "string: {}",
+                                  simdjson_error_text(error)));
+  }
+
+  const std::optional<memix::MemoryObjectType> parsed =
+      memix::parse_memory_object_type(source_type);
+  if (!parsed.has_value()) {
+    return view_error(std::format("manifest source_type is unsupported `{}`",
+                                  source_type));
+  }
+  return *parsed;
+}
+
+ViewResult<std::string>
+read_manifest_source_generation(simdjson::dom::object fields,
+                                memix::MemoryObjectType source_type) {
+  std::string_view source_generation;
+  const simdjson::error_code error =
+      fields.at_key("source_generation").get(source_generation);
+  if (error == simdjson::SUCCESS) {
+    const std::string value(source_generation);
+    const ViewVoid valid =
+        validate_sha256_field(value, "manifest field `source_generation`");
+    if (!valid) {
+      return std::unexpected(valid.error());
+    }
+    return value;
+  }
+  if (error != simdjson::NO_SUCH_FIELD
+      || source_type != memix::MemoryObjectType::Agents) {
+    return view_error(std::format("manifest field `source_generation` must be "
+                                  "a string: {}",
+                                  simdjson_error_text(error)));
+  }
+  return require_sha256_string(fields, "agent_generation");
+}
+
 ViewResult<simdjson::dom::object>
 read_manifest_object(const ManifestReadRequest &request,
                      simdjson::dom::parser &parser,
@@ -1076,10 +1144,15 @@ artifact_from_manifest(const ManifestReadRequest &request) {
   if (!expression_id) {
     return std::unexpected(expression_id.error());
   }
-  ViewResult<std::string> agent_generation =
-      require_sha256_string(*fields, "agent_generation");
-  if (!agent_generation) {
-    return std::unexpected(agent_generation.error());
+  ViewResult<memix::MemoryObjectType> source_type =
+      read_manifest_source_type(*fields);
+  if (!source_type) {
+    return std::unexpected(source_type.error());
+  }
+  ViewResult<std::string> source_generation =
+      read_manifest_source_generation(*fields, *source_type);
+  if (!source_generation) {
+    return std::unexpected(source_generation.error());
   }
   ViewResult<std::vector<std::string>> input_blob_ids =
       read_manifest_input_blob_ids(*fields);
@@ -1098,7 +1171,8 @@ artifact_from_manifest(const ManifestReadRequest &request) {
   return std::optional<memix::ViewArtifact>{memix::ViewArtifact{
       .derivation_id = std::move(*derivation_id),
       .expression_id = std::move(*expression_id),
-      .agent_generation = std::move(*agent_generation),
+      .source_type = *source_type,
+      .source_generation = std::move(*source_generation),
       .input_blob_ids = std::move(*input_blob_ids),
       .manifest_path = request.manifest_path,
       .tree_path = tree_dir_for(request.derivation_dir),
@@ -1149,19 +1223,19 @@ ViewService::build_file_tree(const ViewExpression &expression) const {
     return std::unexpected(expression_valid.error());
   }
 
-  ViewResult<std::string> agent_generation =
-      resolve_agent_generation(store_, expression);
-  if (!agent_generation) {
-    return std::unexpected(agent_generation.error());
+  ViewResult<std::string> source_generation =
+      resolve_source_generation(store_, expression);
+  if (!source_generation) {
+    return std::unexpected(source_generation.error());
   }
   ViewResult<std::vector<ResolvedInput>> inputs =
-      resolve_inputs(store_, expression, *agent_generation);
+      resolve_inputs(store_, expression, *source_generation);
   if (!inputs) {
     return std::unexpected(inputs.error());
   }
 
   ViewResult<std::string> expression_json =
-      expression_json_for(expression, *agent_generation);
+      expression_json_for(expression, *source_generation);
   if (!expression_json) {
     return std::unexpected(expression_json.error());
   }
@@ -1176,7 +1250,7 @@ ViewService::build_file_tree(const ViewExpression &expression) const {
   }
 
   ViewResult<std::string> derivation_basis = derivation_basis_json_for(
-      *expression_id, expression, *agent_generation, *inputs);
+      *expression_id, expression, *source_generation, *inputs);
   if (!derivation_basis) {
     return std::unexpected(derivation_basis.error());
   }
@@ -1188,7 +1262,7 @@ ViewService::build_file_tree(const ViewExpression &expression) const {
       .derivation_id = *derivation_id,
       .expression_id = *expression_id,
       .expression = expression,
-      .agent_generation = *agent_generation,
+      .source_generation = *source_generation,
       .inputs = *inputs,
   });
   if (!manifest_json) {
@@ -1216,8 +1290,8 @@ ViewService::build_file_tree(const ViewExpression &expression) const {
       return std::unexpected(verified.error());
     }
     return artifact_for(std::move(*derivation_id), std::move(*expression_id),
-                        std::move(*agent_generation), *inputs, derivation_dir,
-                        false);
+                        expression.source_type, std::move(*source_generation),
+                        *inputs, derivation_dir, false);
   }
 
   const ViewResult<bool> inserted = write_derivation_atomically({
@@ -1240,8 +1314,8 @@ ViewService::build_file_tree(const ViewExpression &expression) const {
     return std::unexpected(verified.error());
   }
   return artifact_for(std::move(*derivation_id), std::move(*expression_id),
-                      std::move(*agent_generation), *inputs, derivation_dir,
-                      *inserted);
+                      expression.source_type, std::move(*source_generation),
+                      *inputs, derivation_dir, *inserted);
 }
 
 std::expected<ViewArtifact, StoreError>

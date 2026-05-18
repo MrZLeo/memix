@@ -39,7 +39,8 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
 @interface MMXViewArtifact : NSObject
 @property(nonatomic, copy, readonly) NSString *derivationID;
 @property(nonatomic, copy, readonly) NSString *expressionID;
-@property(nonatomic, copy, readonly) NSString *agentGeneration;
+@property(nonatomic, readonly) MMXObjectType sourceType;
+@property(nonatomic, copy, readonly) NSString *sourceGeneration;
 @property(nonatomic, copy, readonly) NSArray<NSString *> *inputBlobIDs;
 @property(nonatomic, copy, readonly) NSString *manifestPath;
 @property(nonatomic, copy, readonly) NSString *treePath;
@@ -98,15 +99,16 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
     (NSError **)error NS_SWIFT_NAME(listFileTreeViews());
 
 - (nullable MMXViewArtifact *)buildFileTreeWithName:(NSString *)name
-                                 requiredAgentPaths:
-                                     (NSArray<NSString *> *)requiredAgentPaths
-                                 optionalAgentPaths:
-                                     (NSArray<NSString *> *)optionalAgentPaths
+                                         sourceType:(MMXObjectType)sourceType
+                                requiredSourcePaths:
+                                    (NSArray<NSString *> *)requiredSourcePaths
+                                optionalSourcePaths:
+                                    (NSArray<NSString *> *)optionalSourcePaths
                                          generation:
                                              (nullable NSString *)generation
                                                 ref:(nullable NSString *)ref
                                               error:(NSError **)error
-    NS_SWIFT_NAME(buildFileTree(name:requiredAgentPaths:optionalAgentPaths:generation:ref:));
+    NS_SWIFT_NAME(buildFileTree(name:sourceType:requiredSourcePaths:optionalSourcePaths:generation:ref:));
 
 @end
 

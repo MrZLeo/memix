@@ -13,15 +13,16 @@
 namespace memix {
 
 struct ViewSelector {
-  std::filesystem::path agent_path;
+  std::filesystem::path source_path;
   std::optional<std::string> scope_label;
   bool required = true;
 };
 
 struct ViewExpression {
   std::string name = "file-tree";
-  std::optional<std::string> agent_ref;
-  std::optional<std::string> agent_generation;
+  MemoryObjectType source_type = MemoryObjectType::Agents;
+  std::optional<std::string> source_ref;
+  std::optional<std::string> source_generation;
   std::vector<ViewSelector> selectors;
   std::string operator_version = "file-tree-v1";
 };
@@ -29,7 +30,8 @@ struct ViewExpression {
 struct ViewArtifact {
   std::string derivation_id;
   std::string expression_id;
-  std::string agent_generation;
+  MemoryObjectType source_type = MemoryObjectType::Agents;
+  std::string source_generation;
   std::vector<std::string> input_blob_ids;
   std::filesystem::path manifest_path;
   std::filesystem::path tree_path;

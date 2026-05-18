@@ -27,6 +27,7 @@ namespace {
 
 constexpr int kDerivationColumnWidth = 14;
 constexpr int kExpressionColumnWidth = 14;
+constexpr int kTypeColumnWidth = 11;
 constexpr int kGenerationColumnWidth = 14;
 constexpr int kInputsColumnWidth = 6;
 constexpr int kTreePathColumnWidth = 24;
@@ -49,6 +50,7 @@ struct ViewTreeEntry {
 struct ViewCliOptions {
   memix::cli_detail::CommonOptions common;
   ViewCommand command = ViewCommand::None;
+  std::string type_name;
   std::vector<std::filesystem::path> include_paths;
   std::vector<std::filesystem::path> include_optional_paths;
   std::string generation;
@@ -61,17 +63,43 @@ struct ViewCliOptions {
   bool list_json = false;
 };
 
+std::string supported_types_message() {
+  return memix::memory_object_types()
+       | std::views::transform([](memix::MemoryObjectType type) {
+           return memix::to_string(type);
+         })
+       | std::views::join_with('|')
+       | std::ranges::to<std::string>();
+}
+
+memix::cli_detail::Result<memix::MemoryObjectType>
+optional_source_type(std::string_view value) {
+  if (value.empty()) {
+    return memix::MemoryObjectType::Agents;
+  }
+  const std::optional<memix::MemoryObjectType> type =
+      memix::parse_memory_object_type(value);
+  if (!type.has_value()) {
+    return memix::cli_detail::unexpected_error(
+        std::format("unsupported object type `{}`; expected {}", value,
+                    supported_types_message()));
+  }
+  return *type;
+}
+
 void print_artifact_table(const std::vector<memix::ViewArtifact> &artifacts) {
-  std::println("{:<{}}{:<{}}{:<{}}{:>{}}", "DERIVATION", kDerivationColumnWidth,
-               "EXPRESSION", kExpressionColumnWidth, "GENERATION",
-               kGenerationColumnWidth, "INPUTS", kInputsColumnWidth);
+  std::println("{:<{}}{:<{}}{:<{}}{:<{}}{:>{}}", "DERIVATION",
+               kDerivationColumnWidth, "EXPRESSION", kExpressionColumnWidth,
+               "TYPE", kTypeColumnWidth, "GENERATION", kGenerationColumnWidth,
+               "INPUTS", kInputsColumnWidth);
   for (const memix::ViewArtifact &artifact : artifacts) {
-    std::println("{:<{}}{:<{}}{:<{}}{:>{}}",
+    std::println("{:<{}}{:<{}}{:<{}}{:<{}}{:>{}}",
                  memix::cli_detail::short_id(artifact.derivation_id),
                  kDerivationColumnWidth,
                  memix::cli_detail::short_id(artifact.expression_id),
-                 kExpressionColumnWidth,
-                 memix::cli_detail::short_id(artifact.agent_generation),
+                 kExpressionColumnWidth, memix::to_string(artifact.source_type),
+                 kTypeColumnWidth,
+                 memix::cli_detail::short_id(artifact.source_generation),
                  kGenerationColumnWidth, artifact.input_blob_ids.size(),
                  kInputsColumnWidth);
   }
@@ -80,7 +108,8 @@ void print_artifact_table(const std::vector<memix::ViewArtifact> &artifacts) {
 void print_artifact_summary(const memix::ViewArtifact &artifact) {
   std::println("derivation_id: {}", artifact.derivation_id);
   std::println("expression_id: {}", artifact.expression_id);
-  std::println("agent_generation: {}", artifact.agent_generation);
+  std::println("source_type: {}", memix::to_string(artifact.source_type));
+  std::println("source_generation: {}", artifact.source_generation);
   std::println("input_count: {}", artifact.input_blob_ids.size());
   std::println("manifest: {}", artifact.manifest_path.string());
   std::println("tree: {}", artifact.tree_path.string());
@@ -205,11 +234,17 @@ build_expression(const ViewCliOptions &options) {
   }
 
   memix::ViewExpression expression;
+  const memix::cli_detail::Result<memix::MemoryObjectType> source_type =
+      optional_source_type(options.type_name);
+  if (!source_type) {
+    return std::unexpected(source_type.error());
+  }
+  expression.source_type = *source_type;
   expression.name = options.name;
   if (!options.generation.empty()) {
-    expression.agent_generation = options.generation;
+    expression.source_generation = options.generation;
   } else if (!options.ref.empty()) {
-    expression.agent_ref = options.ref;
+    expression.source_ref = options.ref;
   }
 
   expression.selectors.reserve(options.include_paths.size()
@@ -218,7 +253,7 @@ build_expression(const ViewCliOptions &options) {
       options.include_paths
       | std::views::transform([](const std::filesystem::path &path) {
           return memix::ViewSelector{
-              .agent_path = path,
+              .source_path = path,
               .scope_label = std::nullopt,
               .required = true,
           };
@@ -230,7 +265,7 @@ build_expression(const ViewCliOptions &options) {
       options.include_optional_paths
       | std::views::transform([](const std::filesystem::path &path) {
           return memix::ViewSelector{
-              .agent_path = path,
+              .source_path = path,
               .scope_label = std::nullopt,
               .required = false,
           };
@@ -341,28 +376,36 @@ memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
 }
 
 void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
+  parser.add(Argum::Option("--type")
+                 .argName("TEXT")
+                 .help(std::format("Source context tree type: {}. Defaults "
+                                   "to agents.",
+                                   supported_types_message()))
+                 .handler([&options](std::string_view value) {
+                   options.type_name = value;
+                 }));
   parser.add(Argum::Option("--include")
                  .argName("TEXT")
-                 .help("Required logical agent path(s) to include. Defaults "
-                       "to all paths in the agent generation.")
+                 .help("Required logical source path(s) to include. Defaults "
+                       "to all paths in the source generation.")
                  .handler([&options](std::string_view value) {
                    options.include_paths.emplace_back(value);
                  }));
   parser.add(Argum::Option("--include-optional")
                  .argName("TEXT")
-                 .help("Optional logical agent path(s) to include.")
+                 .help("Optional logical source path(s) to include.")
                  .handler([&options](std::string_view value) {
                    options.include_optional_paths.emplace_back(value);
                  }));
   parser.add(Argum::Option("--generation")
                  .argName("TEXT")
-                 .help("Agent generation id. Mutually exclusive with --ref.")
+                 .help("Source generation id. Mutually exclusive with --ref.")
                  .handler([&options](std::string_view value) {
                    options.generation = value;
                  }));
   parser.add(Argum::Option("--ref")
                  .argName("TEXT")
-                 .help("Agent ref to resolve. Defaults to agents/latest.")
+                 .help("Source ref to resolve. Defaults to TYPE/latest.")
                  .handler([&options](std::string_view value) {
                    options.ref = value;
                  }));

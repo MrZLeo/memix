@@ -57,7 +57,7 @@ void write_file(const fs::path &path, std::string_view contents) {
 
 std::string fake_file_tree_manifest(std::string_view derivation_id,
                                     std::string_view expression_id,
-                                    std::string_view agent_generation,
+                                    std::string_view source_generation,
                                     std::string_view blob_id,
                                     std::string_view tree = "tree") {
   return std::format(
@@ -65,10 +65,26 @@ std::string fake_file_tree_manifest(std::string_view derivation_id,
       "\"file_tree_view\",\"derivation_id\":\"{}\","
       "\"expression_id\":\"{}\",\"name\":\"fake\","
       "\"operator_version\":\"file-tree-v1\","
-      "\"agent_generation\":\"{}\",\"inputs\":[{{\"agent_path\":"
+      "\"source_type\":\"agents\",\"source_generation\":\"{}\","
+      "\"inputs\":[{{\"source_path\":"
       "\"rules.md\",\"scope_label\":null,\"required\":true,"
       "\"selected\":true,\"blob_id\":\"{}\"}}],\"tree\":\"{}\"}}",
-      derivation_id, expression_id, agent_generation, blob_id, tree);
+      derivation_id, expression_id, source_generation, blob_id, tree);
+}
+
+std::string fake_legacy_file_tree_manifest(std::string_view derivation_id,
+                                           std::string_view expression_id,
+                                           std::string_view agent_generation,
+                                           std::string_view blob_id) {
+  return std::format(
+      "{{\"schema_version\":1,\"object_version\":1,\"kind\":"
+      "\"file_tree_view\",\"derivation_id\":\"{}\","
+      "\"expression_id\":\"{}\",\"name\":\"fake\","
+      "\"operator_version\":\"file-tree-v1\","
+      "\"agent_generation\":\"{}\",\"inputs\":[{{\"agent_path\":"
+      "\"rules.md\",\"scope_label\":null,\"required\":true,"
+      "\"selected\":true,\"blob_id\":\"{}\"}}],\"tree\":\"tree\"}}",
+      derivation_id, expression_id, agent_generation, blob_id);
 }
 
 std::string read_file(const fs::path &path) {
@@ -80,13 +96,29 @@ std::string read_file(const fs::path &path) {
 
 memix::FileIngestResult ingest_agent(const memix::Store &store,
                                      const fs::path &source,
-                                     const fs::path &agent_path,
+                                     const fs::path &source_path,
                                      std::string_view message) {
   const std::expected<memix::FileIngestResult, memix::StoreError> result =
       store.ingest_file({
           .type = memix::MemoryObjectType::Agents,
           .source_path = source,
-          .context_path = agent_path,
+          .context_path = source_path,
+          .message = message,
+      });
+  REQUIRE(result.has_value());
+  return *result;
+}
+
+memix::FileIngestResult ingest_context_file(const memix::Store &store,
+                                            memix::MemoryObjectType type,
+                                            const fs::path &source,
+                                            const fs::path &context_path,
+                                            std::string_view message) {
+  const std::expected<memix::FileIngestResult, memix::StoreError> result =
+      store.ingest_file({
+          .type = type,
+          .source_path = source,
+          .context_path = context_path,
           .message = message,
       });
   REQUIRE(result.has_value());
@@ -104,11 +136,11 @@ void write_fake_file_tree(const fs::path &store_root,
       store_root / "views" / "derivations" / std::string(derivation_id);
   fs::create_directories(derivation_dir / "tree");
   const std::string expression_id(64, 'b');
-  const std::string agent_generation(64, 'c');
+  const std::string source_generation(64, 'c');
   const std::string blob_id(64, 'd');
   write_file(derivation_dir / "manifest.json",
              fake_file_tree_manifest(derivation_id, expression_id,
-                                     agent_generation, blob_id));
+                                     source_generation, blob_id));
 }
 
 void write_fake_context_pack(const fs::path &store_root,
@@ -158,11 +190,11 @@ TEST_CASE("file tree builds materialize logical paths as symlinks", "[view]") {
   expression.name = "ordered tree";
   expression.selectors = {
       memix::ViewSelector{
-          .agent_path = "system/AGENTS.md",
+          .source_path = "system/AGENTS.md",
           .scope_label = std::string("system"),
       },
       memix::ViewSelector{
-          .agent_path = "repo/AGENTS.md",
+          .source_path = "repo/AGENTS.md",
           .scope_label = std::string("repo"),
       },
   };
@@ -269,7 +301,55 @@ TEST_CASE("empty selector list maps the whole latest agents tree", "[view]") {
   REQUIRE(read_file(artifact->tree_path / "b" / "second.md") == "second\n");
 }
 
-TEST_CASE("file trees are pinned to resolved agent generations", "[view]") {
+TEST_CASE("file tree builds can use documents and chat source trees",
+          "[view]") {
+  TemporaryDirectory directory("typed-source-tree");
+  const fs::path design_source = directory.path() / "design.md";
+  const fs::path notes_source = directory.path() / "notes.md";
+  const fs::path chat_source = directory.path() / "chat.md";
+  write_file(design_source, "design doc\n");
+  write_file(notes_source, "release notes\n");
+  write_file(chat_source, "chat context\n");
+
+  const memix::Store store(directory.path() / "store");
+  ingest_context_file(store, memix::MemoryObjectType::Documents, design_source,
+                      "docs/design.md", "design");
+  ingest_context_file(store, memix::MemoryObjectType::Documents, notes_source,
+                      "docs/notes.md", "notes");
+  ingest_context_file(store, memix::MemoryObjectType::Chat, chat_source,
+                      "sessions/chat.md", "chat");
+
+  const memix::ViewService views(store);
+  memix::ViewExpression documents_expression;
+  documents_expression.source_type = memix::MemoryObjectType::Documents;
+  const auto documents = views.build_file_tree(documents_expression);
+  REQUIRE(documents.has_value());
+  REQUIRE(documents->source_type == memix::MemoryObjectType::Documents);
+  REQUIRE(documents->input_blob_ids.size() == 2);
+  REQUIRE(read_file(documents->tree_path / "docs" / "design.md")
+          == "design doc\n");
+  REQUIRE(read_file(documents->tree_path / "docs" / "notes.md")
+          == "release notes\n");
+  const std::string documents_manifest = read_file(documents->manifest_path);
+  REQUIRE(documents_manifest.find("\"source_type\":\"documents\"")
+          != std::string::npos);
+
+  memix::ViewExpression chat_expression;
+  chat_expression.source_type = memix::MemoryObjectType::Chat;
+  chat_expression.selectors = {
+      memix::ViewSelector{.source_path = "sessions/chat.md"},
+  };
+  const auto chat = views.build_file_tree(chat_expression);
+  REQUIRE(chat.has_value());
+  REQUIRE(chat->source_type == memix::MemoryObjectType::Chat);
+  REQUIRE(chat->input_blob_ids.size() == 1);
+  REQUIRE(read_file(chat->tree_path / "sessions" / "chat.md")
+          == "chat context\n");
+  const std::string chat_manifest = read_file(chat->manifest_path);
+  REQUIRE(chat_manifest.find("\"source_type\":\"chat\"") != std::string::npos);
+}
+
+TEST_CASE("file trees are pinned to resolved source generations", "[view]") {
   TemporaryDirectory directory("generation-pinning");
   const fs::path legacy_source = directory.path() / "legacy.md";
   const fs::path modern_source = directory.path() / "modern.md";
@@ -282,7 +362,7 @@ TEST_CASE("file trees are pinned to resolved agent generations", "[view]") {
   const memix::ViewService views(store);
   memix::ViewExpression expression;
   expression.selectors = {
-      memix::ViewSelector{.agent_path = "lang/python/AGENTS.md"},
+      memix::ViewSelector{.source_path = "lang/python/AGENTS.md"},
   };
 
   const auto legacy = views.build_file_tree(expression);
@@ -291,7 +371,7 @@ TEST_CASE("file trees are pinned to resolved agent generations", "[view]") {
   const auto modern = views.build_file_tree(expression);
   REQUIRE(modern.has_value());
   REQUIRE(modern->derivation_id != legacy->derivation_id);
-  REQUIRE(modern->agent_generation != legacy->agent_generation);
+  REQUIRE(modern->source_generation != legacy->source_generation);
 
   const fs::path logical_path = "lang/python/AGENTS.md";
   REQUIRE(read_file(legacy->tree_path / logical_path) == "pip workflow\n");
@@ -309,9 +389,9 @@ TEST_CASE("optional selectors are skipped and required misses fail", "[view]") {
   const memix::ViewService views(store);
   memix::ViewExpression expression;
   expression.selectors = {
-      memix::ViewSelector{.agent_path = "present.md"},
+      memix::ViewSelector{.source_path = "present.md"},
       memix::ViewSelector{
-          .agent_path = "missing.md",
+          .source_path = "missing.md",
           .required = false,
       },
   };
@@ -323,12 +403,12 @@ TEST_CASE("optional selectors are skipped and required misses fail", "[view]") {
       fs::is_symlink(fs::symlink_status(artifact->tree_path / "present.md")));
   REQUIRE_FALSE(fs::exists(artifact->tree_path / "missing.md"));
   const std::string manifest = read_file(artifact->manifest_path);
-  REQUIRE(manifest.find("\"agent_path\":\"missing.md\"") != std::string::npos);
+  REQUIRE(manifest.find("\"source_path\":\"missing.md\"") != std::string::npos);
   REQUIRE(manifest.find("\"selected\":false") != std::string::npos);
 
   memix::ViewExpression required_missing;
   required_missing.selectors = {
-      memix::ViewSelector{.agent_path = "missing.md"},
+      memix::ViewSelector{.source_path = "missing.md"},
   };
   REQUIRE_FALSE(views.build_file_tree(required_missing).has_value());
 }
@@ -338,13 +418,13 @@ TEST_CASE("file tree builds reject duplicate selectors", "[view]") {
   const memix::ViewService views(memix::Store(directory.path() / "store"));
   memix::ViewExpression expression;
   expression.selectors = {
-      memix::ViewSelector{.agent_path = "rules.md"},
-      memix::ViewSelector{.agent_path = "rules.md"},
+      memix::ViewSelector{.source_path = "rules.md"},
+      memix::ViewSelector{.source_path = "rules.md"},
   };
 
   const auto artifact = views.build_file_tree(expression);
   REQUIRE_FALSE(artifact.has_value());
-  REQUIRE(artifact.error().message.find("duplicate agent path")
+  REQUIRE(artifact.error().message.find("duplicate source path")
           != std::string::npos);
 }
 
@@ -359,7 +439,7 @@ TEST_CASE("operator versions participate in file tree identity", "[view]") {
   const memix::ViewService views(store);
   memix::ViewExpression expression;
   expression.selectors = {
-      memix::ViewSelector{.agent_path = "rules.md"},
+      memix::ViewSelector{.source_path = "rules.md"},
   };
 
   const auto first = views.build_file_tree(expression);
@@ -382,7 +462,7 @@ TEST_CASE("file tree listing returns only file tree artifacts", "[view]") {
   const memix::ViewService views(store);
   memix::ViewExpression expression;
   expression.selectors = {
-      memix::ViewSelector{.agent_path = "rules.md"},
+      memix::ViewSelector{.source_path = "rules.md"},
   };
   const auto artifact = views.build_file_tree(expression);
   REQUIRE(artifact.has_value());
@@ -397,12 +477,34 @@ TEST_CASE("file tree listing returns only file tree artifacts", "[view]") {
   REQUIRE((*artifacts)[0].inserted == false);
 }
 
+TEST_CASE("file tree listing accepts legacy agent manifests", "[view]") {
+  TemporaryDirectory directory("legacy-manifest");
+  const fs::path store_root = directory.path() / "store";
+  const std::string derivation_id(64, 'a');
+  const fs::path derivation_dir =
+      store_root / "views" / "derivations" / derivation_id;
+  fs::create_directories(derivation_dir / "tree");
+  const std::string expression_id(64, 'b');
+  const std::string agent_generation(64, 'c');
+  const std::string blob_id(64, 'd');
+  write_file(derivation_dir / "manifest.json",
+             fake_legacy_file_tree_manifest(
+                 derivation_id, expression_id, agent_generation, blob_id));
+
+  const auto artifacts =
+      memix::ViewService{memix::Store(store_root)}.list_file_trees();
+  REQUIRE(artifacts.has_value());
+  REQUIRE(artifacts->size() == 1);
+  REQUIRE((*artifacts)[0].source_type == memix::MemoryObjectType::Agents);
+  REQUIRE((*artifacts)[0].source_generation == agent_generation);
+}
+
 TEST_CASE("file tree listing validates manifest identity fields", "[view]") {
   TemporaryDirectory directory("manifest-validation");
   const fs::path store_root = directory.path() / "store";
   const std::string derivation_id(64, 'a');
   const std::string expression_id(64, 'b');
-  const std::string agent_generation(64, 'c');
+  const std::string source_generation(64, 'c');
   const std::string blob_id(64, 'd');
   write_fake_file_tree(store_root, derivation_id);
 
@@ -411,7 +513,7 @@ TEST_CASE("file tree listing validates manifest identity fields", "[view]") {
   SECTION("expression id") {
     write_file(manifest_path,
                fake_file_tree_manifest(derivation_id, "not-a-sha256",
-                                       agent_generation, blob_id));
+                                       source_generation, blob_id));
     const auto artifacts =
         memix::ViewService{memix::Store(store_root)}.list_file_trees();
     REQUIRE_FALSE(artifacts.has_value());
@@ -421,16 +523,16 @@ TEST_CASE("file tree listing validates manifest identity fields", "[view]") {
   SECTION("input blob id") {
     write_file(manifest_path,
                fake_file_tree_manifest(derivation_id, expression_id,
-                                       agent_generation, "not-a-sha256"));
+                                       source_generation, "not-a-sha256"));
     const auto artifacts =
         memix::ViewService{memix::Store(store_root)}.list_file_trees();
     REQUIRE_FALSE(artifacts.has_value());
     REQUIRE(artifacts.error().message.find("blob_id") != std::string::npos);
   }
   SECTION("tree path") {
-    write_file(manifest_path,
-               fake_file_tree_manifest(derivation_id, expression_id,
-                                       agent_generation, blob_id, "elsewhere"));
+    write_file(manifest_path, fake_file_tree_manifest(
+                                  derivation_id, expression_id,
+                                  source_generation, blob_id, "elsewhere"));
     const auto artifacts =
         memix::ViewService{memix::Store(store_root)}.list_file_trees();
     REQUIRE_FALSE(artifacts.has_value());
@@ -449,7 +551,7 @@ TEST_CASE("file tree show accepts unique derivation prefixes", "[view]") {
   const memix::ViewService views(store);
   memix::ViewExpression expression;
   expression.selectors = {
-      memix::ViewSelector{.agent_path = "rules.md"},
+      memix::ViewSelector{.source_path = "rules.md"},
   };
   const auto artifact = views.build_file_tree(expression);
   REQUIRE(artifact.has_value());

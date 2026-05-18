@@ -190,7 +190,8 @@ bool MMXPathIsSafeRelative(const std::filesystem::path &path) {
 @interface MMXViewArtifact ()
 @property(nonatomic, copy, readwrite) NSString *derivationID;
 @property(nonatomic, copy, readwrite) NSString *expressionID;
-@property(nonatomic, copy, readwrite) NSString *agentGeneration;
+@property(nonatomic, readwrite) MMXObjectType sourceType;
+@property(nonatomic, copy, readwrite) NSString *sourceGeneration;
 @property(nonatomic, copy, readwrite) NSArray<NSString *> *inputBlobIDs;
 @property(nonatomic, copy, readwrite) NSString *manifestPath;
 @property(nonatomic, copy, readwrite) NSString *treePath;
@@ -231,7 +232,8 @@ MMXViewArtifact *MMXWrapViewArtifact(const memix::ViewArtifact &artifact) {
   MMXViewArtifact *wrapped = [[MMXViewArtifact alloc] init];
   wrapped.derivationID = MMXString(artifact.derivation_id);
   wrapped.expressionID = MMXString(artifact.expression_id);
-  wrapped.agentGeneration = MMXString(artifact.agent_generation);
+  wrapped.sourceType = MMXObjectTypeFromMemory(artifact.source_type);
+  wrapped.sourceGeneration = MMXString(artifact.source_generation);
   wrapped.inputBlobIDs = MMXStringArray(artifact.input_blob_ids);
   wrapped.manifestPath = MMXPathString(artifact.manifest_path);
   wrapped.treePath = MMXPathString(artifact.tree_path);
@@ -275,13 +277,13 @@ MMXCollectViewFiles(const memix::Store &store,
 
     const std::string blob_id = target.parent_path().filename().string();
     const std::expected<memix::StoredObject, memix::StoreError> blob =
-        store.read_blob(memix::MemoryObjectType::Agents, blob_id);
+        store.read_blob(artifact.source_type, blob_id);
     if (!blob) {
       return std::unexpected(blob.error());
     }
 
     files.push_back(memix::StoreFile{
-        .type = memix::MemoryObjectType::Agents,
+        .type = artifact.source_type,
         .context_path = entry.path().lexically_relative(artifact.tree_path),
         .blob = *blob,
     });
@@ -519,14 +521,21 @@ MMXCollectViewFiles(const memix::Store &store,
 }
 
 - (MMXViewArtifact *)buildFileTreeWithName:(NSString *)name
-                        requiredAgentPaths:
-                            (NSArray<NSString *> *)requiredAgentPaths
-                        optionalAgentPaths:
-                            (NSArray<NSString *> *)optionalAgentPaths
+                                sourceType:(MMXObjectType)sourceType
+                       requiredSourcePaths:
+                           (NSArray<NSString *> *)requiredSourcePaths
+                       optionalSourcePaths:
+                           (NSArray<NSString *> *)optionalSourcePaths
                                 generation:(NSString *)generation
                                        ref:(NSString *)ref
                                      error:(NSError **)error {
+  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
+  if (!MMXRequireType(sourceType, &memix_type, error)) {
+    return nil;
+  }
+
   memix::ViewExpression expression;
+  expression.source_type = memix_type;
   expression.name = MMXStdString(name.length == 0 ? @"file-tree" : name);
 
   if (generation.length > 0 && ref.length > 0) {
@@ -534,22 +543,23 @@ MMXCollectViewFiles(const memix::Store &store,
     return nil;
   }
   if (generation.length > 0) {
-    expression.agent_generation = MMXStdString(generation);
+    expression.source_generation = MMXStdString(generation);
   } else if (ref.length > 0) {
-    expression.agent_ref = MMXStdString(ref);
+    expression.source_ref = MMXStdString(ref);
   }
 
-  expression.selectors.reserve(requiredAgentPaths.count + optionalAgentPaths.count);
-  for (NSString *path in requiredAgentPaths) {
+  expression.selectors.reserve(requiredSourcePaths.count
+                               + optionalSourcePaths.count);
+  for (NSString *path in requiredSourcePaths) {
     expression.selectors.push_back(memix::ViewSelector{
-        .agent_path = MMXPath(path),
+        .source_path = MMXPath(path),
         .scope_label = std::nullopt,
         .required = true,
     });
   }
-  for (NSString *path in optionalAgentPaths) {
+  for (NSString *path in optionalSourcePaths) {
     expression.selectors.push_back(memix::ViewSelector{
-        .agent_path = MMXPath(path),
+        .source_path = MMXPath(path),
         .scope_label = std::nullopt,
         .required = false,
     });

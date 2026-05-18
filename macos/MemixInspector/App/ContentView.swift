@@ -43,7 +43,7 @@ struct ContentView: View {
                     Image(systemName: "shippingbox")
                 }
                 .help("Build file-tree view")
-                .disabled(model.selectedType != .agents || model.currentTreeFiles.isEmpty)
+                .disabled(model.currentTreeFiles.isEmpty)
 
                 if model.isInsideView {
                     Button {
@@ -116,7 +116,7 @@ struct ContentView: View {
 
                 if let artifact = model.activeViewArtifact {
                     Label(
-                        "View \(model.shortID(artifact.derivationID)) locked \(model.shortID(artifact.agentGeneration))",
+                        "View \(model.shortID(artifact.derivationID)) locked \(model.shortID(artifact.sourceGeneration))",
                         systemImage: "lock"
                     )
                     .font(.caption)
@@ -189,7 +189,7 @@ private struct ActiveViewRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Label(model.shortID(artifact.derivationID), systemImage: "lock")
-            Text("generation \(model.shortID(artifact.agentGeneration))")
+            Text("\(artifact.sourceType.title) \(model.shortID(artifact.sourceGeneration))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -464,7 +464,8 @@ private struct ViewArtifactList: View {
                         .font(.system(.body, design: .monospaced))
                     HStack {
                         Text("\(artifact.inputBlobIDs.count) inputs")
-                        Text(model.shortID(artifact.agentGeneration))
+                        Text(artifact.sourceType.title)
+                        Text(model.shortID(artifact.sourceGeneration))
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -522,7 +523,8 @@ private struct FileDetail: View {
         var rows: [(String, String)] = []
         if let artifact = model.activeViewArtifact {
             rows.append(("View", artifact.derivationID))
-            rows.append(("Locked generation", artifact.agentGeneration))
+            rows.append(("Source type", artifact.sourceType.title))
+            rows.append(("Locked generation", artifact.sourceGeneration))
         }
         rows.append(contentsOf: [
             ("Blob", file.blob.objectID),
@@ -584,7 +586,8 @@ private struct ViewDetail: View {
                 Divider()
                 MetadataGrid(rows: [
                     ("Expression", artifact.expressionID),
-                    ("Agent generation", artifact.agentGeneration),
+                    ("Source type", artifact.sourceType.title),
+                    ("Source generation", artifact.sourceGeneration),
                     ("Inputs", "\(artifact.inputBlobIDs.count)"),
                     ("Manifest", artifact.manifestPath),
                     ("Tree", artifact.treePath),

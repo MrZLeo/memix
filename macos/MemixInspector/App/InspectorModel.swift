@@ -287,18 +287,15 @@ final class InspectorModel: ObservableObject {
         guard let store else {
             return
         }
-        guard selectedType == .agents else {
-            errorMessage = "File-tree views are built from the agents tree."
-            return
-        }
 
         do {
             let paths = currentTreeFiles.map(\.contextPath)
             let artifact = try store.buildFileTree(
                 name: "inspector-file-tree",
-                requiredAgentPaths: paths,
-                optionalAgentPaths: [],
-                generation: activeViewArtifact?.agentGeneration,
+                sourceType: selectedType,
+                requiredSourcePaths: paths,
+                optionalSourcePaths: [],
+                generation: activeViewArtifact?.sourceGeneration,
                 ref: nil
             )
             refresh()
@@ -315,8 +312,8 @@ final class InspectorModel: ObservableObject {
             return
         }
 
-        if selectedType != .agents {
-            selectedType = .agents
+        if selectedType != artifact.sourceType {
+            selectedType = artifact.sourceType
         }
         activeViewArtifact = artifact
         selectedFileID = nil
@@ -387,7 +384,7 @@ final class InspectorModel: ObservableObject {
 
     private func updateStatus() {
         if let activeViewArtifact {
-            status = "View \(shortID(activeViewArtifact.derivationID)) locked to \(shortID(activeViewArtifact.agentGeneration)): \(activeViewFiles.count) files, \(objects.count) blobs"
+            status = "View \(shortID(activeViewArtifact.derivationID)) locked to \(shortID(activeViewArtifact.sourceGeneration)): \(activeViewFiles.count) files, \(objects.count) blobs"
         } else {
             status = "\(objects.count) blobs, \(files.count) tree files, \(viewArtifacts.count) views"
         }
