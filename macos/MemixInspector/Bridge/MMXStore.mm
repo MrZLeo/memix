@@ -1,5 +1,6 @@
 #import "MMXStore.h"
 
+#include "memix/error.hpp"
 #include "memix/store.hpp"
 #include "memix/view.hpp"
 
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -30,6 +32,36 @@ NSError *MMXMakeError(const memix::StoreError &error) {
   return MMXMakeError([NSString stringWithUTF8String:error.message.c_str()]);
 }
 
+NSError *MMXMakeError(const memix::ViewError &error) {
+  return MMXMakeError([NSString stringWithUTF8String:error.message.c_str()]);
+}
+
+memix::FsError
+MMXMakeFilesystemError(std::string_view operation, const std::error_code &error,
+                       std::vector<std::filesystem::path> paths) {
+  std::string message{operation};
+  std::string_view separator = " `";
+  for (const std::filesystem::path &path : paths) {
+    message += std::format("{}{}`", separator, path.string());
+    separator = " to `";
+  }
+  message = std::format("{}: {}", message, error.message());
+  return memix::FsError{
+      .message = std::move(message),
+      .code = error,
+      .operation = std::string(operation),
+      .paths = std::move(paths),
+  };
+}
+
+memix::ViewError MMXMakeViewError(memix::FsError error) {
+  return memix::ViewError{
+      .message = error.message,
+      .filesystem_error = std::move(error),
+      .kind = memix::ErrorKind::Filesystem,
+  };
+}
+
 bool MMXSetError(NSError **out_error, NSError *error) {
   if (out_error != nullptr) {
     *out_error = error;
@@ -41,14 +73,20 @@ bool MMXSetStoreError(NSError **out_error, const memix::StoreError &error) {
   return MMXSetError(out_error, MMXMakeError(error));
 }
 
+bool MMXSetViewError(NSError **out_error, const memix::ViewError &error) {
+  return MMXSetError(out_error, MMXMakeError(error));
+}
+
 NSString *MMXString(std::string_view value) {
   NSString *string = [[NSString alloc] initWithBytes:value.data()
-                                             length:value.size()
-                                           encoding:NSUTF8StringEncoding];
+                                              length:value.size()
+                                            encoding:NSUTF8StringEncoding];
   return string != nil ? string : @"";
 }
 
-NSString *MMXString(const std::string &value) { return MMXString(std::string_view(value)); }
+NSString *MMXString(const std::string &value) {
+  return MMXString(std::string_view(value));
+}
 
 NSString *MMXPathString(const std::filesystem::path &path) {
   return MMXString(path.generic_string());
@@ -91,9 +129,11 @@ std::optional<memix::MemoryObjectType> MMXMemoryObjectType(MMXObjectType type) {
 
 bool MMXRequireType(MMXObjectType type, memix::MemoryObjectType *out_type,
                     NSError **out_error) {
-  const std::optional<memix::MemoryObjectType> parsed = MMXMemoryObjectType(type);
+  const std::optional<memix::MemoryObjectType> parsed =
+      MMXMemoryObjectType(type);
   if (!parsed.has_value()) {
-    return MMXSetError(out_error, MMXMakeError(@"Unsupported memix object type."));
+    return MMXSetError(out_error,
+                       MMXMakeError(@"Unsupported memix object type."));
   }
   *out_type = *parsed;
   return true;
@@ -115,7 +155,8 @@ MMXOptionalStringView(const std::optional<std::string> &storage) {
 }
 
 NSArray<NSString *> *MMXStringArray(const std::vector<std::string> &values) {
-  NSMutableArray<NSString *> *items = [[NSMutableArray alloc] initWithCapacity:values.size()];
+  NSMutableArray<NSString *> *items =
+      [[NSMutableArray alloc] initWithCapacity:values.size()];
   for (const std::string &value : values) {
     [items addObject:MMXString(value)];
   }
@@ -129,9 +170,9 @@ NSData *MMXReadData(const std::filesystem::path &path, NSError **out_error) {
                                        options:NSDataReadingMappedIfSafe
                                          error:&read_error];
   if (data == nil) {
-    MMXSetError(out_error,
-                read_error != nil ? read_error
-                                  : MMXMakeError(@"Failed to read file data."));
+    MMXSetError(out_error, read_error != nil
+                               ? read_error
+                               : MMXMakeError(@"Failed to read file data."));
   }
   return data;
 }
@@ -241,7 +282,7 @@ MMXViewArtifact *MMXWrapViewArtifact(const memix::ViewArtifact &artifact) {
   return wrapped;
 }
 
-std::expected<std::vector<memix::StoreFile>, memix::StoreError>
+memix::ViewResult<std::vector<memix::StoreFile>>
 MMXCollectViewFiles(const memix::Store &store,
                     const memix::ViewArtifact &artifact) {
   std::vector<memix::StoreFile> files;
@@ -256,8 +297,8 @@ MMXCollectViewFiles(const memix::Store &store,
     const bool is_symlink =
         std::filesystem::is_symlink(entry.symlink_status(status_error));
     if (status_error) {
-      return std::unexpected(memix::StoreError{
-          .message = "failed to inspect view tree entry"});
+      return std::unexpected(MMXMakeViewError(MMXMakeFilesystemError(
+          "failed to inspect view tree entry", status_error, {entry.path()})));
     }
     if (!is_symlink) {
       continue;
@@ -267,19 +308,25 @@ MMXCollectViewFiles(const memix::Store &store,
     const std::filesystem::path target =
         std::filesystem::read_symlink(entry.path(), symlink_error);
     if (symlink_error) {
-      return std::unexpected(memix::StoreError{
-          .message = "failed to read view tree symlink"});
+      return std::unexpected(MMXMakeViewError(MMXMakeFilesystemError(
+          "failed to read view tree symlink", symlink_error, {entry.path()})));
     }
     if (target.filename() != "object") {
-      return std::unexpected(memix::StoreError{
-          .message = "view tree symlink target is not a memix object"});
+      memix::ViewError error;
+      error.message = "view tree symlink target is not a memix object";
+      error.kind = memix::ErrorKind::InvalidData;
+      return std::unexpected(std::move(error));
     }
 
     const std::string blob_id = target.parent_path().filename().string();
     const std::expected<memix::StoredObject, memix::StoreError> blob =
         store.read_blob(artifact.source_type, blob_id);
     if (!blob) {
-      return std::unexpected(blob.error());
+      memix::ViewError error;
+      error.message = blob.error().message;
+      error.filesystem_error = blob.error().filesystem_error;
+      error.kind = blob.error().kind;
+      return std::unexpected(std::move(error));
     }
 
     files.push_back(memix::StoreFile{
@@ -289,8 +336,9 @@ MMXCollectViewFiles(const memix::Store &store,
     });
   }
   if (iterator_error) {
-    return std::unexpected(memix::StoreError{
-        .message = "failed to list view tree directory"});
+    return std::unexpected(MMXMakeViewError(
+        MMXMakeFilesystemError("failed to list view tree directory",
+                               iterator_error, {artifact.tree_path})));
   }
 
   std::ranges::sort(files, {}, &memix::StoreFile::context_path);
@@ -334,8 +382,8 @@ MMXCollectViewFiles(const memix::Store &store,
 }
 
 - (NSArray<MMXStoredObject *> *)listAllObjectsAndReturnError:(NSError **)error {
-  const std::expected<std::vector<memix::StoredObject>, memix::StoreError> objects =
-      _store->list(std::nullopt);
+  const std::expected<std::vector<memix::StoredObject>, memix::StoreError>
+      objects = _store->list(std::nullopt);
   if (!objects) {
     MMXSetStoreError(error, objects.error());
     return nil;
@@ -350,14 +398,14 @@ MMXCollectViewFiles(const memix::Store &store,
 }
 
 - (NSArray<MMXStoredObject *> *)listObjectsWithType:(MMXObjectType)type
-                                             error:(NSError **)error {
+                                              error:(NSError **)error {
   memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }
 
-  const std::expected<std::vector<memix::StoredObject>, memix::StoreError> objects =
-      _store->list(memix_type);
+  const std::expected<std::vector<memix::StoredObject>, memix::StoreError>
+      objects = _store->list(memix_type);
   if (!objects) {
     MMXSetStoreError(error, objects.error());
     return nil;
@@ -379,7 +427,8 @@ MMXCollectViewFiles(const memix::Store &store,
     return nil;
   }
 
-  const std::optional<std::string> generation_storage = MMXOptionalString(generation);
+  const std::optional<std::string> generation_storage =
+      MMXOptionalString(generation);
   const std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
       _store->list_files(memix_type, MMXOptionalStringView(generation_storage));
   if (!files) {
@@ -396,15 +445,16 @@ MMXCollectViewFiles(const memix::Store &store,
 }
 
 - (NSData *)readFileDataWithType:(MMXObjectType)type
-                      contextPath:(NSString *)contextPath
-                       generation:(NSString *)generation
-                            error:(NSError **)error {
+                     contextPath:(NSString *)contextPath
+                      generation:(NSString *)generation
+                           error:(NSError **)error {
   memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }
 
-  const std::optional<std::string> generation_storage = MMXOptionalString(generation);
+  const std::optional<std::string> generation_storage =
+      MMXOptionalString(generation);
   const std::expected<memix::StoredObject, memix::StoreError> object =
       _store->read_file(memix_type, MMXPath(contextPath),
                         MMXOptionalStringView(generation_storage));
@@ -416,20 +466,21 @@ MMXCollectViewFiles(const memix::Store &store,
   return MMXReadData(object->object_dir / object->content_path, error);
 }
 
-- (NSArray<MMXStoreFile *> *)listFilesInFileTreeViewWithDerivationID:
-    (NSString *)derivationID error:(NSError **)error {
+- (NSArray<MMXStoreFile *> *)
+    listFilesInFileTreeViewWithDerivationID:(NSString *)derivationID
+                                      error:(NSError **)error {
   memix::ViewService views{memix::Store(_root)};
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views.resolve_file_tree(MMXStdString(derivationID));
   if (!artifact) {
-    MMXSetStoreError(error, artifact.error());
+    MMXSetViewError(error, artifact.error());
     return nil;
   }
 
-  const std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
+  const memix::ViewResult<std::vector<memix::StoreFile>> files =
       MMXCollectViewFiles(*_store, *artifact);
   if (!files) {
-    MMXSetStoreError(error, files.error());
+    MMXSetViewError(error, files.error());
     return nil;
   }
 
@@ -445,25 +496,31 @@ MMXCollectViewFiles(const memix::Store &store,
                                      contextPath:(NSString *)contextPath
                                            error:(NSError **)error {
   memix::ViewService views{memix::Store(_root)};
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views.resolve_file_tree(MMXStdString(derivationID));
   if (!artifact) {
-    MMXSetStoreError(error, artifact.error());
+    MMXSetViewError(error, artifact.error());
     return nil;
   }
 
   const std::filesystem::path relative_path = MMXPath(contextPath);
   if (!MMXPathIsSafeRelative(relative_path)) {
-    MMXSetError(error, MMXMakeError(@"View path must be a relative file path."));
+    MMXSetError(error,
+                MMXMakeError(@"View path must be a relative file path."));
     return nil;
   }
 
   const std::filesystem::path file_path = artifact->tree_path / relative_path;
   std::error_code status_error;
-  const bool is_symlink =
-      std::filesystem::is_symlink(std::filesystem::symlink_status(file_path,
-                                                                  status_error));
-  if (status_error || !is_symlink) {
+  const bool is_symlink = std::filesystem::is_symlink(
+      std::filesystem::symlink_status(file_path, status_error));
+  if (status_error) {
+    MMXSetViewError(
+        error, MMXMakeViewError(MMXMakeFilesystemError(
+                   "failed to inspect view file", status_error, {file_path})));
+    return nil;
+  }
+  if (!is_symlink) {
     MMXSetError(error, MMXMakeError(@"View file is not present in this view."));
     return nil;
   }
@@ -472,16 +529,17 @@ MMXCollectViewFiles(const memix::Store &store,
 }
 
 - (MMXIngestResult *)ingestFileAtURL:(NSURL *)sourceURL
-                                 type:(MMXObjectType)type
-                          contextPath:(NSString *)contextPath
-                              message:(NSString *)message
-                                error:(NSError **)error {
+                                type:(MMXObjectType)type
+                         contextPath:(NSString *)contextPath
+                             message:(NSString *)message
+                               error:(NSError **)error {
   memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }
 
-  const std::string message_storage = MMXStdString(message != nil ? message : @"");
+  const std::string message_storage =
+      MMXStdString(message != nil ? message : @"");
   const std::expected<memix::FileIngestResult, memix::StoreError> result =
       _store->ingest_file(memix::FileIngestRequest{
           .type = memix_type,
@@ -505,10 +563,10 @@ MMXCollectViewFiles(const memix::Store &store,
 - (NSArray<MMXViewArtifact *> *)listFileTreeViewsAndReturnError:
     (NSError **)error {
   memix::ViewService views{memix::Store(_root)};
-  const std::expected<std::vector<memix::ViewArtifact>, memix::StoreError> artifacts =
+  const memix::ViewResult<std::vector<memix::ViewArtifact>> artifacts =
       views.list_file_trees();
   if (!artifacts) {
-    MMXSetStoreError(error, artifacts.error());
+    MMXSetViewError(error, artifacts.error());
     return nil;
   }
 
@@ -520,15 +578,14 @@ MMXCollectViewFiles(const memix::Store &store,
   return wrapped;
 }
 
-- (MMXViewArtifact *)buildFileTreeWithName:(NSString *)name
-                                sourceType:(MMXObjectType)sourceType
-                       requiredSourcePaths:
-                           (NSArray<NSString *> *)requiredSourcePaths
-                       optionalSourcePaths:
-                           (NSArray<NSString *> *)optionalSourcePaths
-                                generation:(NSString *)generation
-                                       ref:(NSString *)ref
-                                     error:(NSError **)error {
+- (MMXViewArtifact *)
+    buildFileTreeWithName:(NSString *)name
+               sourceType:(MMXObjectType)sourceType
+      requiredSourcePaths:(NSArray<NSString *> *)requiredSourcePaths
+      optionalSourcePaths:(NSArray<NSString *> *)optionalSourcePaths
+               generation:(NSString *)generation
+                      ref:(NSString *)ref
+                    error:(NSError **)error {
   memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
   if (!MMXRequireType(sourceType, &memix_type, error)) {
     return nil;
@@ -539,7 +596,8 @@ MMXCollectViewFiles(const memix::Store &store,
   expression.name = MMXStdString(name.length == 0 ? @"file-tree" : name);
 
   if (generation.length > 0 && ref.length > 0) {
-    MMXSetError(error, MMXMakeError(@"Use either generation or ref, not both."));
+    MMXSetError(error,
+                MMXMakeError(@"Use either generation or ref, not both."));
     return nil;
   }
   if (generation.length > 0) {
@@ -566,10 +624,10 @@ MMXCollectViewFiles(const memix::Store &store,
   }
 
   memix::ViewService views{memix::Store(_root)};
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views.build_file_tree(expression);
   if (!artifact) {
-    MMXSetStoreError(error, artifact.error());
+    MMXSetViewError(error, artifact.error());
     return nil;
   }
   return MMXWrapViewArtifact(*artifact);
