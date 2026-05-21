@@ -239,8 +239,7 @@ TEST_CASE("concurrent file tree builds report one insertion and clean temps",
 
   std::atomic<int> ready = 0;
   std::atomic<bool> start = false;
-  std::vector<std::expected<memix::ViewArtifact, memix::StoreError>> results(
-      kBuilderCount);
+  std::vector<memix::ViewResult<memix::ViewArtifact>> results(kBuilderCount);
   std::vector<std::thread> builders;
   builders.reserve(kBuilderCount);
 
@@ -424,6 +423,7 @@ TEST_CASE("file tree builds reject duplicate selectors", "[view]") {
 
   const auto artifact = views.build_file_tree(expression);
   REQUIRE_FALSE(artifact.has_value());
+  REQUIRE(artifact.error().kind == memix::ErrorKind::InvalidArgument);
   REQUIRE(artifact.error().message.find("duplicate source path")
           != std::string::npos);
 }
@@ -488,8 +488,8 @@ TEST_CASE("file tree listing accepts legacy agent manifests", "[view]") {
   const std::string agent_generation(64, 'c');
   const std::string blob_id(64, 'd');
   write_file(derivation_dir / "manifest.json",
-             fake_legacy_file_tree_manifest(
-                 derivation_id, expression_id, agent_generation, blob_id));
+             fake_legacy_file_tree_manifest(derivation_id, expression_id,
+                                            agent_generation, blob_id));
 
   const auto artifacts =
       memix::ViewService{memix::Store(store_root)}.list_file_trees();
@@ -517,6 +517,7 @@ TEST_CASE("file tree listing validates manifest identity fields", "[view]") {
     const auto artifacts =
         memix::ViewService{memix::Store(store_root)}.list_file_trees();
     REQUIRE_FALSE(artifacts.has_value());
+    REQUIRE(artifacts.error().kind == memix::ErrorKind::InvalidData);
     REQUIRE(artifacts.error().message.find("expression_id")
             != std::string::npos);
   }
@@ -527,6 +528,7 @@ TEST_CASE("file tree listing validates manifest identity fields", "[view]") {
     const auto artifacts =
         memix::ViewService{memix::Store(store_root)}.list_file_trees();
     REQUIRE_FALSE(artifacts.has_value());
+    REQUIRE(artifacts.error().kind == memix::ErrorKind::InvalidData);
     REQUIRE(artifacts.error().message.find("blob_id") != std::string::npos);
   }
   SECTION("tree path") {
@@ -536,6 +538,7 @@ TEST_CASE("file tree listing validates manifest identity fields", "[view]") {
     const auto artifacts =
         memix::ViewService{memix::Store(store_root)}.list_file_trees();
     REQUIRE_FALSE(artifacts.has_value());
+    REQUIRE(artifacts.error().kind == memix::ErrorKind::InvalidData);
     REQUIRE(artifacts.error().message.find("tree") != std::string::npos);
   }
 }
@@ -574,5 +577,10 @@ TEST_CASE("file tree show rejects ambiguous derivation prefixes", "[view]") {
   const memix::ViewService views{memix::Store(store_root)};
   const auto resolved = views.resolve_file_tree("aaaa");
   REQUIRE_FALSE(resolved.has_value());
+  REQUIRE(resolved.error().kind == memix::ErrorKind::Conflict);
   REQUIRE(resolved.error().message.find("ambiguous") != std::string::npos);
+
+  const auto missing = views.resolve_file_tree("b");
+  REQUIRE_FALSE(missing.has_value());
+  REQUIRE(missing.error().kind == memix::ErrorKind::NotFound);
 }

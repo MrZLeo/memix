@@ -1,5 +1,7 @@
 #include "memix/store.hpp"
 
+#include "memix/error.hpp"
+
 #include "cli_common.hpp"
 
 #include <array>
@@ -71,7 +73,9 @@ std::string supported_types_message() {
 }
 
 std::unexpected<memix::StoreError> store_error(std::string message) {
-  return std::unexpected(memix::StoreError{.message = std::move(message)});
+  memix::StoreError error;
+  error.message = std::move(message);
+  return std::unexpected(std::move(error));
 }
 
 memix::cli_detail::Result<memix::MemoryObjectType>

@@ -1,11 +1,16 @@
 set(sources
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/hash.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/view.cpp
 )
 
 set(private_headers
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/common.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/error.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/fs.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/hash.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/json.hpp
 )
 
 file(GLOB bin_sources CONFIGURE_DEPENDS
@@ -13,6 +18,7 @@ file(GLOB bin_sources CONFIGURE_DEPENDS
 )
 
 set(headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/memix/error.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/memix/store.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/include/memix/view.hpp
 )

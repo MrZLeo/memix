@@ -397,12 +397,12 @@ TEST_CASE("agent generations preserve old trees after later ingests",
   REQUIRE(old_python.has_value());
   REQUIRE(read_file(old_python->object_dir / old_python->content_path)
           == "python base\n");
-  REQUIRE_FALSE(
-      store
-          .read_file(memix::MemoryObjectType::Agents,
-                     "lang/python/vllm/AGENTS.md",
-                     std::optional<std::string_view>{first_generation})
-          .has_value());
+  const auto missing_old_vllm = store.read_file(
+      memix::MemoryObjectType::Agents, "lang/python/vllm/AGENTS.md",
+      std::optional<std::string_view>{first_generation});
+  REQUIRE_FALSE(missing_old_vllm.has_value());
+  REQUIRE(missing_old_vllm.error().kind
+          == memix::ErrorKind::ContextPathNotFound);
 
   const auto latest_files = store.list_files(memix::MemoryObjectType::Agents);
   REQUIRE(latest_files.has_value());
@@ -625,14 +625,14 @@ TEST_CASE("agent paths reject unsafe components", "[store]") {
   write_file(source, "rules");
   const memix::Store store(directory.path() / "store");
 
-  REQUIRE_FALSE(store
-                    .ingest_file({
-                        .type = memix::MemoryObjectType::Agents,
-                        .source_path = source,
-                        .context_path = "",
-                        .message = "bad",
-                    })
-                    .has_value());
+  const auto empty_path = store.ingest_file({
+      .type = memix::MemoryObjectType::Agents,
+      .source_path = source,
+      .context_path = "",
+      .message = "bad",
+  });
+  REQUIRE_FALSE(empty_path.has_value());
+  REQUIRE(empty_path.error().kind == memix::ErrorKind::InvalidArgument);
   REQUIRE_FALSE(store
                     .ingest_file({
                         .type = memix::MemoryObjectType::Agents,

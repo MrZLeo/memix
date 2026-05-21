@@ -1,8 +1,8 @@
 #pragma once
 
+#include "memix/error.hpp"
 #include "memix/store.hpp"
 
-#include <expected>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -44,14 +44,13 @@ public:
 
   [[nodiscard]] const Store &store() const noexcept { return store_; }
 
-  [[nodiscard]] std::expected<ViewArtifact, StoreError>
+  [[nodiscard]] ViewResult<ViewArtifact>
   build_file_tree(const ViewExpression &expression) const;
 
-  [[nodiscard]] std::expected<ViewArtifact, StoreError>
+  [[nodiscard]] ViewResult<ViewArtifact>
   resolve_file_tree(std::string_view derivation_prefix) const;
 
-  [[nodiscard]] std::expected<std::vector<ViewArtifact>, StoreError>
-  list_file_trees() const;
+  [[nodiscard]] ViewResult<std::vector<ViewArtifact>> list_file_trees() const;
 
 private:
   Store store_;

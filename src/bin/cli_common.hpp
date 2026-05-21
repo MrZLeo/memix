@@ -1,5 +1,6 @@
 #pragma once
 
+#include "memix/error.hpp"
 #include "memix/store.hpp"
 #include "memix/version.hpp"
 
@@ -19,6 +20,7 @@
 #include <ios>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <print>
 #include <ranges>
 #include <string>
@@ -32,6 +34,8 @@ inline constexpr std::size_t kShortIdLength = 12;
 
 struct CliError {
   std::string message;
+  std::optional<FsError> filesystem_error;
+  ErrorKind kind = ErrorKind::Unknown;
 };
 
 template <typename Value>
@@ -40,11 +44,33 @@ using Result = std::expected<Value, CliError>;
 using VoidResult = std::expected<void, CliError>;
 
 inline std::unexpected<CliError> unexpected_error(std::string_view message) {
-  return std::unexpected(CliError{.message = std::string(message)});
+  CliError error;
+  error.message = std::string(message);
+  return std::unexpected(std::move(error));
 }
 
 inline std::unexpected<CliError> unexpected_error(const StoreError &error) {
-  return unexpected_error(error.message);
+  return std::unexpected(CliError{
+      .message = error.message,
+      .filesystem_error = error.filesystem_error,
+      .kind = error.kind,
+  });
+}
+
+inline std::unexpected<CliError> unexpected_error(const ViewError &error) {
+  return std::unexpected(CliError{
+      .message = error.message,
+      .filesystem_error = error.filesystem_error,
+      .kind = error.kind,
+  });
+}
+
+inline std::unexpected<CliError> unexpected_error(const FsError &error) {
+  return std::unexpected(CliError{
+      .message = error.message,
+      .filesystem_error = error,
+      .kind = ErrorKind::Filesystem,
+  });
 }
 
 inline Argum::Expected<void> argum_validation_error(std::string_view message) {
@@ -64,8 +90,7 @@ resolve_store_root(const std::filesystem::path &store_root_override) {
   if (!store_root_override.empty()) {
     return store_root_override;
   }
-  const std::expected<std::filesystem::path, StoreError> root =
-      default_store_root();
+  const StoreResult<std::filesystem::path> root = default_store_root();
   if (!root) {
     return unexpected_error(root.error());
   }

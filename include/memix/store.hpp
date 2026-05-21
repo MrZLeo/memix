@@ -1,7 +1,8 @@
 #pragma once
 
+#include "memix/error.hpp"
+
 #include <cstdint>
-#include <expected>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -10,12 +11,6 @@
 #include <vector>
 
 namespace memix {
-
-struct StoreError {
-  std::string message;
-};
-
-using StoreVoid = std::expected<void, StoreError>;
 
 enum class MemoryObjectType : std::uint8_t { Agents, Chat, Documents };
 std::string_view to_string(MemoryObjectType type) noexcept;
@@ -28,7 +23,7 @@ std::string_view to_string(ContextTreeEntryKind kind) noexcept;
 std::optional<ContextTreeEntryKind>
 parse_context_tree_entry_kind(std::string_view value) noexcept;
 
-std::expected<std::filesystem::path, StoreError> default_store_root();
+StoreResult<std::filesystem::path> default_store_root();
 
 struct StoredObject {
   int schema_version = 1;
@@ -45,7 +40,7 @@ struct StoredObject {
   std::filesystem::path metadata_path;
 };
 
-[[nodiscard]] std::expected<std::string, StoreError>
+[[nodiscard]] StoreResult<std::string>
 metadata_json(const StoredObject &object);
 
 struct IngestResult {
@@ -54,8 +49,8 @@ struct IngestResult {
 };
 
 struct ContextTreeEntry {
-  std::string name;
   ContextTreeEntryKind kind = ContextTreeEntryKind::Blob;
+  std::string name;
   std::string id;
 };
 
@@ -109,34 +104,34 @@ public:
     return root_;
   }
 
-  [[nodiscard]] std::expected<IngestResult, StoreError>
+  [[nodiscard]] StoreResult<IngestResult>
   ingest(MemoryObjectType type, const std::filesystem::path &source_path) const;
 
-  [[nodiscard]] std::expected<IngestResult, StoreError>
+  [[nodiscard]] StoreResult<IngestResult>
   ingest_blob(MemoryObjectType type,
               const std::filesystem::path &source_path) const;
 
-  [[nodiscard]] std::expected<FileIngestResult, StoreError>
+  [[nodiscard]] StoreResult<FileIngestResult>
   ingest_file(const FileIngestRequest &request) const;
 
-  [[nodiscard]] std::expected<StoredObject, StoreError>
+  [[nodiscard]] StoreResult<StoredObject>
   read_blob(MemoryObjectType type, std::string_view object_id) const;
 
-  [[nodiscard]] std::expected<ContextTree, StoreError>
+  [[nodiscard]] StoreResult<ContextTree>
   read_tree(MemoryObjectType type, std::string_view object_id) const;
 
-  [[nodiscard]] std::expected<ContextGeneration, StoreError>
+  [[nodiscard]] StoreResult<ContextGeneration>
   read_generation(MemoryObjectType type, std::string_view object_id) const;
 
-  [[nodiscard]] std::expected<StoredObject, StoreError>
+  [[nodiscard]] StoreResult<StoredObject>
   read_file(MemoryObjectType type, const std::filesystem::path &context_path,
             std::optional<std::string_view> generation = std::nullopt) const;
 
-  [[nodiscard]] std::expected<std::vector<StoreFile>, StoreError>
+  [[nodiscard]] StoreResult<std::vector<StoreFile>>
   list_files(MemoryObjectType type,
              std::optional<std::string_view> generation = std::nullopt) const;
 
-  [[nodiscard]] std::expected<std::optional<std::string>, StoreError>
+  [[nodiscard]] StoreResult<std::optional<std::string>>
   read_ref(std::string_view ref_name) const;
 
   [[nodiscard]] StoreVoid
@@ -144,7 +139,7 @@ public:
              std::optional<std::string_view> expected_old,
              std::string_view new_generation) const;
 
-  [[nodiscard]] std::expected<std::vector<StoredObject>, StoreError>
+  [[nodiscard]] StoreResult<std::vector<StoredObject>>
   list(std::optional<MemoryObjectType> type = std::nullopt) const;
 
 private:

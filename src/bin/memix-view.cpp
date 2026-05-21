@@ -1,7 +1,9 @@
+#include "memix/error.hpp"
 #include "memix/store.hpp"
 #include "memix/view.hpp"
 
 #include "cli_common.hpp"
+#include "detail/fs.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -146,20 +148,17 @@ print_artifacts_json(const std::vector<memix::ViewArtifact> &artifacts) {
 
 memix::cli_detail::Result<std::string>
 blob_id_for_tree_link(const std::filesystem::path &link_path) {
-  std::error_code error;
-  const std::filesystem::path target =
-      std::filesystem::read_symlink(link_path, error);
-  if (error) {
-    return memix::cli_detail::unexpected_error(
-        std::format("failed to read symlink `{}`: {}", link_path.string(),
-                    error.message()));
+  const memix::FsResult<std::filesystem::path> target =
+      memix::detail::expected_fs::read_symlink(link_path);
+  if (!target) {
+    return memix::cli_detail::unexpected_error(target.error());
   }
-  if (target.filename() != "object") {
+  if (target->filename() != "object") {
     return memix::cli_detail::unexpected_error(
         std::format("view tree symlink target is not a store object `{}`",
                     link_path.string()));
   }
-  return target.parent_path().filename().string();
+  return target->parent_path().filename().string();
 }
 
 memix::cli_detail::Result<std::vector<ViewTreeEntry>>
@@ -176,9 +175,8 @@ collect_view_tree_entries(const memix::ViewArtifact &artifact) {
     const bool is_symlink =
         std::filesystem::is_symlink(entry.symlink_status(status_error));
     if (status_error) {
-      return memix::cli_detail::unexpected_error(
-          std::format("failed to inspect `{}`: {}", entry.path().string(),
-                      status_error.message()));
+      return memix::cli_detail::unexpected_error(memix::detail::make_fs_error(
+          "failed to inspect", status_error, entry.path()));
     }
     if (!is_symlink) {
       continue;
@@ -194,9 +192,8 @@ collect_view_tree_entries(const memix::ViewArtifact &artifact) {
     });
   }
   if (iterator_error) {
-    return memix::cli_detail::unexpected_error(
-        std::format("failed to list directory `{}`: {}",
-                    artifact.tree_path.string(), iterator_error.message()));
+    return memix::cli_detail::unexpected_error(memix::detail::make_fs_error(
+        "failed to list directory", iterator_error, artifact.tree_path));
   }
 
   std::ranges::sort(entries, {}, &ViewTreeEntry::path);
@@ -286,7 +283,7 @@ memix::cli_detail::VoidResult run_build(const ViewCliOptions &options) {
   if (!expression) {
     return std::unexpected(expression.error());
   }
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views->build_file_tree(*expression);
   if (!artifact) {
     return memix::cli_detail::unexpected_error(artifact.error());
@@ -307,7 +304,7 @@ memix::cli_detail::VoidResult run_show(const ViewCliOptions &options) {
   if (!views) {
     return std::unexpected(views.error());
   }
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views->resolve_file_tree(options.show_derivation_id);
   if (!artifact) {
     return memix::cli_detail::unexpected_error(artifact.error());
@@ -325,7 +322,7 @@ memix::cli_detail::VoidResult run_cd(const ViewCliOptions &options) {
   if (!views) {
     return std::unexpected(views.error());
   }
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views->resolve_file_tree(options.cd_derivation_id);
   if (!artifact) {
     return memix::cli_detail::unexpected_error(artifact.error());
@@ -343,7 +340,7 @@ memix::cli_detail::VoidResult run_tree(const ViewCliOptions &options) {
   if (!views) {
     return std::unexpected(views.error());
   }
-  const std::expected<memix::ViewArtifact, memix::StoreError> artifact =
+  const memix::ViewResult<memix::ViewArtifact> artifact =
       views->resolve_file_tree(options.tree_derivation_id);
   if (!artifact) {
     return memix::cli_detail::unexpected_error(artifact.error());
@@ -363,8 +360,8 @@ memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
   if (!views) {
     return std::unexpected(views.error());
   }
-  const std::expected<std::vector<memix::ViewArtifact>, memix::StoreError>
-      artifacts = views->list_file_trees();
+  const memix::ViewResult<std::vector<memix::ViewArtifact>> artifacts =
+      views->list_file_trees();
   if (!artifacts) {
     return memix::cli_detail::unexpected_error(artifacts.error());
   }
