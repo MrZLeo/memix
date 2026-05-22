@@ -1835,8 +1835,9 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
 namespace memix {
 
 std::string_view to_string(ViewTargetKind target) noexcept {
-  const auto *it = std::ranges::find(kViewTargetKindTokens, target,
-                                     &ViewTargetKindToken::value);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(kViewTargetKindTokens, target,
+                                    &ViewTargetKindToken::value);
   if (it == std::ranges::end(kViewTargetKindTokens)) {
     return {};
   }
@@ -1845,8 +1846,9 @@ std::string_view to_string(ViewTargetKind target) noexcept {
 
 std::optional<ViewTargetKind>
 parse_view_target_kind(std::string_view value) noexcept {
-  const auto *it = std::ranges::find(kViewTargetKindTokens, value,
-                                     &ViewTargetKindToken::token);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(kViewTargetKindTokens, value,
+                                    &ViewTargetKindToken::token);
   if (it == std::ranges::end(kViewTargetKindTokens)) {
     return std::nullopt;
   }
@@ -1854,8 +1856,9 @@ parse_view_target_kind(std::string_view value) noexcept {
 }
 
 std::string_view to_string(ViewVersionKind kind) noexcept {
-  const auto *it = std::ranges::find(kViewVersionKindTokens, kind,
-                                     &ViewVersionKindToken::value);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(kViewVersionKindTokens, kind,
+                                    &ViewVersionKindToken::value);
   if (it == std::ranges::end(kViewVersionKindTokens)) {
     return {};
   }

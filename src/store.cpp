@@ -2190,8 +2190,9 @@ StoreVoid collect_context_files(const fs::path &root, std::string_view tree_id,
 namespace memix {
 
 std::string_view to_string(MemoryObjectType type) noexcept {
-  const auto *it = std::ranges::find(kMemoryObjectTypeTokens, type,
-                                     &MemoryObjectTypeToken::value);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(
+      kMemoryObjectTypeTokens, type, &MemoryObjectTypeToken::value);
   if (it == std::ranges::end(kMemoryObjectTypeTokens))
     return {};
   return it->token;
@@ -2199,8 +2200,9 @@ std::string_view to_string(MemoryObjectType type) noexcept {
 
 std::optional<MemoryObjectType>
 parse_memory_object_type(std::string_view value) noexcept {
-  const auto *it = std::ranges::find(kMemoryObjectTypeTokens, value,
-                                     &MemoryObjectTypeToken::token);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(
+      kMemoryObjectTypeTokens, value, &MemoryObjectTypeToken::token);
   if (it == std::ranges::end(kMemoryObjectTypeTokens))
     return std::nullopt;
   return it->value;
@@ -2213,8 +2215,9 @@ std::vector<MemoryObjectType> memory_object_types() {
 }
 
 std::string_view to_string(ContextTreeEntryKind kind) noexcept {
-  const auto *it = std::ranges::find(kContextTreeEntryKindTokens, kind,
-                                     &ContextTreeEntryKindToken::value);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(
+      kContextTreeEntryKindTokens, kind, &ContextTreeEntryKindToken::value);
   if (it == std::ranges::end(kContextTreeEntryKindTokens))
     return std::string_view{};
   return it->token;
@@ -2222,8 +2225,9 @@ std::string_view to_string(ContextTreeEntryKind kind) noexcept {
 
 std::optional<ContextTreeEntryKind>
 parse_context_tree_entry_kind(std::string_view value) noexcept {
-  const auto *it = std::ranges::find(kContextTreeEntryKindTokens, value,
-                                     &ContextTreeEntryKindToken::token);
+  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
+  const auto it = std::ranges::find(
+      kContextTreeEntryKindTokens, value, &ContextTreeEntryKindToken::token);
   if (it == std::ranges::end(kContextTreeEntryKindTokens))
     return std::nullopt;
   return it->value;
