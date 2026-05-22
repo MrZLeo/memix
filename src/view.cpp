@@ -1276,18 +1276,16 @@ write_derivation_directory(const memix::Store &store,
   if (!tree_created) {
     return std::unexpected(tree_created.error());
   }
-  const ViewVoid frozen = freeze_derivation_directory(*temp_dir);
-  if (!frozen) {
-    const ViewVoid failed =
-        fail_after_thawing_derivation(*temp_dir, frozen.error());
-    return std::unexpected(failed.error());
-  }
   const memix::FsVoid renamed = raw_fs::rename(*temp_dir, derivation_dir);
   if (!renamed) {
     return handle_derivation_rename_failure(*temp_dir, derivation,
                                             manifest_json, renamed.error());
   }
   cleanup.release();
+  const ViewVoid frozen = freeze_derivation_directory(derivation_dir);
+  if (!frozen) {
+    return std::unexpected(frozen.error());
+  }
   return true;
 }
 
