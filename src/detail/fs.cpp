@@ -111,6 +111,12 @@ FsVoid create_symlink(const fs::path &target, const fs::path &link) {
   return fs_void(error, "failed to create symlink", target, link);
 }
 
+FsVoid create_hard_link(const fs::path &target, const fs::path &link) {
+  std::error_code error;
+  fs::create_hard_link(target, link, error);
+  return fs_void(error, "failed to create hard link", target, link);
+}
+
 FsResult<fs::path> read_symlink(const fs::path &path) {
   std::error_code error;
   const fs::path target = fs::read_symlink(path, error);

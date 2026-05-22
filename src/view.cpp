@@ -9,17 +9,19 @@
 #include "detail/json.hpp"
 
 #include <algorithm>
-#include <cstdint>
+#include <array>
+#include <cstddef>
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <functional>
-#include <limits>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -29,75 +31,131 @@ namespace fs = std::filesystem;
 
 namespace {
 
+constexpr std::string_view kExpressionSchema = "memix.view.expr.v1";
+constexpr std::string_view kIrSchema = "memix.view.ir.v1";
+constexpr std::string_view kDerivationSchema = "memix.view.derivation.v1";
+constexpr std::string_view kEnvironmentSchema = "memix.view.environment.v1";
 constexpr std::string_view kViewsDir = "views";
-constexpr std::string_view kExpressionsDir = "expressions";
 constexpr std::string_view kDerivationsDir = "derivations";
+constexpr std::string_view kEnvironmentsDir = "environments";
 constexpr std::string_view kManifestFilename = "manifest.json";
 constexpr std::string_view kTreeDir = "tree";
 constexpr std::string_view kJsonSuffix = ".json";
+constexpr std::string_view kLatestVersion = "latest";
+constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
+
+struct ViewTargetKindToken {
+  memix::ViewTargetKind value;
+  std::string_view token;
+};
+
+struct ViewVersionKindToken {
+  memix::ViewVersionKind value;
+  std::string_view token;
+};
+
+constexpr std::array kViewTargetKindTokens{
+    ViewTargetKindToken{
+        .value = memix::ViewTargetKind::FileTree,
+        .token = "file_tree",
+    },
+    ViewTargetKindToken{
+        .value = memix::ViewTargetKind::ContextPack,
+        .token = "context_pack",
+    },
+};
+
+constexpr std::array kViewVersionKindTokens{
+    ViewVersionKindToken{
+        .value = memix::ViewVersionKind::Ref,
+        .token = "ref",
+    },
+    ViewVersionKindToken{
+        .value = memix::ViewVersionKind::Generation,
+        .token = "generation",
+    },
+};
 
 template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
 
 using ViewVoid = memix::ViewVoid;
+namespace raw_fs = memix::detail::expected_fs;
 
-using memix::detail::is_lower_hex_prefix;
-using memix::detail::is_lower_hex_sha256;
+struct VersionJson {
+  std::string kind;
+  std::string value;
+};
 
-struct ExpressionSelectorJson {
-  std::string source_path;
-  std::optional<std::string> scope_label;
+struct SelectorJson {
+  bool recursive = false;
   bool required = true;
 };
 
-struct ManifestInputJson {
-  std::string source_path;
-  std::optional<std::string> scope_label;
-  bool required = true;
-  bool selected = false;
-  std::optional<std::string> blob_id;
+struct IrInputJson {
+  std::string locator;
+  std::string type;
+  std::string path;
+  VersionJson version;
+  SelectorJson selector;
 };
 
-struct ResolvedInput {
-  memix::ViewSelector selector;
-  bool selected = false;
-  std::optional<memix::StoredObject> blob;
+struct TargetAttrsJson {
+  std::optional<std::string> format;
 };
 
-struct ManifestJsonRequest {
-  std::string_view derivation_id;
-  std::string_view expression_id;
-  std::reference_wrapper<const memix::ViewExpression> expression;
-  std::string_view source_generation;
-  std::reference_wrapper<const std::vector<ResolvedInput>> inputs;
+struct IrTargetJson {
+  std::string op;
+  TargetAttrsJson attrs;
 };
 
-struct ExistingDerivationCheck {
-  fs::path derivation_dir;
-  std::string_view expected_manifest;
-  std::reference_wrapper<const std::vector<ResolvedInput>> inputs;
+struct ResolvedInputJson {
+  std::string locator;
+  std::string type;
+  std::string path;
+  std::string output_path;
+  std::string generation;
+  std::string blob;
 };
 
-struct DerivationWriteRequest {
-  fs::path derivations_dir;
-  fs::path derivation_dir;
-  std::string_view derivation_id;
-  std::string_view manifest_json;
-  std::reference_wrapper<const std::vector<ResolvedInput>> inputs;
+struct PassJson {
+  std::string name;
+  std::string version;
 };
 
-struct ManifestReadRequest {
-  fs::path manifest_path;
-  fs::path derivation_dir;
+struct OutputJson {
+  std::string role;
+  std::string artifact;
+  std::string path;
+};
+
+struct BindingJson {
+  std::string mount;
+  std::string derivation;
+  std::string output;
+};
+
+struct ClosureJson {
+  std::reference_wrapper<const std::vector<std::string>> derivations;
+  std::reference_wrapper<const std::vector<std::string>> artifacts;
+  std::reference_wrapper<const std::vector<std::string>> raw_objects;
 };
 
 template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
-                const ExpressionSelectorJson &selector) {
+                const VersionJson &version) {
   builder.start_object();
-  builder.template append_key_value<"source_path">(selector.source_path);
+  builder.template append_key_value<"kind">(version.kind);
   builder.append_comma();
-  builder.template append_key_value<"scope_label">(selector.scope_label);
+  builder.template append_key_value<"value">(version.value);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const SelectorJson &selector) {
+  builder.start_object();
+  builder.template append_key_value<"recursive">(selector.recursive);
   builder.append_comma();
   builder.template append_key_value<"required">(selector.required);
   builder.end_object();
@@ -105,17 +163,99 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
 
 template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
-                const ManifestInputJson &input) {
+                const IrInputJson &input) {
   builder.start_object();
-  builder.template append_key_value<"source_path">(input.source_path);
+  builder.template append_key_value<"locator">(input.locator);
   builder.append_comma();
-  builder.template append_key_value<"scope_label">(input.scope_label);
+  builder.template append_key_value<"type">(input.type);
   builder.append_comma();
-  builder.template append_key_value<"required">(input.required);
+  builder.template append_key_value<"path">(input.path);
   builder.append_comma();
-  builder.template append_key_value<"selected">(input.selected);
+  builder.template append_key_value<"version">(input.version);
   builder.append_comma();
-  builder.template append_key_value<"blob_id">(input.blob_id);
+  builder.template append_key_value<"selector">(input.selector);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const TargetAttrsJson &attrs) {
+  builder.start_object();
+  builder.template append_key_value<"format">(attrs.format);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const IrTargetJson &target) {
+  builder.start_object();
+  builder.template append_key_value<"op">(target.op);
+  builder.append_comma();
+  builder.template append_key_value<"attrs">(target.attrs);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const ResolvedInputJson &input) {
+  builder.start_object();
+  builder.template append_key_value<"locator">(input.locator);
+  builder.append_comma();
+  builder.template append_key_value<"type">(input.type);
+  builder.append_comma();
+  builder.template append_key_value<"path">(input.path);
+  builder.append_comma();
+  builder.template append_key_value<"output_path">(input.output_path);
+  builder.append_comma();
+  builder.template append_key_value<"generation">(input.generation);
+  builder.append_comma();
+  builder.template append_key_value<"blob">(input.blob);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const PassJson &pass) {
+  builder.start_object();
+  builder.template append_key_value<"name">(pass.name);
+  builder.append_comma();
+  builder.template append_key_value<"version">(pass.version);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const OutputJson &output) {
+  builder.start_object();
+  builder.template append_key_value<"role">(output.role);
+  builder.append_comma();
+  builder.template append_key_value<"artifact">(output.artifact);
+  builder.append_comma();
+  builder.template append_key_value<"path">(output.path);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const BindingJson &binding) {
+  builder.start_object();
+  builder.template append_key_value<"mount">(binding.mount);
+  builder.append_comma();
+  builder.template append_key_value<"derivation">(binding.derivation);
+  builder.append_comma();
+  builder.template append_key_value<"output">(binding.output);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const ClosureJson &closure) {
+  builder.start_object();
+  builder.template append_key_value<"derivations">(closure.derivations.get());
+  builder.append_comma();
+  builder.template append_key_value<"artifacts">(closure.artifacts.get());
+  builder.append_comma();
+  builder.template append_key_value<"raw_objects">(closure.raw_objects.get());
   builder.end_object();
 }
 
@@ -146,31 +286,8 @@ std::unexpected<memix::ViewError> view_error(memix::detail::CommonError error) {
       memix::detail::translate_error<memix::ViewError>(std::move(error)));
 }
 
-namespace raw_fs = memix::detail::expected_fs;
-
 std::string simdjson_error_text(simdjson::error_code error) {
   return simdjson::error_message(error);
-}
-
-ViewVoid validate_sha256_field(std::string_view value,
-                               std::string_view field_name) {
-  if (!is_lower_hex_sha256(value)) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("{} is not a lowercase sha256 digest `{}`",
-                                  field_name, value));
-  }
-  return {};
-}
-
-ViewVoid validate_derivation_prefix(std::string_view derivation_prefix) {
-  if (!is_lower_hex_prefix(derivation_prefix)) {
-    return view_error(
-        memix::ErrorKind::InvalidArgument,
-        std::format("view derivation prefix must be 1 to 64 lowercase hex "
-                    "characters `{}`",
-                    derivation_prefix));
-  }
-  return {};
 }
 
 ViewResult<std::string>
@@ -188,6 +305,454 @@ json_from_builder(const simdjson::builder::string_builder &builder) {
   return std::move(*json);
 }
 
+std::string trim_copy(std::string_view text) {
+  while (!text.empty()
+         && (text.front() == ' '
+             || text.front() == '\t'
+             || text.front() == '\n'
+             || text.front() == '\r')) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty()
+         && (text.back() == ' '
+             || text.back() == '\t'
+             || text.back() == '\n'
+             || text.back() == '\r')) {
+    text.remove_suffix(1);
+  }
+  return std::string(text);
+}
+
+std::vector<std::string> split_source_list(std::string_view text) {
+  std::vector<std::string> sources;
+  std::string current;
+  for (const char character : text) {
+    if (character == '\n'
+        || character == '\r'
+        || character == ','
+        || character == ' '
+        || character == '\t') {
+      if (!current.empty()) {
+        sources.push_back(std::move(current));
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(character);
+  }
+  if (!current.empty()) {
+    sources.push_back(std::move(current));
+  }
+  return sources;
+}
+
+template <typename Value>
+ViewResult<Value> require_field_as(simdjson::dom::object fields,
+                                   std::string_view key,
+                                   std::string_view expected_type) {
+  Value parsed{};
+  const simdjson::error_code error = fields.at_key(key).get(parsed);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("expression field `{}` must be {}: {}", key,
+                                  expected_type, simdjson_error_text(error)));
+  }
+  return parsed;
+}
+
+ViewResult<std::optional<std::string>>
+optional_string(simdjson::dom::object fields, std::string_view key) {
+  std::string_view value;
+  const simdjson::error_code error = fields.at_key(key).get(value);
+  if (error == simdjson::NO_SUCH_FIELD) {
+    return std::optional<std::string>{};
+  }
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("expression field `{}` must be a string: {}",
+                                  key, simdjson_error_text(error)));
+  }
+  return std::optional<std::string>{std::string(value)};
+}
+
+ViewResult<simdjson::dom::array>
+optional_sources_array(simdjson::dom::object fields, bool &has_sources) {
+  simdjson::dom::array sources;
+  const simdjson::error_code error = fields.at_key("sources").get(sources);
+  if (error == simdjson::NO_SUCH_FIELD) {
+    has_sources = false;
+    return simdjson::dom::array{};
+  }
+  has_sources = true;
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("expression field `sources` must be an "
+                                  "array: {}",
+                                  simdjson_error_text(error)));
+  }
+  return sources;
+}
+
+bool valid_logical_component(std::string_view component) {
+  return !component.empty()
+      && component != "."
+      && component != ".."
+      && !component.contains('/')
+      && !component.contains('\\');
+}
+
+struct ViewPathValidationRequest {
+  std::string_view value;
+  std::string_view locator;
+};
+
+ViewResult<fs::path> validate_view_path(ViewPathValidationRequest request) {
+  if (request.value.empty()) {
+    return view_error(
+        memix::ErrorKind::InvalidArgument,
+        std::format("view locator has an empty path `{}`", request.locator));
+  }
+  if (request.value.contains("//")) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("view locator path contains empty "
+                                  "components `{}`",
+                                  request.locator));
+  }
+  if (request.value.contains('\\')) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("view locator path must not contain "
+                                  "backslashes `{}`",
+                                  request.locator));
+  }
+  fs::path parsed{std::string(request.value)};
+  if (parsed.is_absolute()) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("view locator path must be relative "
+                                  "`{}`",
+                                  request.locator));
+  }
+  for (const fs::path &component_path : parsed) {
+    const std::string component = component_path.generic_string();
+    if (!valid_logical_component(component)) {
+      return view_error(memix::ErrorKind::InvalidArgument,
+                        std::format("view locator path contains invalid "
+                                    "component `{}` in `{}`",
+                                    component, request.locator));
+    }
+  }
+  return parsed;
+}
+
+memix::ViewVersionSelector parse_version_selector(std::string_view value) {
+  std::string version =
+      value.empty() ? std::string(kLatestVersion) : std::string(value);
+  if (version.starts_with("sha256:")) {
+    version = version.substr(std::string_view("sha256:").size());
+  }
+  if (memix::detail::is_lower_hex_sha256(version)) {
+    return memix::ViewVersionSelector{
+        .kind = memix::ViewVersionKind::Generation,
+        .value = std::move(version),
+    };
+  }
+  return memix::ViewVersionSelector{
+      .kind = memix::ViewVersionKind::Ref,
+      .value = std::move(version),
+  };
+}
+
+std::string version_ref_name(memix::MemoryObjectType type,
+                             std::string_view version) {
+  if (version == kLatestVersion) {
+    return std::format("{}/latest", memix::to_string(type));
+  }
+  constexpr std::string_view kGenerationPrefix = "generation/";
+  if (version.starts_with(kGenerationPrefix)) {
+    return std::format("{}/generations/{}", memix::to_string(type),
+                       version.substr(kGenerationPrefix.size()));
+  }
+  constexpr std::string_view kRefPrefix = "ref/";
+  if (version.starts_with(kRefPrefix)) {
+    return std::format("{}/{}", memix::to_string(type),
+                       version.substr(kRefPrefix.size()));
+  }
+  return std::format("{}/{}", memix::to_string(type), version);
+}
+
+std::string canonical_locator(memix::MemoryObjectType type,
+                              const fs::path &path,
+                              const memix::ViewVersionSelector &version,
+                              bool recursive) {
+  std::string output =
+      std::format("{}/{}", memix::to_string(type), path.generic_string());
+  if (recursive) {
+    output.push_back('/');
+  }
+  output += std::format("@{}", version.value);
+  return output;
+}
+
+ViewResult<memix::ViewIrInput> parse_locator(std::string_view locator) {
+  const std::string source = trim_copy(locator);
+  if (source.empty()) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      "view locator must not be empty");
+  }
+
+  const std::size_t version_separator = source.rfind('@');
+  const std::string path_text = version_separator == std::string::npos
+                                  ? source
+                                  : source.substr(0, version_separator);
+  const std::string version_text = version_separator == std::string::npos
+                                     ? std::string(kLatestVersion)
+                                     : source.substr(version_separator + 1);
+  if (path_text.empty()) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("view locator path is empty `{}`", source));
+  }
+
+  const std::size_t type_separator = path_text.find('/');
+  if (type_separator == std::string::npos || type_separator == 0) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("view locator must start with "
+                                  "`<type>/` `{}`",
+                                  source));
+  }
+  const std::string type_text = path_text.substr(0, type_separator);
+  const std::optional<memix::MemoryObjectType> type =
+      memix::parse_memory_object_type(type_text);
+  if (!type.has_value()) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("view locator has unsupported type "
+                                  "`{}` in `{}`",
+                                  type_text, source));
+  }
+
+  std::string view_path_text = path_text.substr(type_separator + 1);
+  const bool recursive = view_path_text.ends_with('/');
+  if (recursive) {
+    view_path_text.pop_back();
+  }
+  ViewResult<fs::path> view_path = validate_view_path({
+      .value = view_path_text,
+      .locator = source,
+  });
+  if (!view_path) {
+    return std::unexpected(view_path.error());
+  }
+  memix::ViewVersionSelector version = parse_version_selector(version_text);
+  return memix::ViewIrInput{
+      .locator = canonical_locator(*type, *view_path, version, recursive),
+      .type = *type,
+      .path = std::move(*view_path),
+      .version = std::move(version),
+      .recursive = recursive,
+      .required = true,
+  };
+}
+
+ViewResult<memix::ViewTargetKind>
+parse_required_target(std::string_view value) {
+  const std::optional<memix::ViewTargetKind> target =
+      memix::parse_view_target_kind(value);
+  if (!target.has_value()) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("unsupported view target `{}`", value));
+  }
+  return *target;
+}
+
+ViewResult<memix::AuthoredViewExpression>
+parse_expression_json(std::string_view text) {
+  const simdjson::padded_string padded_json(text);
+  simdjson::dom::parser parser;
+  simdjson::dom::element document;
+  simdjson::error_code error = parser.parse(padded_json).get(document);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("invalid view expression JSON: {}",
+                                  simdjson_error_text(error)));
+  }
+
+  simdjson::dom::object fields;
+  error = document.get(fields);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("view expression JSON must be an "
+                                  "object: {}",
+                                  simdjson_error_text(error)));
+  }
+
+  memix::AuthoredViewExpression expression;
+  ViewResult<std::optional<std::string>> schema =
+      optional_string(fields, "schema");
+  if (!schema) {
+    return std::unexpected(schema.error());
+  }
+  if (schema->has_value()) {
+    if (**schema != kExpressionSchema) {
+      return view_error(
+          memix::ErrorKind::InvalidData,
+          std::format("unsupported view expression schema `{}`", **schema));
+    }
+    expression.schema = **schema;
+  }
+
+  ViewResult<std::optional<std::string>> profile =
+      optional_string(fields, "profile");
+  if (!profile) {
+    return std::unexpected(profile.error());
+  }
+  if (profile->has_value()) {
+    expression.profile = **profile;
+  }
+
+  ViewResult<std::optional<std::string>> target =
+      optional_string(fields, "target");
+  if (!target) {
+    return std::unexpected(target.error());
+  }
+  if (target->has_value()) {
+    ViewResult<memix::ViewTargetKind> parsed_target =
+        parse_required_target(**target);
+    if (!parsed_target) {
+      return std::unexpected(parsed_target.error());
+    }
+    expression.target = *parsed_target;
+  }
+
+  bool has_sources = false;
+  ViewResult<simdjson::dom::array> sources =
+      optional_sources_array(fields, has_sources);
+  if (!sources) {
+    return std::unexpected(sources.error());
+  }
+  if (has_sources) {
+    for (const simdjson::dom::element source_element : *sources) {
+      std::string_view source;
+      error = source_element.get(source);
+      if (error != simdjson::SUCCESS) {
+        return view_error(memix::ErrorKind::InvalidData,
+                          std::format("view expression sources must be "
+                                      "strings: {}",
+                                      simdjson_error_text(error)));
+      }
+      expression.sources.emplace_back(source);
+    }
+  }
+
+  return expression;
+}
+
+VersionJson version_json_for(const memix::ViewVersionSelector &version) {
+  return VersionJson{
+      .kind = std::string(memix::to_string(version.kind)),
+      .value = version.value,
+  };
+}
+
+IrInputJson ir_input_json_for(const memix::ViewIrInput &input) {
+  return IrInputJson{
+      .locator = input.locator,
+      .type = std::string(memix::to_string(input.type)),
+      .path = input.path.generic_string(),
+      .version = version_json_for(input.version),
+      .selector =
+          SelectorJson{
+              .recursive = input.recursive,
+              .required = input.required,
+          },
+  };
+}
+
+IrTargetJson ir_target_json_for(const memix::ViewIrTarget &target) {
+  std::optional<std::string> format;
+  if (!target.format.empty()) {
+    format = target.format;
+  }
+  return IrTargetJson{
+      .op = std::string(memix::to_string(target.kind)),
+      .attrs = TargetAttrsJson{.format = std::move(format)},
+  };
+}
+
+ViewResult<std::string>
+ir_basis_json_for(std::string_view ir_hash,
+                  const std::vector<ResolvedInputJson> &inputs,
+                  memix::ViewTargetKind target) {
+  const std::vector<PassJson> passes{
+      PassJson{.name = "resolve-refs", .version = "v1"},
+      PassJson{.name = "expand-dirs", .version = "v1"},
+      PassJson{.name = "pack-file-tree", .version = "v1"},
+  };
+
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">("memix.view.derivation.basis.v1");
+  builder.append_comma();
+  builder.append_key_value<"ir_hash">(ir_hash);
+  builder.append_comma();
+  builder.append_key_value<"target">(memix::to_string(target));
+  builder.append_comma();
+  builder.append_key_value<"passes">(passes);
+  builder.append_comma();
+  builder.append_key_value<"resolved_inputs">(inputs);
+  builder.end_object();
+  return json_from_builder(builder);
+}
+
+std::vector<ResolvedInputJson>
+resolved_input_json(const std::vector<memix::ResolvedViewFile> &files) {
+  return files
+       | std::views::transform([](const memix::ResolvedViewFile &file) {
+           return ResolvedInputJson{
+               .locator = file.locator,
+               .type = std::string(memix::to_string(file.type)),
+               .path = file.source_path.generic_string(),
+               .output_path = file.output_path.generic_string(),
+               .generation = file.source_generation,
+               .blob = file.blob.id,
+           };
+         })
+       | std::ranges::to<std::vector>();
+}
+
+std::vector<OutputJson>
+output_json(const std::vector<memix::ViewDerivationOutput> &outputs) {
+  return outputs
+       | std::views::transform([](const memix::ViewDerivationOutput &out) {
+           return OutputJson{
+               .role = out.role,
+               .artifact = out.artifact,
+               .path = out.path.generic_string(),
+           };
+         })
+       | std::ranges::to<std::vector>();
+}
+
+std::vector<BindingJson>
+binding_json(const std::vector<memix::ViewEnvironmentBinding> &bindings) {
+  return bindings
+       | std::views::transform(
+             [](const memix::ViewEnvironmentBinding &binding) {
+               return BindingJson{
+                   .mount = binding.mount.generic_string(),
+                   .derivation = binding.derivation_id,
+                   .output = binding.output_role,
+               };
+             })
+       | std::ranges::to<std::vector>();
+}
+
+ViewResult<std::string> sha256_text(std::string_view text) {
+  memix::detail::CommonResult<std::string> hash =
+      memix::detail::sha256_text(text);
+  if (!hash) {
+    return view_error(std::move(hash.error()));
+  }
+  return std::move(*hash);
+}
+
 ViewVoid ensure_directory(const fs::path &path) {
   const memix::FsResult<bool> created = raw_fs::create_directories(path);
   if (!created) {
@@ -196,22 +761,60 @@ ViewVoid ensure_directory(const fs::path &path) {
   return {};
 }
 
-fs::path views_dir_for(const fs::path &root) {
-  return root / std::string(kViewsDir);
+ViewResult<std::vector<fs::path>> collect_directories(const fs::path &root) {
+  std::vector<fs::path> directories{root};
+  std::error_code iterator_error;
+  const fs::recursive_directory_iterator end;
+  for (fs::recursive_directory_iterator iterator{root, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    if (!entry.is_directory(entry_error)) {
+      if (entry_error) {
+        return view_error(memix::detail::make_fs_error(
+            "failed to inspect directory", entry_error, entry.path()));
+      }
+      continue;
+    }
+    directories.push_back(entry.path());
+  }
+  if (iterator_error) {
+    return view_error(memix::detail::make_fs_error("failed to list directory",
+                                                   iterator_error, root));
+  }
+  return directories;
 }
 
-fs::path expressions_dir_for(const fs::path &root) {
-  return views_dir_for(root) / std::string(kExpressionsDir);
+ViewVoid apply_directory_tree_permissions(const fs::path &root, bool writable) {
+  ViewResult<std::vector<fs::path>> directories = collect_directories(root);
+  if (!directories) {
+    return std::unexpected(directories.error());
+  }
+  if (!writable) {
+    std::ranges::reverse(*directories);
+  }
+  for (const fs::path &directory : *directories) {
+    const memix::FsVoid applied =
+        writable
+            ? memix::detail::apply_writable_directory_permissions(directory)
+            : memix::detail::apply_read_only_directory_permissions(directory);
+    if (!applied) {
+      return view_error(applied.error());
+    }
+  }
+  return {};
+}
+
+fs::path views_dir_for(const fs::path &root) {
+  return root / std::string(kViewsDir);
 }
 
 fs::path derivations_dir_for(const fs::path &root) {
   return views_dir_for(root) / std::string(kDerivationsDir);
 }
 
-fs::path expression_path_for(const fs::path &root,
-                             std::string_view expression_id) {
-  return expressions_dir_for(root)
-       / std::format("{}{}", expression_id, kJsonSuffix);
+fs::path environments_dir_for(const fs::path &root) {
+  return views_dir_for(root) / std::string(kEnvironmentsDir);
 }
 
 fs::path derivation_dir_for(const fs::path &root,
@@ -219,16 +822,10 @@ fs::path derivation_dir_for(const fs::path &root,
   return derivations_dir_for(root) / std::string(derivation_id);
 }
 
-fs::path tree_dir_for(const fs::path &derivation_dir) {
-  return derivation_dir / std::string(kTreeDir);
-}
-
-std::string default_ref_for(memix::MemoryObjectType type) {
-  return std::format("{}/latest", memix::to_string(type));
-}
-
-std::string context_path_label([[maybe_unused]] memix::MemoryObjectType type) {
-  return "source path";
+fs::path environment_path_for(const fs::path &root,
+                              std::string_view environment_id) {
+  return environments_dir_for(root)
+       / std::format("{}{}", environment_id, kJsonSuffix);
 }
 
 ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
@@ -245,604 +842,51 @@ ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
   return std::move(*temp_dir);
 }
 
-std::vector<ExpressionSelectorJson>
-expression_selector_json(const std::vector<memix::ViewSelector> &selectors) {
-  return selectors
-       | std::views::transform([](const memix::ViewSelector &selector) {
-           return ExpressionSelectorJson{
-               .source_path = selector.source_path.generic_string(),
-               .scope_label = selector.scope_label,
-               .required = selector.required,
-           };
-         })
-       | std::ranges::to<std::vector>();
-}
+struct ExistingTextFileValidation {
+  fs::path path;
+  std::string_view contents;
+  std::string_view label;
+};
 
-std::vector<ManifestInputJson>
-manifest_input_json(const std::vector<ResolvedInput> &inputs) {
-  return inputs
-       | std::views::transform([](const ResolvedInput &input) {
-           return ManifestInputJson{
-               .source_path = input.selector.source_path.generic_string(),
-               .scope_label = input.selector.scope_label,
-               .required = input.selector.required,
-               .selected = input.selected,
-               .blob_id = input.blob.transform(
-                   [](const memix::StoredObject &blob) { return blob.id; }),
-           };
-         })
-       | std::ranges::to<std::vector>();
-}
-
-ViewResult<std::string>
-expression_json_for(const memix::ViewExpression &expression,
-                    std::string_view resolved_source_generation) {
-  simdjson::builder::string_builder builder;
-  const std::vector<ExpressionSelectorJson> selectors =
-      expression_selector_json(expression.selectors);
-  builder.start_object();
-  builder.append_key_value<"schema_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"object_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"kind">("view_expression");
-  builder.append_comma();
-  builder.append_key_value<"view_kind">("file_tree");
-  builder.append_comma();
-  builder.append_key_value<"source_type">(
-      memix::to_string(expression.source_type));
-  builder.append_comma();
-  builder.append_key_value<"name">(expression.name);
-  builder.append_comma();
-  builder.append_key_value<"operator_version">(expression.operator_version);
-  builder.append_comma();
-  builder.append_key_value<"source_generation">(resolved_source_generation);
-  builder.append_comma();
-  builder.append_key_value<"selectors">(selectors);
-  builder.end_object();
-  return json_from_builder(builder);
-}
-
-ViewResult<std::string>
-derivation_basis_json_for(std::string_view expression_id,
-                          const memix::ViewExpression &expression,
-                          std::string_view resolved_source_generation,
-                          const std::vector<ResolvedInput> &inputs) {
-  simdjson::builder::string_builder builder;
-  const std::vector<ManifestInputJson> manifest_inputs =
-      manifest_input_json(inputs);
-  builder.start_object();
-  builder.append_key_value<"schema_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"object_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"kind">("file_tree_derivation");
-  builder.append_comma();
-  builder.append_key_value<"source_type">(
-      memix::to_string(expression.source_type));
-  builder.append_comma();
-  builder.append_key_value<"expression_id">(expression_id);
-  builder.append_comma();
-  builder.append_key_value<"operator_version">(expression.operator_version);
-  builder.append_comma();
-  builder.append_key_value<"source_generation">(resolved_source_generation);
-  builder.append_comma();
-  builder.append_key_value<"inputs">(manifest_inputs);
-  builder.end_object();
-  return json_from_builder(builder);
-}
-
-ViewResult<std::string> manifest_json_for(ManifestJsonRequest request) {
-  simdjson::builder::string_builder builder;
-  const std::vector<ManifestInputJson> manifest_inputs =
-      manifest_input_json(request.inputs.get());
-  builder.start_object();
-  builder.append_key_value<"schema_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"object_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"kind">("file_tree_view");
-  builder.append_comma();
-  builder.append_key_value<"derivation_id">(request.derivation_id);
-  builder.append_comma();
-  builder.append_key_value<"expression_id">(request.expression_id);
-  builder.append_comma();
-  builder.append_key_value<"name">(request.expression.get().name);
-  builder.append_comma();
-  builder.append_key_value<"operator_version">(
-      request.expression.get().operator_version);
-  builder.append_comma();
-  builder.append_key_value<"source_type">(
-      memix::to_string(request.expression.get().source_type));
-  builder.append_comma();
-  builder.append_key_value<"source_generation">(request.source_generation);
-  builder.append_comma();
-  builder.append_key_value<"inputs">(manifest_inputs);
-  builder.append_comma();
-  builder.append_key_value<"tree">(kTreeDir);
-  builder.end_object();
-  return json_from_builder(builder);
-}
-
-ViewResult<std::string>
-resolve_source_generation(const memix::Store &store,
-                          const memix::ViewExpression &expression) {
-  if (expression.source_ref.has_value()
-      && expression.source_generation.has_value()) {
-    return view_error(memix::ErrorKind::InvalidArgument,
-                      "view expression must set only one of source_ref or "
-                      "source_generation");
+ViewVoid
+validate_existing_text_file(const ExistingTextFileValidation &request) {
+  const memix::FsResult<std::string> existing =
+      memix::detail::read_text_file(request.path, request.label);
+  if (!existing) {
+    return view_error(existing.error());
   }
-
-  if (expression.source_generation.has_value()) {
-    const memix::StoreResult<memix::ContextGeneration> generation =
-        store.read_generation(expression.source_type,
-                              *expression.source_generation);
-    if (!generation) {
-      return view_error(generation.error());
-    }
-    return generation->id;
-  }
-
-  const std::string ref =
-      expression.source_ref.value_or(default_ref_for(expression.source_type));
-  if (ref.empty()) {
-    return view_error(memix::ErrorKind::InvalidArgument,
-                      "view expression source_ref must not be empty");
-  }
-  const memix::StoreResult<std::optional<std::string>> value =
-      store.read_ref(ref);
-  if (!value) {
-    return view_error(value.error());
-  }
-  if (!value->has_value()) {
-    return view_error(memix::ErrorKind::NotFound,
-                      std::format("source ref `{}` does not exist", ref));
-  }
-  return **value;
-}
-
-bool is_missing_source_path_error(const memix::StoreError &error) {
-  return error.kind == memix::ErrorKind::ContextPathNotFound;
-}
-
-ResolvedInput selected_input_from_context_file(const memix::StoreFile &file) {
-  return ResolvedInput{
-      .selector =
-          memix::ViewSelector{
-              .source_path = file.context_path,
-              .scope_label = std::nullopt,
-              .required = true,
-          },
-      .selected = true,
-      .blob = file.blob,
-  };
-}
-
-ViewResult<std::vector<ResolvedInput>>
-resolve_all_inputs(const memix::Store &store, memix::MemoryObjectType type,
-                   std::string_view resolved_source_generation) {
-  memix::StoreResult<std::vector<memix::StoreFile>> files =
-      store.list_files(type, resolved_source_generation);
-  if (!files) {
-    return view_error(files.error());
-  }
-
-  return *files | std::views::transform([](const memix::StoreFile &file) {
-    return selected_input_from_context_file(file);
-  }) | std::ranges::to<std::vector>();
-}
-
-ViewResult<std::vector<ResolvedInput>>
-resolve_selected_inputs(const memix::Store &store,
-                        const memix::ViewExpression &expression,
-                        std::string_view resolved_source_generation) {
-  std::vector<ResolvedInput> inputs;
-  inputs.reserve(expression.selectors.size());
-  for (const memix::ViewSelector &selector : expression.selectors) {
-    memix::StoreResult<memix::StoredObject> blob =
-        store.read_file(expression.source_type, selector.source_path,
-                        resolved_source_generation);
-    if (!blob) {
-      if (!selector.required && is_missing_source_path_error(blob.error())) {
-        inputs.push_back(ResolvedInput{
-            .selector = selector,
-            .selected = false,
-            .blob = std::nullopt,
-        });
-        continue;
-      }
-      return view_error(std::move(blob.error()));
-    }
-    inputs.push_back(ResolvedInput{
-        .selector = selector,
-        .selected = true,
-        .blob = std::move(*blob),
-    });
-  }
-  return inputs;
-}
-
-ViewResult<std::vector<ResolvedInput>>
-resolve_inputs(const memix::Store &store,
-               const memix::ViewExpression &expression,
-               std::string_view resolved_source_generation) {
-  if (expression.selectors.empty()) {
-    return resolve_all_inputs(store, expression.source_type,
-                              resolved_source_generation);
-  }
-  return resolve_selected_inputs(store, expression, resolved_source_generation);
-}
-
-ViewVoid validate_expression(const memix::ViewExpression &expression) {
-  if (expression.name.empty()) {
-    return view_error(memix::ErrorKind::InvalidArgument,
-                      "view expression name must not be empty");
-  }
-  if (expression.operator_version.empty()) {
-    return view_error(memix::ErrorKind::InvalidArgument,
-                      "view expression operator_version must not be empty");
-  }
-
-  std::vector<std::string> selector_paths;
-  selector_paths.reserve(expression.selectors.size());
-  const std::string path_label = context_path_label(expression.source_type);
-  for (const memix::ViewSelector &selector : expression.selectors) {
-    const std::string path = selector.source_path.generic_string();
-    if (path.empty()) {
-      return view_error(
-          memix::ErrorKind::InvalidArgument,
-          std::format("view selector {} must not be empty", path_label));
-    }
-    if (std::ranges::find(selector_paths, path) != selector_paths.end()) {
-      return view_error(memix::ErrorKind::InvalidArgument,
-                        std::format("view expression selects duplicate {} `{}`",
-                                    path_label, path));
-    }
-    selector_paths.push_back(path);
+  if (*existing != request.contents) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("immutable view file differs `{}`", request.path.string()));
   }
   return {};
 }
 
-ViewVoid write_immutable_text_file_if_absent(const fs::path &path,
-                                             std::string_view contents) {
-  const memix::FsResult<bool> path_exists = raw_fs::exists(path);
-  if (!path_exists) {
-    return view_error(path_exists.error());
+ViewResult<bool> write_text_file_if_absent(const fs::path &path,
+                                           std::string_view contents) {
+  const memix::FsResult<bool> exists = raw_fs::exists(path);
+  if (!exists) {
+    return view_error(exists.error());
   }
-  if (*path_exists) {
-    const memix::FsResult<std::string> existing_contents =
-        memix::detail::read_text_file(path);
-    if (!existing_contents) {
-      return view_error(existing_contents.error());
+  if (*exists) {
+    const ViewVoid validated = validate_existing_text_file({
+        .path = path,
+        .contents = contents,
+        .label = "view file",
+    });
+    if (!validated) {
+      return std::unexpected(validated.error());
     }
-    if (*existing_contents != contents) {
-      return view_error(
-          memix::ErrorKind::InvalidData,
-          std::format("immutable view file differs `{}`", path.string()));
-    }
-    return {};
+    return false;
   }
-
   const ViewVoid parent_created = ensure_directory(path.parent_path());
   if (!parent_created) {
     return std::unexpected(parent_created.error());
   }
 
-  const ViewResult<fs::path> temp_dir =
+  ViewResult<fs::path> temp_dir =
       unique_temp_dir(path.parent_path(), path.filename().string());
-  if (!temp_dir) {
-    return std::unexpected(temp_dir.error());
-  }
-  const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(*temp_dir);
-  if (!created_temp_dir) {
-    return view_error(created_temp_dir.error());
-  }
-  if (!*created_temp_dir) {
-    return view_error(std::format(
-        "failed to create temporary view directory `{}`", temp_dir->string()));
-  }
-
-  memix::detail::TemporaryDirectoryCleanup temp_dir_cleanup(*temp_dir);
-
-  const fs::path temp_file = *temp_dir / "object";
-  const memix::FsVoid written =
-      memix::detail::write_text_file(temp_file, contents);
-  if (!written) {
-    return view_error(written.error());
-  }
-  const memix::FsVoid temp_file_read_only =
-      memix::detail::apply_read_only_file_permissions(temp_file);
-  if (!temp_file_read_only) {
-    return view_error(temp_file_read_only.error());
-  }
-
-  const memix::FsVoid renamed = raw_fs::rename(temp_file, path);
-  if (!renamed) {
-    const memix::FsResult<bool> raced_existing = raw_fs::exists(path);
-    if (!raced_existing) {
-      return view_error(raced_existing.error());
-    }
-    if (*raced_existing) {
-      const memix::FsResult<std::string> existing_contents =
-          memix::detail::read_text_file(path);
-      if (!existing_contents) {
-        return view_error(existing_contents.error());
-      }
-      if (*existing_contents == contents) {
-        return {};
-      }
-      return view_error(
-          memix::ErrorKind::InvalidData,
-          std::format("immutable view file differs `{}`", path.string()));
-    }
-    return view_error(renamed.error());
-  }
-
-  const memix::FsVoid removed = temp_dir_cleanup.cleanup();
-  if (!removed) {
-    return view_error(removed.error());
-  }
-  return {};
-}
-
-ViewVoid write_expression_object(const memix::Store &store,
-                                 std::string_view expression_id,
-                                 std::string_view expression_json) {
-  const ViewVoid directory_created =
-      ensure_directory(expressions_dir_for(store.root()));
-  if (!directory_created) {
-    return std::unexpected(directory_created.error());
-  }
-  return write_immutable_text_file_if_absent(
-      expression_path_for(store.root(), expression_id), expression_json);
-}
-
-fs::path link_path_for(const fs::path &tree_dir, const ResolvedInput &input) {
-  return tree_dir / input.selector.source_path;
-}
-
-ViewResult<fs::path> symlink_target_for(const fs::path &link_path,
-                                        const memix::StoredObject &blob) {
-  const fs::path target = blob.object_dir / blob.content_path;
-  memix::FsResult<fs::path> relative_target =
-      raw_fs::relative(target, link_path.parent_path());
-  if (!relative_target) {
-    return view_error(std::move(relative_target.error()));
-  }
-  return std::move(*relative_target);
-}
-
-ViewVoid create_input_symlink(const fs::path &tree_dir,
-                              const ResolvedInput &input) {
-  if (!input.selected || !input.blob.has_value()) {
-    return {};
-  }
-
-  const fs::path link_path = link_path_for(tree_dir, input);
-  const ViewVoid parent_created = ensure_directory(link_path.parent_path());
-  if (!parent_created) {
-    return std::unexpected(parent_created.error());
-  }
-  const ViewResult<fs::path> target =
-      symlink_target_for(link_path, *input.blob);
-  if (!target) {
-    return std::unexpected(target.error());
-  }
-  const memix::FsVoid symlink_created =
-      raw_fs::create_symlink(*target, link_path);
-  if (!symlink_created) {
-    return view_error(symlink_created.error());
-  }
-  return {};
-}
-
-ViewVoid create_tree_symlinks(const fs::path &tree_dir,
-                              const std::vector<ResolvedInput> &inputs) {
-  const ViewVoid tree_created = ensure_directory(tree_dir);
-  if (!tree_created) {
-    return std::unexpected(tree_created.error());
-  }
-  for (const ResolvedInput &input : inputs) {
-    const ViewVoid linked = create_input_symlink(tree_dir, input);
-    if (!linked) {
-      return std::unexpected(linked.error());
-    }
-  }
-  return {};
-}
-
-ViewVoid apply_read_only_tree_permissions(const fs::path &tree_dir) {
-  std::vector<fs::path> directories;
-  directories.push_back(tree_dir);
-
-  std::error_code iterator_error;
-  const fs::recursive_directory_iterator end;
-  for (fs::recursive_directory_iterator iterator{tree_dir, iterator_error};
-       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
-    const fs::directory_entry &entry = *iterator;
-    std::error_code entry_error;
-    const bool entry_is_directory = entry.is_directory(entry_error);
-    if (entry_error) {
-      return view_error(memix::detail::make_fs_error(
-          "failed to inspect", entry_error, entry.path()));
-    }
-    if (entry_is_directory) {
-      directories.push_back(entry.path());
-    }
-  }
-  if (iterator_error) {
-    return view_error(memix::detail::make_fs_error("failed to list directory",
-                                                   iterator_error, tree_dir));
-  }
-
-  for (const fs::path &directory : std::views::reverse(directories)) {
-    const memix::FsVoid permissions_applied =
-        memix::detail::apply_read_only_directory_permissions(directory);
-    if (!permissions_applied) {
-      return view_error(permissions_applied.error());
-    }
-  }
-  return {};
-}
-
-ViewVoid apply_writable_tree_permissions(const fs::path &tree_dir) {
-  const memix::FsResult<bool> exists = raw_fs::exists(tree_dir);
-  if (!exists) {
-    return view_error(exists.error());
-  }
-  if (!*exists) {
-    return {};
-  }
-
-  std::vector<fs::path> directories;
-  directories.push_back(tree_dir);
-
-  std::error_code iterator_error;
-  const fs::recursive_directory_iterator end;
-  for (fs::recursive_directory_iterator iterator{tree_dir, iterator_error};
-       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
-    const fs::directory_entry &entry = *iterator;
-    std::error_code entry_error;
-    const bool entry_is_directory = entry.is_directory(entry_error);
-    if (entry_error) {
-      return view_error(memix::detail::make_fs_error(
-          "failed to inspect", entry_error, entry.path()));
-    }
-    if (entry_is_directory) {
-      directories.push_back(entry.path());
-    }
-  }
-  if (iterator_error) {
-    return view_error(memix::detail::make_fs_error("failed to list directory",
-                                                   iterator_error, tree_dir));
-  }
-
-  for (const fs::path &directory : directories) {
-    const memix::FsVoid permissions_applied =
-        memix::detail::apply_writable_directory_permissions(directory);
-    if (!permissions_applied) {
-      return view_error(permissions_applied.error());
-    }
-  }
-  return {};
-}
-
-memix::ViewArtifact
-artifact_for(std::string derivation_id, std::string expression_id,
-             memix::MemoryObjectType source_type, std::string source_generation,
-             const std::vector<ResolvedInput> &inputs,
-             const fs::path &derivation_dir, bool inserted) {
-  std::vector<std::string> input_blob_ids;
-  for (const ResolvedInput &input : inputs) {
-    if (input.selected && input.blob.has_value()) {
-      input_blob_ids.push_back(input.blob->id);
-    }
-  }
-  return memix::ViewArtifact{
-      .derivation_id = std::move(derivation_id),
-      .expression_id = std::move(expression_id),
-      .source_type = source_type,
-      .source_generation = std::move(source_generation),
-      .input_blob_ids = std::move(input_blob_ids),
-      .manifest_path = derivation_dir / std::string(kManifestFilename),
-      .tree_path = tree_dir_for(derivation_dir),
-      .inserted = inserted,
-  };
-}
-
-ViewResult<bool> derivation_exists(const fs::path &derivation_dir) {
-  const memix::FsResult<bool> exists = raw_fs::exists(derivation_dir);
-  if (!exists) {
-    return view_error(exists.error());
-  }
-  if (!*exists) {
-    return false;
-  }
-  const memix::FsResult<bool> is_directory =
-      raw_fs::is_directory(derivation_dir);
-  if (!is_directory) {
-    return view_error(is_directory.error());
-  }
-  if (!*is_directory) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("view derivation path is not a directory `{}`",
-                    derivation_dir.string()));
-  }
-  return true;
-}
-
-ViewVoid verify_input_symlink(const fs::path &tree_dir,
-                              const ResolvedInput &input) {
-  if (!input.selected || !input.blob.has_value()) {
-    return {};
-  }
-  const fs::path link_path = link_path_for(tree_dir, input);
-  const memix::FsResult<bool> is_symlink = raw_fs::is_symlink(link_path);
-  if (!is_symlink) {
-    return view_error(is_symlink.error());
-  }
-  if (!*is_symlink) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view tree path is not a symlink `{}`",
-                                  link_path.string()));
-  }
-
-  const ViewResult<fs::path> expected_target =
-      symlink_target_for(link_path, *input.blob);
-  if (!expected_target) {
-    return std::unexpected(expected_target.error());
-  }
-  const memix::FsResult<fs::path> actual_target =
-      raw_fs::read_symlink(link_path);
-  if (!actual_target) {
-    return view_error(actual_target.error());
-  }
-  if (*actual_target != *expected_target) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view tree symlink target differs `{}`",
-                                  link_path.string()));
-  }
-  return {};
-}
-
-ViewVoid verify_existing_derivation(const ExistingDerivationCheck &check) {
-  const memix::FsResult<std::string> manifest = memix::detail::read_text_file(
-      check.derivation_dir / std::string(kManifestFilename), "view manifest");
-  if (!manifest) {
-    return view_error(manifest.error());
-  }
-  if (*manifest != check.expected_manifest) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view derivation manifest differs `{}`",
-                                  check.derivation_dir.string()));
-  }
-
-  const fs::path tree_dir = tree_dir_for(check.derivation_dir);
-  const memix::FsResult<bool> is_directory = raw_fs::is_directory(tree_dir);
-  if (!is_directory) {
-    return view_error(is_directory.error());
-  }
-  if (!*is_directory) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("view tree directory is missing `{}`", tree_dir.string()));
-  }
-  for (const ResolvedInput &input : check.inputs.get()) {
-    const ViewVoid verified = verify_input_symlink(tree_dir, input);
-    if (!verified) {
-      return std::unexpected(verified.error());
-    }
-  }
-  return {};
-}
-
-ViewResult<bool>
-write_derivation_atomically(const DerivationWriteRequest &request) {
-  const ViewResult<fs::path> temp_dir =
-      unique_temp_dir(request.derivations_dir, request.derivation_id);
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
@@ -851,630 +895,1210 @@ write_derivation_atomically(const DerivationWriteRequest &request) {
     return view_error(created.error());
   }
   if (!*created) {
-    return view_error(std::format(
-        "failed to create temporary view directory `{}`", temp_dir->string()));
+    return view_error(std::format("failed to create temporary view file "
+                                  "directory `{}`",
+                                  temp_dir->string()));
   }
+  memix::detail::TemporaryDirectoryCleanup cleanup(*temp_dir);
 
-  const auto cleanup = [&temp_dir]() {
-    const ViewVoid made_writable =
-        apply_writable_tree_permissions(tree_dir_for(*temp_dir));
-    memix::detail::consume_cleanup_result(std::move(made_writable));
-    const memix::FsResult<std::uintmax_t> removed =
-        raw_fs::remove_all(*temp_dir);
-    memix::detail::consume_cleanup_result(std::move(removed));
-  };
-
-  memix::FsVoid written = memix::detail::write_text_file(
-      *temp_dir / std::string(kManifestFilename), request.manifest_json);
+  const fs::path temp_file = *temp_dir / "object";
+  const memix::FsVoid written =
+      memix::detail::write_text_file(temp_file, contents);
   if (!written) {
-    cleanup();
     return view_error(written.error());
   }
-  written = memix::detail::apply_read_only_file_permissions(
-      *temp_dir / std::string(kManifestFilename));
-  if (!written) {
-    cleanup();
-    return view_error(written.error());
+  const memix::FsVoid read_only =
+      memix::detail::apply_read_only_file_permissions(temp_file);
+  if (!read_only) {
+    return view_error(read_only.error());
   }
 
-  const ViewVoid symlinks_created =
-      create_tree_symlinks(tree_dir_for(*temp_dir), request.inputs.get());
-  if (!symlinks_created) {
-    cleanup();
-    return std::unexpected(symlinks_created.error());
-  }
-  const ViewVoid tree_read_only =
-      apply_read_only_tree_permissions(tree_dir_for(*temp_dir));
-  if (!tree_read_only) {
-    cleanup();
-    return std::unexpected(tree_read_only.error());
-  }
-
-  const memix::FsVoid renamed =
-      raw_fs::rename(*temp_dir, request.derivation_dir);
-  if (!renamed) {
-    const ViewResult<bool> exists = derivation_exists(request.derivation_dir);
-    cleanup();
-    if (exists && *exists) {
+  const memix::FsVoid linked = raw_fs::create_hard_link(temp_file, path);
+  if (!linked) {
+    const memix::FsResult<bool> raced_exists = raw_fs::exists(path);
+    if (!raced_exists) {
+      return view_error(raced_exists.error());
+    }
+    if (*raced_exists) {
+      const ViewVoid validated = validate_existing_text_file({
+          .path = path,
+          .contents = contents,
+          .label = "view file",
+      });
+      if (!validated) {
+        return std::unexpected(validated.error());
+      }
       return false;
     }
-    return view_error(renamed.error());
+    return view_error(linked.error());
+  }
+
+  const memix::FsVoid removed = cleanup.cleanup();
+  if (!removed) {
+    return view_error(removed.error());
   }
   return true;
 }
 
-template <typename Value>
-ViewResult<Value> require_field_as(simdjson::dom::object fields,
-                                   std::string_view key,
-                                   std::string_view expected_type) {
-  Value parsed{};
-  const simdjson::error_code error = fields.at_key(key).get(parsed);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("manifest field `{}` must be {}: {}", key,
-                                  expected_type, simdjson_error_text(error)));
-  }
-  return parsed;
-}
-
-ViewResult<std::string> require_string(simdjson::dom::object fields,
-                                       std::string_view key) {
-  return require_field_as<std::string_view>(fields, key, "a string")
-      .transform([](std::string_view value) { return std::string(value); });
-}
-
-ViewResult<std::string> require_sha256_string(simdjson::dom::object fields,
-                                              std::string_view key) {
-  ViewResult<std::string> value = require_string(fields, key);
-  if (!value) {
-    return std::unexpected(value.error());
-  }
-  const std::string field_name = std::format("manifest field `{}`", key);
-  const ViewVoid valid = validate_sha256_field(*value, field_name);
-  if (!valid) {
-    return std::unexpected(valid.error());
-  }
-  return value;
-}
-
-ViewResult<int> require_int(simdjson::dom::object fields,
-                            std::string_view key) {
-  ViewResult<std::int64_t> parsed =
-      require_field_as<std::int64_t>(fields, key, "an integer");
-  if (!parsed) {
-    return std::unexpected(parsed.error());
-  }
-  if (*parsed < std::numeric_limits<int>::min()
-      || *parsed > std::numeric_limits<int>::max()) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("manifest field `{}` is outside the supported range", key));
-  }
-  return static_cast<int>(*parsed);
-}
-
-ViewResult<bool> require_bool(simdjson::dom::object fields,
-                              std::string_view key) {
-  return require_field_as<bool>(fields, key, "a boolean");
-}
-
-ViewResult<simdjson::dom::array> require_array(simdjson::dom::object fields,
-                                               std::string_view key) {
-  return require_field_as<simdjson::dom::array>(fields, key, "an array");
-}
-
-ViewResult<std::optional<std::string>>
-optional_string_field(simdjson::dom::object fields, std::string_view key) {
-  simdjson::dom::element element;
-  const simdjson::error_code error = fields.at_key(key).get(element);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("manifest field `{}` must exist: {}", key,
-                                  simdjson_error_text(error)));
-  }
-  if (element.is_null()) {
-    return std::optional<std::string>{};
-  }
-  std::string_view value;
-  const simdjson::error_code string_error = element.get(value);
-  if (string_error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("manifest field `{}` must be null or a "
-                                  "string: {}",
-                                  key, simdjson_error_text(string_error)));
-  }
-  return std::optional<std::string>{std::string(value)};
-}
-
-ViewResult<memix::MemoryObjectType>
-read_manifest_source_type(simdjson::dom::object fields) {
-  std::string_view source_type;
-  const simdjson::error_code error =
-      fields.at_key("source_type").get(source_type);
-  if (error == simdjson::NO_SUCH_FIELD) {
-    return memix::MemoryObjectType::Agents;
-  }
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("manifest field `source_type` must be a "
-                                  "string: {}",
-                                  simdjson_error_text(error)));
-  }
-
-  const std::optional<memix::MemoryObjectType> parsed =
-      memix::parse_memory_object_type(source_type);
-  if (!parsed.has_value()) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("manifest source_type is unsupported `{}`", source_type));
-  }
-  return *parsed;
-}
-
 ViewResult<std::string>
-read_manifest_source_generation(simdjson::dom::object fields,
-                                memix::MemoryObjectType source_type) {
-  std::string_view source_generation;
-  const simdjson::error_code error =
-      fields.at_key("source_generation").get(source_generation);
-  if (error == simdjson::SUCCESS) {
-    std::string value(source_generation);
-    const ViewVoid valid =
-        validate_sha256_field(value, "manifest field `source_generation`");
-    if (!valid) {
-      return std::unexpected(valid.error());
+resolve_source_generation(const memix::Store &store,
+                          const memix::ViewIrInput &input) {
+  if (input.version.kind == memix::ViewVersionKind::Generation) {
+    memix::StoreResult<memix::ContextGeneration> generation =
+        store.read_generation(input.type, input.version.value);
+    if (!generation) {
+      return view_error(generation.error());
     }
-    return value;
-  }
-  if (error != simdjson::NO_SUCH_FIELD
-      || source_type != memix::MemoryObjectType::Agents) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("manifest field `source_generation` must be "
-                                  "a string: {}",
-                                  simdjson_error_text(error)));
-  }
-  return require_sha256_string(fields, "agent_generation");
-}
-
-ViewResult<simdjson::dom::object>
-read_manifest_object(const ManifestReadRequest &request,
-                     simdjson::dom::parser &parser,
-                     simdjson::padded_string &padded_json) {
-  const memix::FsResult<std::string> manifest_text =
-      memix::detail::read_text_file(request.manifest_path, "view manifest");
-  if (!manifest_text) {
-    return view_error(manifest_text.error());
-  }
-  padded_json = simdjson::padded_string(*manifest_text);
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("invalid view manifest `{}`: {}",
-                                  request.manifest_path.string(),
-                                  simdjson_error_text(error)));
+    return generation->id;
   }
 
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view manifest must be an object `{}`: {}",
-                                  request.manifest_path.string(),
-                                  simdjson_error_text(error)));
+  const std::string ref_name =
+      version_ref_name(input.type, input.version.value);
+  memix::StoreResult<std::optional<std::string>> ref = store.read_ref(ref_name);
+  if (!ref) {
+    return view_error(ref.error());
   }
-  return fields;
-}
-
-ViewResult<std::optional<std::string>>
-read_manifest_kind(simdjson::dom::object fields) {
-  ViewResult<std::string> kind = require_string(fields, "kind");
-  if (!kind) {
-    return std::unexpected(kind.error());
-  }
-  if (*kind != "file_tree_view") {
-    return std::optional<std::string>{};
-  }
-  return std::optional<std::string>{std::move(*kind)};
-}
-
-ViewVoid validate_manifest_header(simdjson::dom::object fields) {
-  const ViewResult<int> schema_version = require_int(fields, "schema_version");
-  if (!schema_version) {
-    return std::unexpected(schema_version.error());
-  }
-  const ViewResult<int> object_version = require_int(fields, "object_version");
-  if (!object_version) {
-    return std::unexpected(object_version.error());
-  }
-  if (*schema_version != 1 || *object_version != 1) {
+  if (!ref->has_value()) {
     return view_error(
-        memix::ErrorKind::InvalidData,
-        "view manifest schema or object version is not supported");
+        memix::ErrorKind::NotFound,
+        std::format("view source ref `{}` does not exist", ref_name));
   }
-  return {};
+  return **ref;
 }
 
-ViewResult<std::string>
-read_manifest_derivation_id(simdjson::dom::object fields,
-                            const ManifestReadRequest &request) {
-  ViewResult<std::string> derivation_id =
-      require_sha256_string(fields, "derivation_id");
-  if (!derivation_id) {
-    return std::unexpected(derivation_id.error());
+bool path_is_under(const fs::path &path, const fs::path &prefix) {
+  const auto path_components = path | std::ranges::to<std::vector<fs::path>>();
+  const auto prefix_components =
+      prefix | std::ranges::to<std::vector<fs::path>>();
+  if (prefix_components.size() >= path_components.size()) {
+    return false;
   }
-  if (request.derivation_dir.filename() != fs::path(*derivation_id)) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view manifest id does not match directory "
-                                  "`{}`",
-                                  request.manifest_path.string()));
-  }
-  return derivation_id;
+  return std::ranges::equal(prefix_components,
+                            path_components
+                                | std::views::take(prefix_components.size()));
 }
 
-ViewResult<std::vector<std::string>>
-read_manifest_input_blob_ids(simdjson::dom::object fields) {
-  ViewResult<simdjson::dom::array> inputs = require_array(fields, "inputs");
-  if (!inputs) {
-    return std::unexpected(inputs.error());
+fs::path output_path_for(memix::MemoryObjectType type, const fs::path &path) {
+  return fs::path(std::string(memix::to_string(type))) / path;
+}
+
+ViewResult<std::vector<memix::ResolvedViewFile>>
+resolve_input(const memix::Store &store, const memix::ViewIrInput &input) {
+  ViewResult<std::string> generation = resolve_source_generation(store, input);
+  if (!generation) {
+    return std::unexpected(generation.error());
   }
 
-  std::vector<std::string> input_blob_ids;
-  for (const simdjson::dom::element input_element : *inputs) {
-    simdjson::dom::object input_fields;
-    const simdjson::error_code input_error = input_element.get(input_fields);
-    if (input_error != simdjson::SUCCESS) {
-      return view_error(memix::ErrorKind::InvalidData,
-                        std::format("view manifest input must be an object: {}",
-                                    simdjson_error_text(input_error)));
-    }
-    const ViewResult<bool> selected = require_bool(input_fields, "selected");
-    if (!selected) {
-      return std::unexpected(selected.error());
-    }
-    const ViewResult<std::optional<std::string>> blob_id =
-        optional_string_field(input_fields, "blob_id");
-    if (!blob_id) {
-      return std::unexpected(blob_id.error());
-    }
-    if (*selected) {
-      if (!blob_id->has_value()) {
-        return view_error(memix::ErrorKind::InvalidData,
-                          "selected view manifest input must include blob_id");
+  std::vector<memix::ResolvedViewFile> files;
+  if (!input.recursive) {
+    memix::StoreResult<memix::StoredObject> blob =
+        store.read_file(input.type, input.path, *generation);
+    if (!blob) {
+      if (!input.required
+          && blob.error().kind == memix::ErrorKind::ContextPathNotFound) {
+        return files;
       }
-      const ViewVoid blob_id_valid =
-          validate_sha256_field(**blob_id, "manifest input `blob_id`");
-      if (!blob_id_valid) {
-        return std::unexpected(blob_id_valid.error());
+      return view_error(blob.error());
+    }
+    files.push_back(memix::ResolvedViewFile{
+        .locator = input.locator,
+        .type = input.type,
+        .source_path = input.path,
+        .source_generation = *generation,
+        .output_path = output_path_for(input.type, input.path),
+        .blob = std::move(*blob),
+    });
+    return files;
+  }
+
+  memix::StoreResult<std::vector<memix::StoreFile>> source_files =
+      store.list_files(input.type, *generation);
+  if (!source_files) {
+    return view_error(source_files.error());
+  }
+  for (memix::StoreFile &file : *source_files) {
+    if (!path_is_under(file.context_path, input.path)) {
+      continue;
+    }
+    files.push_back(memix::ResolvedViewFile{
+        .locator = input.locator,
+        .type = input.type,
+        .source_path = file.context_path,
+        .source_generation = *generation,
+        .output_path = output_path_for(input.type, file.context_path),
+        .blob = std::move(file.blob),
+    });
+  }
+  if (files.empty() && input.required) {
+    return view_error(memix::ErrorKind::ContextPathNotFound,
+                      std::format("view source directory is empty or "
+                                  "missing `{}`",
+                                  input.locator));
+  }
+  return files;
+}
+
+ViewResult<std::vector<memix::ResolvedViewFile>>
+resolve_inputs(const memix::Store &store, const memix::ViewIr &ir) {
+  std::vector<memix::ResolvedViewFile> files;
+  for (const memix::ViewIrInput &input : ir.inputs) {
+    ViewResult<std::vector<memix::ResolvedViewFile>> input_files =
+        resolve_input(store, input);
+    if (!input_files) {
+      return std::unexpected(input_files.error());
+    }
+    std::ranges::move(*input_files, std::back_inserter(files));
+  }
+
+  std::ranges::sort(files, [](const memix::ResolvedViewFile &lhs,
+                              const memix::ResolvedViewFile &rhs) {
+    const auto lhs_key =
+        std::tuple{lhs.output_path.generic_string(), lhs.blob.id, lhs.locator};
+    const auto rhs_key =
+        std::tuple{rhs.output_path.generic_string(), rhs.blob.id, rhs.locator};
+    return lhs_key < rhs_key;
+  });
+
+  std::vector<memix::ResolvedViewFile> unique_files;
+  for (memix::ResolvedViewFile &file : files) {
+    if (!unique_files.empty()
+        && unique_files.back().output_path == file.output_path) {
+      if (unique_files.back().blob.id != file.blob.id) {
+        return view_error(memix::ErrorKind::Conflict,
+                          std::format("view sources map different blobs "
+                                      "to `{}`",
+                                      file.output_path.generic_string()));
       }
-      input_blob_ids.push_back(**blob_id);
-    } else if (blob_id->has_value()) {
-      return view_error(
-          memix::ErrorKind::InvalidData,
-          "unselected view manifest input must not include blob_id");
+      continue;
+    }
+    unique_files.push_back(std::move(file));
+  }
+  return unique_files;
+}
+
+std::vector<std::string>
+unique_blob_ids(const std::vector<memix::ResolvedViewFile> &files) {
+  std::vector<std::string> ids;
+  ids.reserve(files.size());
+  for (const memix::ResolvedViewFile &file : files) {
+    ids.push_back(file.blob.id);
+  }
+  std::ranges::sort(ids);
+  ids.erase(std::ranges::unique(ids).begin(), ids.end());
+  return ids;
+}
+
+ViewResult<std::string> artifact_id_for(std::string_view derivation_id,
+                                        std::string_view role) {
+  return sha256_text(std::format("{}:{}", role, derivation_id));
+}
+
+ViewResult<std::vector<memix::ViewDerivationOutput>>
+outputs_for_derivation(std::string_view derivation_id,
+                       memix::ViewTargetKind target) {
+  if (target != memix::ViewTargetKind::FileTree) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      "only file_tree target builds are supported in v1");
+  }
+
+  ViewResult<std::string> tree_artifact =
+      artifact_id_for(derivation_id, "file_tree");
+  if (!tree_artifact) {
+    return std::unexpected(tree_artifact.error());
+  }
+  ViewResult<std::string> manifest_artifact =
+      artifact_id_for(derivation_id, "provenance_manifest");
+  if (!manifest_artifact) {
+    return std::unexpected(manifest_artifact.error());
+  }
+  return std::vector<memix::ViewDerivationOutput>{
+      memix::ViewDerivationOutput{
+          .role = "file_tree",
+          .artifact = *tree_artifact,
+          .path = fs::path(kTreeDir),
+      },
+      memix::ViewDerivationOutput{
+          .role = "provenance_manifest",
+          .artifact = *manifest_artifact,
+          .path = fs::path(kManifestFilename),
+      },
+  };
+}
+
+ViewVoid create_symlink_for_file(const fs::path &tree_dir,
+                                 const memix::ResolvedViewFile &file) {
+  const fs::path link_path = tree_dir / file.output_path;
+  const ViewVoid parent_created = ensure_directory(link_path.parent_path());
+  if (!parent_created) {
+    return std::unexpected(parent_created.error());
+  }
+  const fs::path target = file.blob.object_dir / file.blob.content_path;
+  memix::FsResult<fs::path> relative_target =
+      raw_fs::relative(target, link_path.parent_path());
+  if (!relative_target) {
+    return view_error(relative_target.error());
+  }
+  const memix::FsVoid symlink_created =
+      raw_fs::create_symlink(*relative_target, link_path);
+  if (!symlink_created) {
+    return view_error(symlink_created.error());
+  }
+  return {};
+}
+
+ViewVoid create_file_tree(const fs::path &tree_dir,
+                          const std::vector<memix::ResolvedViewFile> &files) {
+  const ViewVoid tree_created = ensure_directory(tree_dir);
+  if (!tree_created) {
+    return std::unexpected(tree_created.error());
+  }
+  for (const memix::ResolvedViewFile &file : files) {
+    const ViewVoid linked = create_symlink_for_file(tree_dir, file);
+    if (!linked) {
+      return std::unexpected(linked.error());
     }
   }
-  return input_blob_ids;
-}
-
-ViewVoid validate_manifest_tree_field(simdjson::dom::object fields) {
-  ViewResult<std::string> tree = require_string(fields, "tree");
-  if (!tree) {
-    return std::unexpected(tree.error());
-  }
-  if (*tree != kTreeDir) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view manifest tree must be `{}`", kTreeDir));
-  }
   return {};
 }
 
-ViewVoid validate_manifest_tree_exists(const ManifestReadRequest &request) {
-  const fs::path tree_path = tree_dir_for(request.derivation_dir);
-  const memix::FsResult<bool> tree_exists = raw_fs::is_directory(tree_path);
-  if (!tree_exists) {
-    return view_error(tree_exists.error());
+ViewVoid freeze_derivation_directory(const fs::path &derivation_dir) {
+  const memix::FsVoid manifest_read_only =
+      memix::detail::apply_read_only_file_permissions(
+          derivation_dir / std::string(kManifestFilename));
+  if (!manifest_read_only) {
+    return view_error(manifest_read_only.error());
   }
-  if (!*tree_exists) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("view tree directory is missing `{}`", tree_path.string()));
-  }
-  return {};
+  return apply_directory_tree_permissions(derivation_dir, false);
 }
 
-ViewResult<std::optional<memix::ViewArtifact>>
-artifact_from_manifest(const ManifestReadRequest &request) {
-  simdjson::dom::parser parser;
-  simdjson::padded_string padded_json;
-  ViewResult<simdjson::dom::object> fields =
-      read_manifest_object(request, parser, padded_json);
-  if (!fields) {
-    return std::unexpected(fields.error());
+ViewVoid thaw_derivation_directory(const fs::path &derivation_dir) {
+  return apply_directory_tree_permissions(derivation_dir, true);
+}
+
+memix::ViewError view_error_from_fs(memix::FsError error) {
+  return memix::detail::translate_error<memix::ViewError>(std::move(error));
+}
+
+ViewVoid fail_after_thawing_derivation(const fs::path &derivation_dir,
+                                       memix::ViewError original_error) {
+  const ViewVoid thawed = thaw_derivation_directory(derivation_dir);
+  if (!thawed) {
+    return view_error(std::format("{}; additionally failed to restore "
+                                  "temporary derivation permissions: {}",
+                                  original_error.message,
+                                  thawed.error().message));
+  }
+  return std::unexpected(std::move(original_error));
+}
+
+ViewResult<bool> handle_derivation_rename_failure(
+    const fs::path &temp_dir, const memix::ViewDerivation &derivation,
+    std::string_view manifest_json, const memix::FsError &rename_error) {
+  const memix::FsResult<bool> raced_exists =
+      raw_fs::exists(derivation.manifest_path.parent_path());
+  if (!raced_exists) {
+    const ViewVoid failed = fail_after_thawing_derivation(
+        temp_dir, view_error_from_fs(raced_exists.error()));
+    return std::unexpected(failed.error());
+  }
+  if (!*raced_exists) {
+    const ViewVoid failed = fail_after_thawing_derivation(
+        temp_dir, view_error_from_fs(rename_error));
+    return std::unexpected(failed.error());
   }
 
-  ViewResult<std::optional<std::string>> kind = read_manifest_kind(*fields);
-  if (!kind) {
-    return std::unexpected(kind.error());
+  const ViewVoid validated = validate_existing_text_file({
+      .path = derivation.manifest_path,
+      .contents = manifest_json,
+      .label = "view derivation manifest",
+  });
+  if (!validated) {
+    const ViewVoid failed =
+        fail_after_thawing_derivation(temp_dir, validated.error());
+    return std::unexpected(failed.error());
   }
-  if (!kind->has_value()) {
-    return std::optional<memix::ViewArtifact>{};
+  const ViewVoid thawed = thaw_derivation_directory(temp_dir);
+  if (!thawed) {
+    return std::unexpected(thawed.error());
+  }
+  return false;
+}
+
+ViewResult<bool>
+write_derivation_directory(const memix::Store &store,
+                           const memix::ViewDerivation &derivation,
+                           std::string_view manifest_json) {
+  const fs::path derivations_dir = derivations_dir_for(store.root());
+  const ViewVoid derivations_created = ensure_directory(derivations_dir);
+  if (!derivations_created) {
+    return std::unexpected(derivations_created.error());
+  }
+  const fs::path derivation_dir =
+      derivation_dir_for(store.root(), derivation.id);
+  const memix::FsResult<bool> exists = raw_fs::exists(derivation_dir);
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (*exists) {
+    const ViewVoid validated = validate_existing_text_file({
+        .path = derivation.manifest_path,
+        .contents = manifest_json,
+        .label = "view derivation manifest",
+    });
+    if (!validated) {
+      return std::unexpected(validated.error());
+    }
+    return false;
   }
 
-  const ViewVoid header_valid = validate_manifest_header(*fields);
-  if (!header_valid) {
-    return std::unexpected(header_valid.error());
+  ViewResult<fs::path> temp_dir =
+      unique_temp_dir(derivations_dir, derivation.id);
+  if (!temp_dir) {
+    return std::unexpected(temp_dir.error());
   }
-  ViewResult<std::string> derivation_id =
-      read_manifest_derivation_id(*fields, request);
-  if (!derivation_id) {
-    return std::unexpected(derivation_id.error());
+  const memix::FsResult<bool> created = raw_fs::create_directory(*temp_dir);
+  if (!created) {
+    return view_error(created.error());
   }
-  ViewResult<std::string> expression_id =
-      require_sha256_string(*fields, "expression_id");
-  if (!expression_id) {
-    return std::unexpected(expression_id.error());
+  if (!*created) {
+    return view_error(std::format("failed to create temporary view "
+                                  "derivation `{}`",
+                                  temp_dir->string()));
   }
-  ViewResult<memix::MemoryObjectType> source_type =
-      read_manifest_source_type(*fields);
-  if (!source_type) {
-    return std::unexpected(source_type.error());
+  memix::detail::TemporaryDirectoryCleanup cleanup(*temp_dir);
+  const memix::FsVoid written = memix::detail::write_text_file(
+      *temp_dir / std::string(kManifestFilename), manifest_json);
+  if (!written) {
+    return view_error(written.error());
   }
-  ViewResult<std::string> source_generation =
-      read_manifest_source_generation(*fields, *source_type);
-  if (!source_generation) {
-    return std::unexpected(source_generation.error());
+  const ViewVoid tree_created = create_file_tree(
+      *temp_dir / std::string(kTreeDir), derivation.resolved_files);
+  if (!tree_created) {
+    return std::unexpected(tree_created.error());
   }
-  ViewResult<std::vector<std::string>> input_blob_ids =
-      read_manifest_input_blob_ids(*fields);
-  if (!input_blob_ids) {
-    return std::unexpected(input_blob_ids.error());
+  const ViewVoid frozen = freeze_derivation_directory(*temp_dir);
+  if (!frozen) {
+    const ViewVoid failed =
+        fail_after_thawing_derivation(*temp_dir, frozen.error());
+    return std::unexpected(failed.error());
   }
-  const ViewVoid tree_field_valid = validate_manifest_tree_field(*fields);
-  if (!tree_field_valid) {
-    return std::unexpected(tree_field_valid.error());
+  const memix::FsVoid renamed = raw_fs::rename(*temp_dir, derivation_dir);
+  if (!renamed) {
+    return handle_derivation_rename_failure(*temp_dir, derivation,
+                                            manifest_json, renamed.error());
   }
-  const ViewVoid tree_exists = validate_manifest_tree_exists(request);
-  if (!tree_exists) {
-    return std::unexpected(tree_exists.error());
-  }
-
-  return std::optional<memix::ViewArtifact>{memix::ViewArtifact{
-      .derivation_id = std::move(*derivation_id),
-      .expression_id = std::move(*expression_id),
-      .source_type = *source_type,
-      .source_generation = std::move(*source_generation),
-      .input_blob_ids = std::move(*input_blob_ids),
-      .manifest_path = request.manifest_path,
-      .tree_path = tree_dir_for(request.derivation_dir),
-      .inserted = false,
-  }};
+  cleanup.release();
+  return true;
 }
 
 ViewResult<std::string>
-resolve_file_tree_derivation_id(const memix::ViewService &service,
-                                std::string_view derivation_prefix) {
-  const ViewVoid prefix_valid = validate_derivation_prefix(derivation_prefix);
-  if (!prefix_valid) {
-    return std::unexpected(prefix_valid.error());
+environment_basis_json_for(const memix::ViewDerivation &derivation) {
+  const std::vector<BindingJson> bindings{
+      BindingJson{
+          .mount = "tree",
+          .derivation = derivation.id,
+          .output = "file_tree",
+      },
+  };
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">("memix.view.environment.basis.v1");
+  builder.append_comma();
+  builder.append_key_value<"bindings">(bindings);
+  builder.append_comma();
+  builder.append_key_value<"derivation">(derivation.id);
+  builder.end_object();
+  return json_from_builder(builder);
+}
+
+memix::ViewEnvironmentClosure
+closure_for(const memix::ViewDerivation &derivation) {
+  std::vector<std::string> artifacts;
+  artifacts.reserve(derivation.outputs.size());
+  for (const memix::ViewDerivationOutput &output : derivation.outputs) {
+    artifacts.push_back(output.artifact);
+  }
+  std::ranges::sort(artifacts);
+  artifacts.erase(std::ranges::unique(artifacts).begin(), artifacts.end());
+  return memix::ViewEnvironmentClosure{
+      .derivations = {derivation.id},
+      .artifacts = std::move(artifacts),
+      .raw_objects = unique_blob_ids(derivation.resolved_files),
+  };
+}
+
+ViewResult<memix::ViewEnvironment>
+environment_for_derivation(const memix::Store &store,
+                           memix::ViewDerivation derivation) {
+  ViewResult<std::string> basis = environment_basis_json_for(derivation);
+  if (!basis) {
+    return std::unexpected(basis.error());
+  }
+  ViewResult<std::string> environment_id = sha256_text(*basis);
+  if (!environment_id) {
+    return std::unexpected(environment_id.error());
   }
 
-  const ViewResult<std::vector<memix::ViewArtifact>> artifacts =
-      service.list_file_trees();
-  if (!artifacts) {
-    return std::unexpected(artifacts.error());
-  }
+  memix::ViewEnvironment environment;
+  environment.id = *environment_id;
+  environment.manifest_path =
+      environment_path_for(store.root(), environment.id);
+  environment.bindings = {
+      memix::ViewEnvironmentBinding{
+          .mount = fs::path(kTreeDir),
+          .derivation_id = derivation.id,
+          .output_role = "file_tree",
+      },
+  };
+  environment.closure = closure_for(derivation);
+  environment.derivation = std::move(derivation);
 
+  ViewResult<std::string> json = memix::view_environment_json(environment);
+  if (!json) {
+    return std::unexpected(json.error());
+  }
+  const ViewResult<bool> inserted =
+      write_text_file_if_absent(environment.manifest_path, *json);
+  if (!inserted) {
+    return std::unexpected(inserted.error());
+  }
+  environment.inserted = *inserted;
+  return environment;
+}
+
+ViewResult<std::string> resolve_unique_environment_id(const memix::Store &store,
+                                                      std::string_view prefix) {
+  if (!memix::detail::is_lower_hex_prefix(prefix)) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("environment id prefix must be lowercase "
+                                  "hex `{}`",
+                                  prefix));
+  }
+  const fs::path environments_dir = environments_dir_for(store.root());
+  const memix::FsResult<bool> exists = raw_fs::exists(environments_dir);
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (!*exists) {
+    return view_error(memix::ErrorKind::NotFound,
+                      std::format("no environment matches `{}`", prefix));
+  }
   std::vector<std::string> matches;
-  for (const memix::ViewArtifact &artifact : *artifacts) {
-    if (artifact.derivation_id.starts_with(derivation_prefix)) {
-      matches.push_back(artifact.derivation_id);
+  std::error_code iterator_error;
+  const fs::directory_iterator end;
+  for (fs::directory_iterator iterator{environments_dir, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    if (!entry.is_regular_file(entry_error)) {
+      if (entry_error) {
+        return view_error(memix::detail::make_fs_error(
+            "failed to inspect", entry_error, entry.path()));
+      }
+      continue;
     }
+    std::string name = entry.path().filename().string();
+    if (!name.ends_with(kJsonSuffix)) {
+      continue;
+    }
+    name.resize(name.size() - kJsonSuffix.size());
+    if (memix::detail::is_lower_hex_sha256(name) && name.starts_with(prefix)) {
+      matches.push_back(std::move(name));
+    }
+  }
+  if (iterator_error) {
+    return view_error(memix::detail::make_fs_error(
+        "failed to list directory", iterator_error, environments_dir));
   }
   if (matches.empty()) {
     return view_error(memix::ErrorKind::NotFound,
-                      std::format("no view derivation matches prefix `{}`",
-                                  derivation_prefix));
+                      std::format("no environment matches `{}`", prefix));
   }
   if (matches.size() > 1) {
     return view_error(
         memix::ErrorKind::Conflict,
-        std::format("view derivation prefix `{}` is ambiguous ({} matches)",
-                    derivation_prefix, matches.size()));
+        std::format("environment prefix `{}` is ambiguous", prefix));
   }
   return matches.front();
+}
+
+ViewResult<std::vector<std::string>>
+read_string_array(simdjson::dom::object fields, std::string_view key) {
+  simdjson::dom::array values;
+  const simdjson::error_code error = fields.at_key(key).get(values);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment field `{}` must be an array: "
+                                  "{}",
+                                  key, simdjson_error_text(error)));
+  }
+  std::vector<std::string> output;
+  for (const simdjson::dom::element value_element : values) {
+    std::string_view value;
+    const simdjson::error_code value_error = value_element.get(value);
+    if (value_error != simdjson::SUCCESS) {
+      return view_error(memix::ErrorKind::InvalidData,
+                        std::format("environment field `{}` values must be "
+                                    "strings: {}",
+                                    key, simdjson_error_text(value_error)));
+    }
+    output.emplace_back(value);
+  }
+  return output;
+}
+
+ViewResult<std::string> read_string_field(simdjson::dom::object fields,
+                                          std::string_view key) {
+  return require_field_as<std::string_view>(fields, key, "a string")
+      .transform([](std::string_view value) { return std::string(value); });
+}
+
+ViewResult<memix::MemoryObjectType>
+read_memory_object_type(simdjson::dom::object fields, std::string_view key) {
+  ViewResult<std::string> type_name = read_string_field(fields, key);
+  if (!type_name) {
+    return std::unexpected(type_name.error());
+  }
+  const std::optional<memix::MemoryObjectType> type =
+      memix::parse_memory_object_type(*type_name);
+  if (!type.has_value()) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("unsupported memory object type `{}`", *type_name));
+  }
+  return *type;
+}
+
+ViewResult<memix::ViewDerivationOutput>
+derivation_output_from_json(simdjson::dom::element output_element) {
+  simdjson::dom::object fields;
+  const simdjson::error_code error = output_element.get(fields);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("derivation output must be an object: {}",
+                                  simdjson_error_text(error)));
+  }
+  ViewResult<std::string> role = read_string_field(fields, "role");
+  ViewResult<std::string> artifact = read_string_field(fields, "artifact");
+  ViewResult<std::string> path = read_string_field(fields, "path");
+  if (!role) {
+    return std::unexpected(role.error());
+  }
+  if (!artifact) {
+    return std::unexpected(artifact.error());
+  }
+  if (!path) {
+    return std::unexpected(path.error());
+  }
+  return memix::ViewDerivationOutput{
+      .role = std::move(*role),
+      .artifact = std::move(*artifact),
+      .path = fs::path(std::move(*path)),
+  };
+}
+
+ViewResult<std::vector<memix::ViewDerivationOutput>>
+derivation_outputs_from_json(simdjson::dom::object fields) {
+  simdjson::dom::array outputs;
+  const simdjson::error_code error = fields.at_key("outputs").get(outputs);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("derivation outputs must be an array: {}",
+                                  simdjson_error_text(error)));
+  }
+  std::vector<memix::ViewDerivationOutput> parsed;
+  for (const simdjson::dom::element output_element : outputs) {
+    ViewResult<memix::ViewDerivationOutput> output =
+        derivation_output_from_json(output_element);
+    if (!output) {
+      return std::unexpected(output.error());
+    }
+    parsed.push_back(std::move(*output));
+  }
+  return parsed;
+}
+
+ViewResult<memix::ResolvedViewFile>
+resolved_file_from_json(const memix::Store &store,
+                        simdjson::dom::element input_element) {
+  simdjson::dom::object fields;
+  const simdjson::error_code error = input_element.get(fields);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("resolved input must be an object: {}",
+                                  simdjson_error_text(error)));
+  }
+  ViewResult<std::string> locator = read_string_field(fields, "locator");
+  ViewResult<memix::MemoryObjectType> type =
+      read_memory_object_type(fields, "type");
+  ViewResult<std::string> path = read_string_field(fields, "path");
+  ViewResult<std::string> output_path =
+      read_string_field(fields, "output_path");
+  ViewResult<std::string> generation = read_string_field(fields, "generation");
+  ViewResult<std::string> blob_id = read_string_field(fields, "blob");
+  if (!locator) {
+    return std::unexpected(locator.error());
+  }
+  if (!type) {
+    return std::unexpected(type.error());
+  }
+  if (!path) {
+    return std::unexpected(path.error());
+  }
+  if (!output_path) {
+    return std::unexpected(output_path.error());
+  }
+  if (!generation) {
+    return std::unexpected(generation.error());
+  }
+  if (!blob_id) {
+    return std::unexpected(blob_id.error());
+  }
+
+  memix::StoreResult<memix::StoredObject> blob =
+      store.read_blob(*type, *blob_id);
+  if (!blob) {
+    return view_error(blob.error());
+  }
+  return memix::ResolvedViewFile{
+      .locator = std::move(*locator),
+      .type = *type,
+      .source_path = fs::path(std::move(*path)),
+      .source_generation = std::move(*generation),
+      .output_path = fs::path(std::move(*output_path)),
+      .blob = std::move(*blob),
+  };
+}
+
+ViewResult<std::vector<memix::ResolvedViewFile>>
+resolved_files_from_json(const memix::Store &store,
+                         simdjson::dom::object fields) {
+  simdjson::dom::array inputs;
+  const simdjson::error_code error =
+      fields.at_key("resolved_inputs").get(inputs);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("derivation resolved_inputs must be an "
+                                  "array: {}",
+                                  simdjson_error_text(error)));
+  }
+  std::vector<memix::ResolvedViewFile> files;
+  for (const simdjson::dom::element input_element : inputs) {
+    ViewResult<memix::ResolvedViewFile> file =
+        resolved_file_from_json(store, input_element);
+    if (!file) {
+      return std::unexpected(file.error());
+    }
+    files.push_back(std::move(*file));
+  }
+  return files;
+}
+
+ViewResult<memix::ViewDerivation>
+derivation_from_json(const memix::Store &store, std::string_view text,
+                     const fs::path &manifest_path) {
+  const simdjson::padded_string padded_json(text);
+  simdjson::dom::parser parser;
+  simdjson::dom::element document;
+  simdjson::error_code error = parser.parse(padded_json).get(document);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("invalid derivation JSON `{}`: {}",
+                                  manifest_path.string(),
+                                  simdjson_error_text(error)));
+  }
+  simdjson::dom::object fields;
+  error = document.get(fields);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("derivation JSON must be an object "
+                                  "`{}`: {}",
+                                  manifest_path.string(),
+                                  simdjson_error_text(error)));
+  }
+
+  ViewResult<std::string> schema = read_string_field(fields, "schema");
+  ViewResult<std::string> derivation_id =
+      read_string_field(fields, "derivation_id");
+  ViewResult<std::string> ir_hash = read_string_field(fields, "ir_hash");
+  ViewResult<std::string> target_name = read_string_field(fields, "target");
+  if (!schema) {
+    return std::unexpected(schema.error());
+  }
+  if (!derivation_id) {
+    return std::unexpected(derivation_id.error());
+  }
+  if (!ir_hash) {
+    return std::unexpected(ir_hash.error());
+  }
+  if (!target_name) {
+    return std::unexpected(target_name.error());
+  }
+  if (*schema != kDerivationSchema) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("unsupported derivation schema `{}`", *schema));
+  }
+  if (manifest_path.parent_path().filename() != *derivation_id) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("derivation manifest id `{}` does not match "
+                                  "path `{}`",
+                                  *derivation_id, manifest_path.string()));
+  }
+  ViewResult<memix::ViewTargetKind> target =
+      parse_required_target(*target_name);
+  if (!target) {
+    return std::unexpected(target.error());
+  }
+  ViewResult<std::vector<memix::ResolvedViewFile>> resolved_files =
+      resolved_files_from_json(store, fields);
+  if (!resolved_files) {
+    return std::unexpected(resolved_files.error());
+  }
+  ViewResult<std::vector<memix::ViewDerivationOutput>> outputs =
+      derivation_outputs_from_json(fields);
+  if (!outputs) {
+    return std::unexpected(outputs.error());
+  }
+
+  return memix::ViewDerivation{
+      .id = std::move(*derivation_id),
+      .ir_hash = std::move(*ir_hash),
+      .target = *target,
+      .resolved_files = std::move(*resolved_files),
+      .outputs = std::move(*outputs),
+      .manifest_path = manifest_path,
+      .tree_path = manifest_path.parent_path() / std::string(kTreeDir),
+      .inserted = false,
+  };
+}
+
+ViewResult<memix::ViewDerivation>
+resolve_derivation(const memix::Store &store, std::string_view derivation_id) {
+  if (!memix::detail::is_lower_hex_sha256(derivation_id)) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("derivation id is not a lowercase sha256 "
+                                  "digest `{}`",
+                                  derivation_id));
+  }
+  const fs::path manifest_path = derivation_dir_for(store.root(), derivation_id)
+                               / std::string(kManifestFilename);
+  memix::FsResult<std::string> text =
+      memix::detail::read_text_file(manifest_path, "view derivation");
+  if (!text) {
+    return view_error(text.error());
+  }
+  return derivation_from_json(store, *text, manifest_path);
+}
+
+ViewResult<memix::ViewEnvironment>
+environment_from_json(std::string_view text, const fs::path &manifest_path) {
+  const simdjson::padded_string padded_json(text);
+  simdjson::dom::parser parser;
+  simdjson::dom::element document;
+  simdjson::error_code error = parser.parse(padded_json).get(document);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("invalid environment JSON `{}`: {}",
+                                  manifest_path.string(),
+                                  simdjson_error_text(error)));
+  }
+  simdjson::dom::object fields;
+  error = document.get(fields);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment JSON must be an object "
+                                  "`{}`: {}",
+                                  manifest_path.string(),
+                                  simdjson_error_text(error)));
+  }
+  ViewResult<std::string> schema =
+      require_field_as<std::string_view>(fields, "schema", "a string")
+          .transform([](std::string_view value) { return std::string(value); });
+  if (!schema) {
+    return std::unexpected(schema.error());
+  }
+  if (*schema != kEnvironmentSchema) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("unsupported environment schema `{}`", *schema));
+  }
+  ViewResult<std::string> environment_id =
+      require_field_as<std::string_view>(fields, "environment_id", "a string")
+          .transform([](std::string_view value) { return std::string(value); });
+  if (!environment_id) {
+    return std::unexpected(environment_id.error());
+  }
+  if (!memix::detail::is_lower_hex_sha256(*environment_id)) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment id is not a lowercase sha256 "
+                                  "digest `{}`",
+                                  *environment_id));
+  }
+  std::string expected_environment_id = manifest_path.filename().string();
+  if (!expected_environment_id.ends_with(kJsonSuffix)) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment manifest path must end with "
+                                  "`.json` `{}`",
+                                  manifest_path.string()));
+  }
+  expected_environment_id.resize(expected_environment_id.size()
+                                 - kJsonSuffix.size());
+  if (*environment_id != expected_environment_id) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment manifest id `{}` does not "
+                                  "match path `{}`",
+                                  *environment_id, manifest_path.string()));
+  }
+
+  memix::ViewEnvironment environment;
+  environment.id = *environment_id;
+  environment.manifest_path = manifest_path;
+
+  simdjson::dom::array bindings;
+  error = fields.at_key("bindings").get(bindings);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment bindings must be an array: "
+                                  "{}",
+                                  simdjson_error_text(error)));
+  }
+  for (const simdjson::dom::element binding_element : bindings) {
+    simdjson::dom::object binding_fields;
+    error = binding_element.get(binding_fields);
+    if (error != simdjson::SUCCESS) {
+      return view_error(memix::ErrorKind::InvalidData,
+                        std::format("environment binding must be an object: "
+                                    "{}",
+                                    simdjson_error_text(error)));
+    }
+    ViewResult<std::string> mount =
+        require_field_as<std::string_view>(binding_fields, "mount", "a string")
+            .transform(
+                [](std::string_view value) { return std::string(value); });
+    ViewResult<std::string> derivation =
+        require_field_as<std::string_view>(binding_fields, "derivation",
+                                           "a string")
+            .transform(
+                [](std::string_view value) { return std::string(value); });
+    ViewResult<std::string> output =
+        require_field_as<std::string_view>(binding_fields, "output", "a string")
+            .transform(
+                [](std::string_view value) { return std::string(value); });
+    if (!mount) {
+      return std::unexpected(mount.error());
+    }
+    if (!derivation) {
+      return std::unexpected(derivation.error());
+    }
+    if (!output) {
+      return std::unexpected(output.error());
+    }
+    environment.bindings.push_back(memix::ViewEnvironmentBinding{
+        .mount = fs::path(*mount),
+        .derivation_id = *derivation,
+        .output_role = *output,
+    });
+  }
+
+  simdjson::dom::object closure_fields;
+  error = fields.at_key("closure").get(closure_fields);
+  if (error != simdjson::SUCCESS) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("environment closure must be an object: "
+                                  "{}",
+                                  simdjson_error_text(error)));
+  }
+  ViewResult<std::vector<std::string>> derivations =
+      read_string_array(closure_fields, "derivations");
+  ViewResult<std::vector<std::string>> artifacts =
+      read_string_array(closure_fields, "artifacts");
+  ViewResult<std::vector<std::string>> raw_objects =
+      read_string_array(closure_fields, "raw_objects");
+  if (!derivations) {
+    return std::unexpected(derivations.error());
+  }
+  if (!artifacts) {
+    return std::unexpected(artifacts.error());
+  }
+  if (!raw_objects) {
+    return std::unexpected(raw_objects.error());
+  }
+  environment.closure = memix::ViewEnvironmentClosure{
+      .derivations = std::move(*derivations),
+      .artifacts = std::move(*artifacts),
+      .raw_objects = std::move(*raw_objects),
+  };
+  return environment;
 }
 
 } // namespace
 
 namespace memix {
 
-ViewResult<ViewArtifact>
-ViewService::build_file_tree(const ViewExpression &expression) const {
-  const ViewVoid expression_valid = validate_expression(expression);
-  if (!expression_valid) {
-    return std::unexpected(expression_valid.error());
+std::string_view to_string(ViewTargetKind target) noexcept {
+  const auto *it = std::ranges::find(kViewTargetKindTokens, target,
+                                     &ViewTargetKindToken::value);
+  if (it == std::ranges::end(kViewTargetKindTokens)) {
+    return {};
   }
-
-  ViewResult<std::string> source_generation =
-      resolve_source_generation(store_, expression);
-  if (!source_generation) {
-    return std::unexpected(source_generation.error());
-  }
-  ViewResult<std::vector<ResolvedInput>> inputs =
-      resolve_inputs(store_, expression, *source_generation);
-  if (!inputs) {
-    return std::unexpected(inputs.error());
-  }
-
-  ViewResult<std::string> expression_json =
-      expression_json_for(expression, *source_generation);
-  if (!expression_json) {
-    return std::unexpected(expression_json.error());
-  }
-  memix::detail::CommonResult<std::string> expression_id =
-      memix::detail::sha256_text(*expression_json);
-  if (!expression_id) {
-    return view_error(std::move(expression_id.error()));
-  }
-  const ViewVoid expression_written =
-      write_expression_object(store_, *expression_id, *expression_json);
-  if (!expression_written) {
-    return std::unexpected(expression_written.error());
-  }
-
-  ViewResult<std::string> derivation_basis = derivation_basis_json_for(
-      *expression_id, expression, *source_generation, *inputs);
-  if (!derivation_basis) {
-    return std::unexpected(derivation_basis.error());
-  }
-  memix::detail::CommonResult<std::string> derivation_id =
-      memix::detail::sha256_text(*derivation_basis);
-  if (!derivation_id) {
-    return view_error(std::move(derivation_id.error()));
-  }
-  ViewResult<std::string> manifest_json = manifest_json_for({
-      .derivation_id = *derivation_id,
-      .expression_id = *expression_id,
-      .expression = expression,
-      .source_generation = *source_generation,
-      .inputs = *inputs,
-  });
-  if (!manifest_json) {
-    return std::unexpected(manifest_json.error());
-  }
-
-  const fs::path derivations_dir = derivations_dir_for(store_.root());
-  const ViewVoid derivations_created = ensure_directory(derivations_dir);
-  if (!derivations_created) {
-    return std::unexpected(derivations_created.error());
-  }
-  const fs::path derivation_dir =
-      derivation_dir_for(store_.root(), *derivation_id);
-  ViewResult<bool> exists = derivation_exists(derivation_dir);
-  if (!exists) {
-    return std::unexpected(exists.error());
-  }
-  if (*exists) {
-    const ViewVoid verified = verify_existing_derivation({
-        .derivation_dir = derivation_dir,
-        .expected_manifest = *manifest_json,
-        .inputs = *inputs,
-    });
-    if (!verified) {
-      return std::unexpected(verified.error());
-    }
-    return artifact_for(std::move(*derivation_id), std::move(*expression_id),
-                        expression.source_type, std::move(*source_generation),
-                        *inputs, derivation_dir, false);
-  }
-
-  const ViewResult<bool> inserted = write_derivation_atomically({
-      .derivations_dir = derivations_dir,
-      .derivation_dir = derivation_dir,
-      .derivation_id = *derivation_id,
-      .manifest_json = *manifest_json,
-      .inputs = *inputs,
-  });
-  if (!inserted) {
-    return std::unexpected(inserted.error());
-  }
-
-  const ViewVoid verified = verify_existing_derivation({
-      .derivation_dir = derivation_dir,
-      .expected_manifest = *manifest_json,
-      .inputs = *inputs,
-  });
-  if (!verified) {
-    return std::unexpected(verified.error());
-  }
-  return artifact_for(std::move(*derivation_id), std::move(*expression_id),
-                      expression.source_type, std::move(*source_generation),
-                      *inputs, derivation_dir, *inserted);
+  return it->token;
 }
 
-ViewResult<ViewArtifact>
-ViewService::resolve_file_tree(std::string_view derivation_prefix) const {
-  ViewResult<std::string> derivation_id =
-      resolve_file_tree_derivation_id(*this, derivation_prefix);
+std::optional<ViewTargetKind>
+parse_view_target_kind(std::string_view value) noexcept {
+  const auto *it = std::ranges::find(kViewTargetKindTokens, value,
+                                     &ViewTargetKindToken::token);
+  if (it == std::ranges::end(kViewTargetKindTokens)) {
+    return std::nullopt;
+  }
+  return it->value;
+}
+
+std::string_view to_string(ViewVersionKind kind) noexcept {
+  const auto *it = std::ranges::find(kViewVersionKindTokens, kind,
+                                     &ViewVersionKindToken::value);
+  if (it == std::ranges::end(kViewVersionKindTokens)) {
+    return {};
+  }
+  return it->token;
+}
+
+ViewResult<AuthoredViewExpression>
+ViewService::parse_expression(std::string_view expression_or_sources) const {
+  const std::string trimmed = trim_copy(expression_or_sources);
+  if (trimmed.empty()) {
+    return AuthoredViewExpression{};
+  }
+  if (trimmed.front() == '{') {
+    return parse_expression_json(trimmed);
+  }
+  return expression_from_sources(split_source_list(trimmed));
+}
+
+ViewResult<AuthoredViewExpression>
+ViewService::expression_from_sources(std::vector<std::string> sources,
+                                     ViewTargetKind target) const {
+  const Store &unused_store = store_;
+  (void)unused_store;
+  return AuthoredViewExpression{
+      .schema = std::string(kExpressionSchema),
+      .profile = {},
+      .sources = std::move(sources),
+      .target = target,
+  };
+}
+
+ViewResult<ViewIr>
+ViewService::lower_to_ir(const AuthoredViewExpression &expression) const {
+  const Store &unused_store = store_;
+  (void)unused_store;
+  if (!expression.schema.empty() && expression.schema != kExpressionSchema) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("unsupported view expression schema "
+                                  "`{}`",
+                                  expression.schema));
+  }
+  ViewIr ir;
+  ir.target.kind = expression.target;
+  if (expression.target == ViewTargetKind::ContextPack) {
+    ir.target.format = "markdown";
+  }
+  ir.inputs.reserve(expression.sources.size());
+  for (const std::string &source : expression.sources) {
+    ViewResult<ViewIrInput> input = parse_locator(source);
+    if (!input) {
+      return std::unexpected(input.error());
+    }
+    ir.inputs.push_back(std::move(*input));
+  }
+  return ir;
+}
+
+ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
+  if (ir.target.kind != ViewTargetKind::FileTree) {
+    return view_error(ErrorKind::InvalidArgument,
+                      "only file_tree target builds are supported in v1");
+  }
+  ViewResult<std::string> ir_json = view_ir_json(ir);
+  if (!ir_json) {
+    return std::unexpected(ir_json.error());
+  }
+  ViewResult<std::string> ir_hash = sha256_text(*ir_json);
+  if (!ir_hash) {
+    return std::unexpected(ir_hash.error());
+  }
+  ViewResult<std::vector<ResolvedViewFile>> files = resolve_inputs(store_, ir);
+  if (!files) {
+    return std::unexpected(files.error());
+  }
+  const std::vector<ResolvedInputJson> inputs = resolved_input_json(*files);
+  ViewResult<std::string> basis =
+      ir_basis_json_for(*ir_hash, inputs, ir.target.kind);
+  if (!basis) {
+    return std::unexpected(basis.error());
+  }
+  ViewResult<std::string> derivation_id = sha256_text(*basis);
   if (!derivation_id) {
     return std::unexpected(derivation_id.error());
   }
+  ViewResult<std::vector<ViewDerivationOutput>> outputs =
+      outputs_for_derivation(*derivation_id, ir.target.kind);
+  if (!outputs) {
+    return std::unexpected(outputs.error());
+  }
 
-  ViewResult<std::optional<ViewArtifact>> artifact = artifact_from_manifest({
-      .manifest_path = derivation_dir_for(store_.root(), *derivation_id)
-                     / std::string(kManifestFilename),
-      .derivation_dir = derivation_dir_for(store_.root(), *derivation_id),
-  });
-  if (!artifact) {
-    return std::unexpected(artifact.error());
+  const fs::path derivation_dir =
+      derivation_dir_for(store_.root(), *derivation_id);
+  ViewDerivation derivation{
+      .id = *derivation_id,
+      .ir_hash = *ir_hash,
+      .target = ir.target.kind,
+      .resolved_files = std::move(*files),
+      .outputs = std::move(*outputs),
+      .manifest_path = derivation_dir / std::string(kManifestFilename),
+      .tree_path = derivation_dir / std::string(kTreeDir),
+      .inserted = false,
+  };
+  ViewResult<std::string> manifest = view_derivation_json(derivation);
+  if (!manifest) {
+    return std::unexpected(manifest.error());
   }
-  if (!artifact->has_value()) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("view derivation is not a file tree `{}`", *derivation_id));
+  const ViewResult<bool> inserted =
+      write_derivation_directory(store_, derivation, *manifest);
+  if (!inserted) {
+    return std::unexpected(inserted.error());
   }
-  return std::move(**artifact);
+  derivation.inserted = *inserted;
+  return derivation;
 }
 
-ViewResult<std::vector<ViewArtifact>> ViewService::list_file_trees() const {
-  const fs::path derivations_dir = derivations_dir_for(store_.root());
-  const memix::FsResult<bool> exists = raw_fs::exists(derivations_dir);
-  if (!exists) {
-    return view_error(exists.error());
+ViewResult<ViewEnvironment>
+ViewService::build(const AuthoredViewExpression &expression) const {
+  ViewResult<ViewIr> ir = lower_to_ir(expression);
+  if (!ir) {
+    return std::unexpected(ir.error());
   }
-  if (!*exists) {
-    return std::vector<ViewArtifact>{};
+  ViewResult<ViewDerivation> derivation = build_ir(*ir);
+  if (!derivation) {
+    return std::unexpected(derivation.error());
   }
-  const memix::FsResult<bool> is_directory =
-      raw_fs::is_directory(derivations_dir);
-  if (!is_directory) {
-    return view_error(is_directory.error());
-  }
-  if (!*is_directory) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("views derivations path is not a directory "
-                                  "`{}`",
-                                  derivations_dir.string()));
-  }
+  return environment_for_derivation(store_, std::move(*derivation));
+}
 
-  std::vector<ViewArtifact> artifacts;
-  std::error_code iterator_error;
-  const fs::directory_iterator end;
-  for (fs::directory_iterator iterator{derivations_dir, iterator_error};
-       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
-    const fs::directory_entry &entry = *iterator;
-    std::error_code entry_error;
-    const bool entry_is_directory = entry.is_directory(entry_error);
-    if (entry_error) {
-      return view_error(memix::detail::make_fs_error(
-          "failed to inspect", entry_error, entry.path()));
-    }
-    if (!entry_is_directory) {
-      continue;
-    }
-    const std::string name = entry.path().filename().string();
-    if (!is_lower_hex_sha256(name)) {
-      continue;
-    }
-    ViewResult<std::optional<ViewArtifact>> artifact = artifact_from_manifest({
-        .manifest_path = entry.path() / std::string(kManifestFilename),
-        .derivation_dir = entry.path(),
-    });
-    if (!artifact) {
-      return std::unexpected(artifact.error());
-    }
-    if (artifact->has_value()) {
-      artifacts.push_back(std::move(**artifact));
-    }
+ViewResult<ViewEnvironment>
+ViewService::resolve_environment(std::string_view environment_prefix) const {
+  ViewResult<std::string> environment_id =
+      resolve_unique_environment_id(store_, environment_prefix);
+  if (!environment_id) {
+    return std::unexpected(environment_id.error());
   }
-  if (iterator_error) {
-    return view_error(memix::detail::make_fs_error(
-        "failed to list directory", iterator_error, derivations_dir));
+  const fs::path path = environment_path_for(store_.root(), *environment_id);
+  memix::FsResult<std::string> text =
+      memix::detail::read_text_file(path, "view environment");
+  if (!text) {
+    return view_error(text.error());
   }
+  ViewResult<ViewEnvironment> environment = environment_from_json(*text, path);
+  if (!environment) {
+    return std::unexpected(environment.error());
+  }
+  if (environment->bindings.size() != 1) {
+    return view_error(ErrorKind::InvalidData,
+                      std::format("view environment `{}` must have exactly "
+                                  "one binding in v1",
+                                  *environment_id));
+  }
+  const ViewEnvironmentBinding &binding = environment->bindings.front();
+  if (binding.output_role != "file_tree") {
+    return view_error(ErrorKind::InvalidData,
+                      std::format("unsupported environment output `{}`",
+                                  binding.output_role));
+  }
+  if (!std::ranges::contains(environment->closure.derivations,
+                             binding.derivation_id)) {
+    return view_error(ErrorKind::InvalidData,
+                      std::format("environment `{}` binding derivation `{}` "
+                                  "is missing from the closure",
+                                  *environment_id, binding.derivation_id));
+  }
+  ViewResult<ViewDerivation> derivation =
+      resolve_derivation(store_, binding.derivation_id);
+  if (!derivation) {
+    return std::unexpected(derivation.error());
+  }
+  environment->derivation = std::move(*derivation);
+  return environment;
+}
 
-  std::ranges::sort(artifacts, {}, &ViewArtifact::derivation_id);
-  return artifacts;
+ViewResult<std::string> view_ir_json(const ViewIr &ir) {
+  const std::vector<IrInputJson> inputs =
+      ir.inputs
+      | std::views::transform(ir_input_json_for)
+      | std::ranges::to<std::vector>();
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">(kIrSchema);
+  builder.append_comma();
+  builder.append_key_value<"inputs">(inputs);
+  builder.append_comma();
+  builder.append_key_value<"target">(ir_target_json_for(ir.target));
+  builder.end_object();
+  return json_from_builder(builder);
+}
+
+ViewResult<std::string> view_derivation_json(const ViewDerivation &derivation) {
+  const std::vector<PassJson> passes{
+      PassJson{.name = "resolve-refs", .version = "v1"},
+      PassJson{.name = "expand-dirs", .version = "v1"},
+      PassJson{.name = "pack-file-tree", .version = "v1"},
+  };
+  const std::vector<ResolvedInputJson> inputs =
+      resolved_input_json(derivation.resolved_files);
+  const std::vector<OutputJson> outputs = output_json(derivation.outputs);
+
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">(kDerivationSchema);
+  builder.append_comma();
+  builder.append_key_value<"derivation_id">(derivation.id);
+  builder.append_comma();
+  builder.append_key_value<"ir_hash">(derivation.ir_hash);
+  builder.append_comma();
+  builder.append_key_value<"target">(memix::to_string(derivation.target));
+  builder.append_comma();
+  builder.append_key_value<"operator_version">(kFileTreeOperatorVersion);
+  builder.append_comma();
+  builder.append_key_value<"passes">(passes);
+  builder.append_comma();
+  builder.append_key_value<"policy_snapshot">(std::optional<std::string>{});
+  builder.append_comma();
+  builder.append_key_value<"resolved_inputs">(inputs);
+  builder.append_comma();
+  builder.append_key_value<"outputs">(outputs);
+  builder.end_object();
+  return json_from_builder(builder);
+}
+
+ViewResult<std::string>
+view_environment_json(const ViewEnvironment &environment) {
+  const std::vector<BindingJson> bindings = binding_json(environment.bindings);
+  const ClosureJson closure{
+      .derivations = environment.closure.derivations,
+      .artifacts = environment.closure.artifacts,
+      .raw_objects = environment.closure.raw_objects,
+  };
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">(kEnvironmentSchema);
+  builder.append_comma();
+  builder.append_key_value<"environment_id">(environment.id);
+  builder.append_comma();
+  builder.append_key_value<"bindings">(bindings);
+  builder.append_comma();
+  builder.append_key_value<"closure">(closure);
+  builder.end_object();
+  return json_from_builder(builder);
 }
 
 } // namespace memix

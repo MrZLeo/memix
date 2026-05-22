@@ -67,6 +67,8 @@ FsResult<bool> copy_file(const std::filesystem::path &source,
                          std::filesystem::copy_options options);
 FsVoid create_symlink(const std::filesystem::path &target,
                       const std::filesystem::path &link);
+FsVoid create_hard_link(const std::filesystem::path &target,
+                        const std::filesystem::path &link);
 FsResult<std::filesystem::path> read_symlink(const std::filesystem::path &path);
 FsResult<std::filesystem::path> relative(const std::filesystem::path &target,
                                          const std::filesystem::path &base);
