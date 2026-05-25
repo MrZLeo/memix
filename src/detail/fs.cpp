@@ -224,35 +224,6 @@ FsResult<fs::path> unique_temp_dir(const fs::path &parent,
   return fs_error(std::string(options.failure_message));
 }
 
-TemporaryDirectoryCleanup::TemporaryDirectoryCleanup(
-    TemporaryDirectoryCleanup &&other) noexcept
-    : path_(std::move(other.path_)), active_(other.active_) {
-  other.release();
-}
-
-TemporaryDirectoryCleanup::~TemporaryDirectoryCleanup() {
-  if (!active_) {
-    return;
-  }
-
-  std::error_code remove_error;
-  fs::remove_all(path_, remove_error);
-}
-
-FsVoid TemporaryDirectoryCleanup::cleanup() {
-  if (!active_) {
-    return {};
-  }
-
-  active_ = false;
-  std::error_code remove_error;
-  fs::remove_all(path_, remove_error);
-  if (remove_error) {
-    return fs_error("failed to remove", remove_error, path_);
-  }
-  return {};
-}
-
 FsVoid apply_read_only_file_permissions(const fs::path &path) {
   return expected_fs::permissions(path, fs::perms::owner_read,
                                   fs::perm_options::replace);

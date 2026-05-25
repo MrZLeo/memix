@@ -6,6 +6,7 @@
 #include "detail/fs.hpp"
 #include "detail/hash.hpp"
 #include "detail/json.hpp"
+#include "detail/scope_exit.hpp"
 
 #include <algorithm>
 #include <array>
@@ -161,8 +162,6 @@ store_error(memix::detail::CommonError error) {
 }
 
 namespace raw_fs = memix::detail::expected_fs;
-
-using TemporaryDirectoryCleanup = memix::detail::TemporaryDirectoryCleanup;
 
 StoreVoid require_regular_file(const fs::path &path,
                                std::string missing_message) {
@@ -909,8 +908,8 @@ struct PublishRequest {
   fs::path type_dir;
 };
 
-StoreResult<TemporaryDirectoryCleanup>
-acquire_directory_lock(const fs::path &lock_path, std::string_view lock_name) {
+StoreVoid acquire_directory_lock(const fs::path &lock_path,
+                                 std::string_view lock_name) {
   const StoreVoid parent_created =
       ensure_directory(lock_path.parent_path(), fs::perms::owner_all);
   if (!parent_created) {
@@ -926,14 +925,7 @@ acquire_directory_lock(const fs::path &lock_path, std::string_view lock_name) {
     return store_error(memix::ErrorKind::Locked,
                        std::format("{} is locked", lock_name));
   }
-  return StoreResult<TemporaryDirectoryCleanup>{std::in_place, lock_path};
-}
-
-StoreResult<TemporaryDirectoryCleanup>
-acquire_type_update_lock(const fs::path &root, memix::MemoryObjectType type) {
-  return acquire_directory_lock(
-      locks_dir_for(root) / update_lock_name(type),
-      std::format("{} update", memix::to_string(type)));
+  return {};
 }
 
 StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
@@ -966,19 +958,23 @@ StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
+  const fs::path &temp_path = *temp_dir;
   const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(*temp_dir);
+      raw_fs::create_directory(temp_path);
   if (!created_temp_dir) {
     return store_error(created_temp_dir.error());
   }
   if (!*created_temp_dir) {
     return store_error(
         std::format("failed to create temporary object directory `{}`",
-                    temp_dir->string()));
+                    temp_path.string()));
   }
-  TemporaryDirectoryCleanup temp_dir_cleanup(*temp_dir);
+  const memix::scope_exit temp_dir_cleanup([temp_path] {
+    std::error_code remove_error;
+    fs::remove_all(temp_path, remove_error);
+  });
 
-  const fs::path temp_file = *temp_dir / "object";
+  const fs::path temp_file = temp_path / "object";
   const memix::FsVoid written =
       memix::detail::write_text_file(temp_file, contents);
   if (!written) {
@@ -1001,10 +997,6 @@ StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
     }
     return store_error(renamed.error());
   }
-  const memix::FsVoid removed = temp_dir_cleanup.cleanup();
-  if (!removed) {
-    return store_error(removed.error());
-  }
   return {};
 }
 
@@ -1023,21 +1015,25 @@ publish_new_object(const PublishRequest &request) {
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
+  const fs::path &temp_path = *temp_dir;
 
   const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(*temp_dir);
+      raw_fs::create_directory(temp_path);
   if (!created_temp_dir) {
     return store_error(created_temp_dir.error());
   }
   if (!*created_temp_dir) {
     return store_error(
         std::format("failed to create temporary object directory `{}`",
-                    temp_dir->string()));
+                    temp_path.string()));
   }
-  TemporaryDirectoryCleanup temp_dir_cleanup(*temp_dir);
+  memix::scope_exit temp_dir_cleanup([temp_path] {
+    std::error_code remove_error;
+    fs::remove_all(temp_path, remove_error);
+  });
 
-  const fs::path temp_object = *temp_dir / kContentPath;
-  const fs::path temp_metadata = *temp_dir / kMetadataFilename;
+  const fs::path temp_object = temp_path / kContentPath;
+  const fs::path temp_metadata = temp_path / kMetadataFilename;
 
   const memix::FsResult<bool> copied = raw_fs::copy_file(
       request.source_path, temp_object, fs::copy_options::none);
@@ -1104,7 +1100,7 @@ publish_new_object(const PublishRequest &request) {
     return store_error(metadata_read_only.error());
   }
 
-  const memix::FsVoid renamed = raw_fs::rename(*temp_dir, object_dir);
+  const memix::FsVoid renamed = raw_fs::rename(temp_path, object_dir);
   if (!renamed) {
     StoreResult<std::optional<memix::StoredObject>> raced_existing =
         read_existing_object_if_present(object_dir, request.type);
@@ -1895,11 +1891,15 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
   }
   const fs::path lock_path =
       fs::path(std::format("{}.lock", ref_path->string()));
-  StoreResult<TemporaryDirectoryCleanup> lock =
+  const StoreVoid lock =
       acquire_directory_lock(lock_path, std::format("ref `{}`", ref_name));
   if (!lock) {
     return std::unexpected(lock.error());
   }
+  const memix::scope_exit lock_cleanup([lock_path] {
+    std::error_code remove_error;
+    fs::remove_all(lock_path, remove_error);
+  });
 
   StoreResult<std::optional<std::string>> current =
       read_ref_value(root, ref_name);
@@ -1922,17 +1922,21 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
+  const fs::path &temp_path = *temp_dir;
   const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(*temp_dir);
+      raw_fs::create_directory(temp_path);
   if (!created_temp_dir) {
     return store_error(created_temp_dir.error());
   }
   if (!*created_temp_dir) {
     return store_error(std::format(
-        "failed to create temporary ref directory `{}`", temp_dir->string()));
+        "failed to create temporary ref directory `{}`", temp_path.string()));
   }
-  TemporaryDirectoryCleanup temp_dir_cleanup(*temp_dir);
-  const fs::path temp_ref = *temp_dir / "ref";
+  const memix::scope_exit temp_dir_cleanup([temp_path] {
+    std::error_code remove_error;
+    fs::remove_all(temp_path, remove_error);
+  });
+  const fs::path temp_ref = temp_path / "ref";
   const memix::FsVoid written = memix::detail::write_text_file(
       temp_ref, std::format("{}\n", new_generation));
   if (!written) {
@@ -1942,10 +1946,6 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
   const memix::FsVoid renamed = raw_fs::rename(temp_ref, *ref_path);
   if (!renamed) {
     return store_error(renamed.error());
-  }
-  const memix::FsVoid removed = temp_dir_cleanup.cleanup();
-  if (!removed) {
-    return store_error(removed.error());
   }
   return {};
 }
@@ -2190,9 +2190,10 @@ StoreVoid collect_context_files(const fs::path &root, std::string_view tree_id,
 namespace memix {
 
 std::string_view to_string(MemoryObjectType type) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(
-      kMemoryObjectTypeTokens, type, &MemoryObjectTypeToken::value);
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto it = std::ranges::find(kMemoryObjectTypeTokens, type,
+                                    &MemoryObjectTypeToken::value);
   if (it == std::ranges::end(kMemoryObjectTypeTokens))
     return {};
   return it->token;
@@ -2200,9 +2201,10 @@ std::string_view to_string(MemoryObjectType type) noexcept {
 
 std::optional<MemoryObjectType>
 parse_memory_object_type(std::string_view value) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(
-      kMemoryObjectTypeTokens, value, &MemoryObjectTypeToken::token);
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto it = std::ranges::find(kMemoryObjectTypeTokens, value,
+                                    &MemoryObjectTypeToken::token);
   if (it == std::ranges::end(kMemoryObjectTypeTokens))
     return std::nullopt;
   return it->value;
@@ -2215,9 +2217,10 @@ std::vector<MemoryObjectType> memory_object_types() {
 }
 
 std::string_view to_string(ContextTreeEntryKind kind) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(
-      kContextTreeEntryKindTokens, kind, &ContextTreeEntryKindToken::value);
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto it = std::ranges::find(kContextTreeEntryKindTokens, kind,
+                                    &ContextTreeEntryKindToken::value);
   if (it == std::ranges::end(kContextTreeEntryKindTokens))
     return std::string_view{};
   return it->token;
@@ -2225,9 +2228,10 @@ std::string_view to_string(ContextTreeEntryKind kind) noexcept {
 
 std::optional<ContextTreeEntryKind>
 parse_context_tree_entry_kind(std::string_view value) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(
-      kContextTreeEntryKindTokens, value, &ContextTreeEntryKindToken::token);
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto it = std::ranges::find(kContextTreeEntryKindTokens, value,
+                                    &ContextTreeEntryKindToken::token);
   if (it == std::ranges::end(kContextTreeEntryKindTokens))
     return std::nullopt;
   return it->value;
@@ -2289,11 +2293,18 @@ Store::ingest_file(const FileIngestRequest &request) const {
     return std::unexpected(blob.error());
   }
 
-  StoreResult<TemporaryDirectoryCleanup> update_lock =
-      acquire_type_update_lock(root_, request.type);
+  const fs::path update_lock_path =
+      locks_dir_for(root_) / update_lock_name(request.type);
+  const StoreVoid update_lock = acquire_directory_lock(
+      update_lock_path,
+      std::format("{} update", memix::to_string(request.type)));
   if (!update_lock) {
     return std::unexpected(update_lock.error());
   }
+  const memix::scope_exit update_lock_cleanup([update_lock_path] {
+    std::error_code remove_error;
+    fs::remove_all(update_lock_path, remove_error);
+  });
 
   const std::string latest_ref = latest_ref_name(request.type);
   StoreResult<std::optional<std::string>> previous_generation =
@@ -2427,11 +2438,17 @@ StoreVoid Store::update_ref(std::string_view ref_name,
   if (!type) {
     return std::unexpected(type.error());
   }
-  StoreResult<TemporaryDirectoryCleanup> update_lock =
-      acquire_type_update_lock(root_, *type);
+  const fs::path update_lock_path =
+      locks_dir_for(root_) / update_lock_name(*type);
+  const StoreVoid update_lock = acquire_directory_lock(
+      update_lock_path, std::format("{} update", memix::to_string(*type)));
   if (!update_lock) {
     return std::unexpected(update_lock.error());
   }
+  const memix::scope_exit update_lock_cleanup([update_lock_path] {
+    std::error_code remove_error;
+    fs::remove_all(update_lock_path, remove_error);
+  });
   return update_ref_unlocked(root_, ref_name, expected_old, new_generation);
 }
 

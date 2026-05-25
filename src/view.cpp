@@ -7,6 +7,7 @@
 #include "detail/fs.hpp"
 #include "detail/hash.hpp"
 #include "detail/json.hpp"
+#include "detail/scope_exit.hpp"
 
 #include <algorithm>
 #include <array>
@@ -890,18 +891,22 @@ ViewResult<bool> write_text_file_if_absent(const fs::path &path,
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
-  const memix::FsResult<bool> created = raw_fs::create_directory(*temp_dir);
+  const fs::path &temp_path = *temp_dir;
+  const memix::FsResult<bool> created = raw_fs::create_directory(temp_path);
   if (!created) {
     return view_error(created.error());
   }
   if (!*created) {
     return view_error(std::format("failed to create temporary view file "
                                   "directory `{}`",
-                                  temp_dir->string()));
+                                  temp_path.string()));
   }
-  memix::detail::TemporaryDirectoryCleanup cleanup(*temp_dir);
+  const memix::scope_exit cleanup([temp_path] {
+    std::error_code remove_error;
+    fs::remove_all(temp_path, remove_error);
+  });
 
-  const fs::path temp_file = *temp_dir / "object";
+  const fs::path temp_file = temp_path / "object";
   const memix::FsVoid written =
       memix::detail::write_text_file(temp_file, contents);
   if (!written) {
@@ -933,10 +938,6 @@ ViewResult<bool> write_text_file_if_absent(const fs::path &path,
     return view_error(linked.error());
   }
 
-  const memix::FsVoid removed = cleanup.cleanup();
-  if (!removed) {
-    return view_error(removed.error());
-  }
   return true;
 }
 
@@ -1256,29 +1257,33 @@ write_derivation_directory(const memix::Store &store,
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
-  const memix::FsResult<bool> created = raw_fs::create_directory(*temp_dir);
+  const fs::path &temp_path = *temp_dir;
+  const memix::FsResult<bool> created = raw_fs::create_directory(temp_path);
   if (!created) {
     return view_error(created.error());
   }
   if (!*created) {
     return view_error(std::format("failed to create temporary view "
                                   "derivation `{}`",
-                                  temp_dir->string()));
+                                  temp_path.string()));
   }
-  memix::detail::TemporaryDirectoryCleanup cleanup(*temp_dir);
+  memix::scope_exit cleanup([temp_path] {
+    std::error_code remove_error;
+    fs::remove_all(temp_path, remove_error);
+  });
   const memix::FsVoid written = memix::detail::write_text_file(
-      *temp_dir / std::string(kManifestFilename), manifest_json);
+      temp_path / std::string(kManifestFilename), manifest_json);
   if (!written) {
     return view_error(written.error());
   }
   const ViewVoid tree_created = create_file_tree(
-      *temp_dir / std::string(kTreeDir), derivation.resolved_files);
+      temp_path / std::string(kTreeDir), derivation.resolved_files);
   if (!tree_created) {
     return std::unexpected(tree_created.error());
   }
-  const memix::FsVoid renamed = raw_fs::rename(*temp_dir, derivation_dir);
+  const memix::FsVoid renamed = raw_fs::rename(temp_path, derivation_dir);
   if (!renamed) {
-    return handle_derivation_rename_failure(*temp_dir, derivation,
+    return handle_derivation_rename_failure(temp_path, derivation,
                                             manifest_json, renamed.error());
   }
   cleanup.release();
@@ -1835,33 +1840,33 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
 namespace memix {
 
 std::string_view to_string(ViewTargetKind target) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(kViewTargetKindTokens, target,
-                                    &ViewTargetKindToken::value);
-  if (it == std::ranges::end(kViewTargetKindTokens)) {
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  auto it = std::ranges::find(kViewTargetKindTokens, target,
+                              &ViewTargetKindToken::value);
+  if (it == std::ranges::end(kViewTargetKindTokens))
     return {};
-  }
   return it->token;
 }
 
 std::optional<ViewTargetKind>
 parse_view_target_kind(std::string_view value) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(kViewTargetKindTokens, value,
-                                    &ViewTargetKindToken::token);
-  if (it == std::ranges::end(kViewTargetKindTokens)) {
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  auto it = std::ranges::find(kViewTargetKindTokens, value,
+                              &ViewTargetKindToken::token);
+  if (it == std::ranges::end(kViewTargetKindTokens))
     return std::nullopt;
-  }
   return it->value;
 }
 
 std::string_view to_string(ViewVersionKind kind) noexcept {
-  // NOLINTNEXTLINE(readability-qualified-auto): MSVC array iterators are not pointers.
-  const auto it = std::ranges::find(kViewVersionKindTokens, kind,
-                                    &ViewVersionKindToken::value);
-  if (it == std::ranges::end(kViewVersionKindTokens)) {
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  auto it = std::ranges::find(kViewVersionKindTokens, kind,
+                              &ViewVersionKindToken::value);
+  if (it == std::ranges::end(kViewVersionKindTokens))
     return {};
-  }
   return it->token;
 }
 

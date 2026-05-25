@@ -11,6 +11,7 @@ set(private_headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/fs.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/hash.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/json.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/scope_exit.hpp
 )
 
 file(GLOB bin_sources CONFIGURE_DEPENDS

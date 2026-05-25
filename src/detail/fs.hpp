@@ -96,29 +96,6 @@ struct TempDirOptions {
 FsResult<std::filesystem::path>
 unique_temp_dir(const std::filesystem::path &parent, TempDirOptions options);
 
-class TemporaryDirectoryCleanup {
-public:
-  explicit TemporaryDirectoryCleanup(std::filesystem::path path)
-      : path_(std::move(path)) {}
-
-  TemporaryDirectoryCleanup(const TemporaryDirectoryCleanup &) = delete;
-  TemporaryDirectoryCleanup &
-  operator=(const TemporaryDirectoryCleanup &) = delete;
-
-  TemporaryDirectoryCleanup(TemporaryDirectoryCleanup &&other) noexcept;
-  TemporaryDirectoryCleanup &
-  operator=(TemporaryDirectoryCleanup &&other) = delete;
-
-  ~TemporaryDirectoryCleanup();
-
-  [[nodiscard]] FsVoid cleanup();
-  void release() noexcept { active_ = false; }
-
-private:
-  std::filesystem::path path_;
-  bool active_ = true;
-};
-
 FsVoid apply_read_only_file_permissions(const std::filesystem::path &path);
 FsVoid apply_read_only_directory_permissions(const std::filesystem::path &path);
 FsVoid apply_writable_directory_permissions(const std::filesystem::path &path);
