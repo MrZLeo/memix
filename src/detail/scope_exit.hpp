@@ -8,7 +8,7 @@ namespace memix {
 
 template <typename F>
   requires std::invocable<F>
-class scope_exit {
+class [[nodiscard]] scope_exit {
   F fn;
   bool engaged = true;
 
