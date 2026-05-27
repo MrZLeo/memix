@@ -1,6 +1,4 @@
-#include "detail/fs.hpp"
-
-#include "memix/error.hpp"
+#include "memix/fs.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -16,9 +14,9 @@
 #include <system_error>
 #include <utility>
 
-namespace fs = std::filesystem;
+namespace std_fs = std::filesystem;
 
-namespace memix::detail {
+namespace memix::fs {
 
 namespace {
 
@@ -54,110 +52,123 @@ std::unexpected<memix::FsError> fs_error(std::string message) {
   return fs_error(std::move(error));
 }
 
-namespace expected_fs {
-
-FsResult<bool> exists(const fs::path &path) {
+FsResult<bool> exists(const path &path) {
   std::error_code error;
-  const bool value = fs::exists(path, error);
+  const bool value = std_fs::exists(path, error);
   return fs_result(value, error, "failed to inspect", path);
 }
 
-FsResult<bool> is_directory(const fs::path &path) {
+FsResult<bool> is_directory(const path &path) {
   std::error_code error;
-  const bool value = fs::is_directory(path, error);
+  const bool value = std_fs::is_directory(path, error);
   return fs_result(value, error, "failed to inspect directory", path);
 }
 
-FsResult<bool> is_regular_file(const fs::path &path) {
+FsResult<bool> is_regular_file(const path &path) {
   std::error_code error;
-  const bool value = fs::is_regular_file(path, error);
+  const bool value = std_fs::is_regular_file(path, error);
   return fs_result(value, error, "failed to inspect file", path);
 }
 
-FsResult<bool> is_symlink(const fs::path &path) {
+FsResult<bool> is_symlink(const path &path) {
   std::error_code error;
-  const bool value = fs::is_symlink(fs::symlink_status(path, error));
+  const bool value = std_fs::is_symlink(std_fs::symlink_status(path, error));
   return fs_result(value, error, "failed to inspect symlink", path);
 }
 
-FsResult<std::uintmax_t> file_size(const fs::path &path) {
+FsResult<file_status> status(const path &path) {
   std::error_code error;
-  const std::uintmax_t value = fs::file_size(path, error);
+  const file_status value = std_fs::status(path, error);
+  return fs_result(value, error, "failed to inspect", path);
+}
+
+FsResult<file_status> symlink_status(const path &path) {
+  std::error_code error;
+  const file_status value = std_fs::symlink_status(path, error);
+  return fs_result(value, error, "failed to inspect symlink", path);
+}
+
+FsResult<std::uintmax_t> file_size(const path &path) {
+  std::error_code error;
+  const std::uintmax_t value = std_fs::file_size(path, error);
   return fs_result(value, error, "failed to read file size for", path);
 }
 
-FsResult<bool> create_directories(const fs::path &path) {
+FsResult<bool> create_directories(const path &path) {
   std::error_code error;
-  const bool value = fs::create_directories(path, error);
+  const bool value = std_fs::create_directories(path, error);
   return fs_result(value, error, "failed to create directory", path);
 }
 
-FsResult<bool> create_directory(const fs::path &path) {
+FsResult<bool> create_directory(const path &path) {
   std::error_code error;
-  const bool value = fs::create_directory(path, error);
+  const bool value = std_fs::create_directory(path, error);
   return fs_result(value, error, "failed to create directory", path);
 }
 
-FsResult<bool> copy_file(const fs::path &source, const fs::path &destination,
-                         fs::copy_options options) {
+FsResult<bool> copy_file(const path &source, const path &destination,
+                         copy_options options) {
   std::error_code error;
-  const bool value = fs::copy_file(source, destination, options, error);
+  const bool value = std_fs::copy_file(source, destination, options, error);
   return fs_result(value, error, "failed to copy file", source, destination);
 }
 
-FsVoid create_symlink(const fs::path &target, const fs::path &link) {
+FsVoid create_symlink(const path &target, const path &link) {
   std::error_code error;
-  fs::create_symlink(target, link, error);
+  std_fs::create_symlink(target, link, error);
   return fs_void(error, "failed to create symlink", target, link);
 }
 
-FsVoid create_hard_link(const fs::path &target, const fs::path &link) {
+FsVoid create_hard_link(const path &target, const path &link) {
   std::error_code error;
-  fs::create_hard_link(target, link, error);
+  std_fs::create_hard_link(target, link, error);
   return fs_void(error, "failed to create hard link", target, link);
 }
 
-FsResult<fs::path> read_symlink(const fs::path &path) {
+FsResult<path> read_symlink(const path &path) {
   std::error_code error;
-  const fs::path target = fs::read_symlink(path, error);
+  const auto target = std_fs::read_symlink(path, error);
   return fs_result(target, error, "failed to read symlink", path);
 }
 
-FsResult<fs::path> relative(const fs::path &target, const fs::path &base) {
+FsResult<path> relative(const path &target, const path &base) {
   std::error_code error;
-  const fs::path value = fs::relative(target, base, error);
+  const auto value = std_fs::relative(target, base, error);
   return fs_result(value, error, "failed to compute relative path", target,
                    base);
 }
 
-FsVoid rename(const fs::path &source, const fs::path &destination) {
+FsVoid rename(const path &source, const path &destination) {
   std::error_code error;
-  fs::rename(source, destination, error);
+  std_fs::rename(source, destination, error);
   return fs_void(error, "failed to rename", source, destination);
 }
 
-FsResult<bool> remove(const fs::path &path) {
+FsResult<bool> remove(const path &path) {
   std::error_code error;
-  const bool value = fs::remove(path, error);
+  const bool value = std_fs::remove(path, error);
   return fs_result(value, error, "failed to remove", path);
 }
 
-FsResult<std::uintmax_t> remove_all(const fs::path &path) {
+FsResult<std::uintmax_t> remove_all(const path &path) {
   std::error_code error;
-  const std::uintmax_t value = fs::remove_all(path, error);
+  const std::uintmax_t value = std_fs::remove_all(path, error);
   return fs_result(value, error, "failed to remove", path);
 }
 
-FsVoid permissions(const fs::path &path, fs::perms permissions,
-                   fs::perm_options options) {
+FsVoid permissions(const path &path, perms permissions, perm_options options) {
   std::error_code error;
-  fs::permissions(path, permissions, options, error);
+  std_fs::permissions(path, permissions, options, error);
   return fs_void(error, "failed to set permissions", path);
 }
 
-} // namespace expected_fs
+FsResult<path> temp_directory_path() {
+  std::error_code error;
+  const path value = std_fs::temp_directory_path(error);
+  return fs_result(value, error, "failed to find temporary directory", value);
+}
 
-FsResult<std::string> read_text_file(const fs::path &path) {
+FsResult<std::string> read_text_file(const path &path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
     return fs_error(std::format("failed to open `{}`", path.string()));
@@ -170,7 +181,7 @@ FsResult<std::string> read_text_file(const fs::path &path) {
   return output;
 }
 
-FsResult<std::string> read_text_file(const fs::path &path,
+FsResult<std::string> read_text_file(const path &path,
                                      std::string_view subject) {
   if (subject.empty()) {
     return read_text_file(path);
@@ -190,7 +201,7 @@ FsResult<std::string> read_text_file(const fs::path &path,
   return output;
 }
 
-FsVoid write_text_file(const fs::path &path, std::string_view contents) {
+FsVoid write_text_file(const path &path, std::string_view contents) {
   std::ofstream output(path, std::ios::binary);
   if (!output) {
     return fs_error(
@@ -203,43 +214,39 @@ FsVoid write_text_file(const fs::path &path, std::string_view contents) {
   return {};
 }
 
-FsResult<fs::path> unique_temp_dir(const fs::path &parent,
-                                   TempDirOptions options) {
+FsResult<path> unique_temp_dir(const path &parent, TempDirOptions options) {
   std::random_device random_device;
   for (int attempt = 0; attempt < kTempDirAttempts; ++attempt) {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     const auto nanos =
         std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-    fs::path path = parent
-                  / std::format(".tmp-{}-{}-{}-{}", options.prefix, nanos,
-                                random_device(), attempt);
-    const FsResult<bool> exists = expected_fs::exists(path);
-    if (!exists) {
-      return std::unexpected(exists.error());
+    path candidate = parent
+                   / std::format(".tmp-{}-{}-{}-{}", options.prefix, nanos,
+                                 random_device(), attempt);
+    const FsResult<bool> candidate_exists = memix::fs::exists(candidate);
+    if (!candidate_exists) {
+      return std::unexpected(candidate_exists.error());
     }
-    if (!*exists) {
-      return path;
+    if (!*candidate_exists) {
+      return candidate;
     }
   }
   return fs_error(std::string(options.failure_message));
 }
 
-FsVoid apply_read_only_file_permissions(const fs::path &path) {
-  return expected_fs::permissions(path, fs::perms::owner_read,
-                                  fs::perm_options::replace);
+FsVoid apply_read_only_file_permissions(const path &path) {
+  return memix::fs::permissions(path, perms::owner_read, perm_options::replace);
 }
 
-FsVoid apply_read_only_directory_permissions(const fs::path &path) {
-  return expected_fs::permissions(path,
-                                  fs::perms::owner_read | fs::perms::owner_exec,
-                                  fs::perm_options::replace);
+FsVoid apply_read_only_directory_permissions(const path &path) {
+  return memix::fs::permissions(path, perms::owner_read | perms::owner_exec,
+                                perm_options::replace);
 }
 
-FsVoid apply_writable_directory_permissions(const fs::path &path) {
-  return expected_fs::permissions(
-      path,
-      fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec,
-      fs::perm_options::replace);
+FsVoid apply_writable_directory_permissions(const path &path) {
+  return memix::fs::permissions(
+      path, perms::owner_read | perms::owner_write | perms::owner_exec,
+      perm_options::replace);
 }
 
-} // namespace memix::detail
+} // namespace memix::fs

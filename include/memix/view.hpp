@@ -1,10 +1,10 @@
 #pragma once
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 #include "memix/store.hpp"
 
 #include <cstdint>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,7 +36,7 @@ struct ViewVersionSelector {
 struct ViewIrInput {
   std::string locator;
   MemoryObjectType type = MemoryObjectType::Agents;
-  std::filesystem::path path;
+  fs::path path;
   ViewVersionSelector version;
   bool recursive = false;
   bool required = true;
@@ -56,16 +56,16 @@ struct ViewIr {
 struct ResolvedViewFile {
   std::string locator;
   MemoryObjectType type = MemoryObjectType::Agents;
-  std::filesystem::path source_path;
+  fs::path source_path;
   std::string source_generation;
-  std::filesystem::path output_path;
+  fs::path output_path;
   StoredObject blob;
 };
 
 struct ViewDerivationOutput {
   std::string role;
   std::string artifact;
-  std::filesystem::path path;
+  fs::path path;
 };
 
 struct ViewDerivation {
@@ -74,13 +74,13 @@ struct ViewDerivation {
   ViewTargetKind target = ViewTargetKind::FileTree;
   std::vector<ResolvedViewFile> resolved_files;
   std::vector<ViewDerivationOutput> outputs;
-  std::filesystem::path manifest_path;
-  std::filesystem::path tree_path;
+  fs::path manifest_path;
+  fs::path tree_path;
   bool inserted = false;
 };
 
 struct ViewEnvironmentBinding {
-  std::filesystem::path mount;
+  fs::path mount;
   std::string derivation_id;
   std::string output_role;
 };
@@ -93,7 +93,7 @@ struct ViewEnvironmentClosure {
 
 struct ViewEnvironment {
   std::string id;
-  std::filesystem::path manifest_path;
+  fs::path manifest_path;
   std::vector<ViewEnvironmentBinding> bindings;
   ViewEnvironmentClosure closure;
   ViewDerivation derivation;
@@ -109,16 +109,14 @@ public:
   [[nodiscard]] ViewResult<AuthoredViewExpression>
   parse_expression(std::string_view expression_or_sources) const;
 
-  [[nodiscard]] ViewResult<AuthoredViewExpression>
-  expression_from_sources(std::vector<std::string> sources,
-                          ViewTargetKind target =
-                              ViewTargetKind::FileTree) const;
+  [[nodiscard]] ViewResult<AuthoredViewExpression> expression_from_sources(
+      std::vector<std::string> sources,
+      ViewTargetKind target = ViewTargetKind::FileTree) const;
 
   [[nodiscard]] ViewResult<ViewIr>
   lower_to_ir(const AuthoredViewExpression &expression) const;
 
-  [[nodiscard]] ViewResult<ViewDerivation>
-  build_ir(const ViewIr &ir) const;
+  [[nodiscard]] ViewResult<ViewDerivation> build_ir(const ViewIr &ir) const;
 
   [[nodiscard]] ViewResult<ViewEnvironment>
   build(const AuthoredViewExpression &expression) const;

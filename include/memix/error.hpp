@@ -1,12 +1,11 @@
 #pragma once
 
+#include "memix/fs.hpp"
+
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <optional>
 #include <string>
-#include <system_error>
-#include <vector>
 
 namespace memix {
 
@@ -22,13 +21,6 @@ enum class ErrorKind : std::uint8_t {
   Locked,
 };
 
-struct FsError {
-  std::string message;
-  std::error_code code;
-  std::string operation;
-  std::vector<std::filesystem::path> paths;
-};
-
 struct StoreError {
   std::string message;
   std::optional<FsError> filesystem_error;
@@ -40,11 +32,6 @@ struct ViewError {
   std::optional<FsError> filesystem_error;
   ErrorKind kind = ErrorKind::Unknown;
 };
-
-template <typename Value>
-using FsResult = std::expected<Value, FsError>;
-
-using FsVoid = std::expected<void, FsError>;
 
 template <typename Value>
 using StoreResult = std::expected<Value, StoreError>;

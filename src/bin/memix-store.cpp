@@ -1,6 +1,7 @@
 #include "memix/store.hpp"
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 
 #include "cli_common.hpp"
 
@@ -8,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <memory>
 #include <optional>
@@ -24,6 +24,8 @@
 #include <argum/parser.h>
 #include <simdjson.h>
 #include <spdlog/logger.h>
+
+namespace fs = memix::fs;
 
 namespace {
 
@@ -50,14 +52,14 @@ enum class StoreCommand : std::uint8_t {
 struct StoreCliOptions {
   memix::cli_detail::CommonOptions common;
   StoreCommand command = StoreCommand::None;
-  std::vector<std::filesystem::path> ingest_paths;
+  std::vector<fs::path> ingest_paths;
   std::string ingest_type_name;
-  std::filesystem::path ingest_context_dest;
+  fs::path ingest_context_dest;
   std::string ingest_message;
   std::string list_type_name;
   bool list_json = false;
   std::string cat_type_name;
-  std::filesystem::path cat_path;
+  fs::path cat_path;
   std::string cat_generation;
   std::string tree_type_name;
   std::string tree_generation;
@@ -199,7 +201,7 @@ print_json_array(const std::vector<memix::StoredObject> &objects) {
 
 memix::cli_detail::Result<memix::Store>
 make_store(const StoreCliOptions &options) {
-  const memix::cli_detail::Result<std::filesystem::path> root =
+  const memix::cli_detail::Result<fs::path> root =
       memix::cli_detail::resolve_store_root(options.common.store_root);
   if (!root) {
     return std::unexpected(root.error());
@@ -416,7 +418,7 @@ void add_ingest_command(Argum::Parser &parser, StoreCliOptions &options) {
           .help("Logical destination path inside the type's canonical context "
                 "tree.")
           .handler([&options](std::string_view value) {
-            options.ingest_context_dest = std::filesystem::path(value);
+            options.ingest_context_dest = fs::path(value);
           }));
   parser.add(Argum::Option("--message")
                  .argName("TEXT")
@@ -451,7 +453,7 @@ void add_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
                  .help("Logical path inside the selected type's context tree.")
                  .occurs(Argum::neverOrOnce)
                  .handler([&options](std::string_view value) {
-                   options.cat_path = std::filesystem::path(value);
+                   options.cat_path = fs::path(value);
                  }));
   add_generation_option(parser, options.cat_generation,
                         "Generation id. Defaults to the selected type's "
@@ -472,7 +474,7 @@ void add_agents_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
                  .help("Logical path inside the agents tree.")
                  .occurs(Argum::neverOrOnce)
                  .handler([&options](std::string_view value) {
-                   options.cat_path = std::filesystem::path(value);
+                   options.cat_path = fs::path(value);
                  }));
   add_generation_option(parser, options.cat_generation,
                         "Generation id. Defaults to agents/latest.");

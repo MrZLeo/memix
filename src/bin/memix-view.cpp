@@ -3,11 +3,11 @@
 #include "cli_common.hpp"
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 #include "memix/store.hpp"
 
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <memory>
 #include <optional>
@@ -20,6 +20,8 @@
 #include <argum/expected.h>
 #include <argum/parser.h>
 #include <spdlog/logger.h>
+
+namespace fs = memix::fs;
 
 namespace {
 
@@ -41,7 +43,7 @@ struct ViewCliOptions {
 
 memix::cli_detail::Result<memix::ViewService>
 make_service(const ViewCliOptions &options) {
-  const memix::cli_detail::Result<std::filesystem::path> root =
+  const memix::cli_detail::Result<fs::path> root =
       memix::cli_detail::resolve_store_root(options.common.store_root);
   if (!root) {
     return std::unexpected(root.error());

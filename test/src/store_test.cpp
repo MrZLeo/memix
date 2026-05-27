@@ -4,7 +4,6 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
 #include <format>
 #include <fstream>
 #include <optional>
@@ -14,7 +13,7 @@
 #include <system_error>
 #include <vector>
 
-namespace fs = std::filesystem;
+namespace fs = memix::fs;
 
 namespace {
 
@@ -63,7 +62,9 @@ fs::path unique_test_path(std::string_view label) {
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   const auto nanos =
       std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-  return fs::temp_directory_path()
+  const memix::FsResult<fs::path> temp_dir = fs::temp_directory_path();
+  REQUIRE(temp_dir);
+  return *temp_dir
        / std::format("memix-{}-{}-{}", label, nanos, random_device());
 }
 
@@ -71,13 +72,10 @@ class TemporaryDirectory {
 public:
   explicit TemporaryDirectory(std::string_view label)
       : path_(unique_test_path(label)) {
-    fs::create_directories(path_);
+    REQUIRE(fs::create_directories(path_));
   }
 
-  ~TemporaryDirectory() {
-    std::error_code remove_error;
-    fs::remove_all(path_, remove_error);
-  }
+  ~TemporaryDirectory() { static_cast<void>(fs::remove_all(path_)); }
 
   [[nodiscard]] const fs::path &path() const noexcept { return path_; }
 
@@ -99,6 +97,18 @@ std::string read_file(const fs::path &path) {
           std::istreambuf_iterator<char>()};
 }
 
+bool path_exists(const fs::path &path) {
+  const memix::FsResult<bool> exists = fs::exists(path);
+  REQUIRE(exists);
+  return *exists;
+}
+
+bool path_is_regular_file(const fs::path &path) {
+  const memix::FsResult<bool> regular_file = fs::is_regular_file(path);
+  REQUIRE(regular_file);
+  return *regular_file;
+}
+
 fs::path object_dir_for(const memix::Store &store, memix::MemoryObjectType type,
                         std::string_view digest) {
   return store.root()
@@ -108,13 +118,9 @@ fs::path object_dir_for(const memix::Store &store, memix::MemoryObjectType type,
 }
 
 void make_object_mutable_for_corruption(const fs::path &object_dir) {
-  std::error_code permissions_error;
-  fs::permissions(object_dir, fs::perms::owner_all, fs::perm_options::replace,
-                  permissions_error);
-  fs::permissions(object_dir / "object", fs::perms::owner_all,
-                  fs::perm_options::replace, permissions_error);
-  fs::permissions(object_dir / "metadata.json", fs::perms::owner_all,
-                  fs::perm_options::replace, permissions_error);
+  REQUIRE(fs::permissions(object_dir, fs::perms::owner_all));
+  REQUIRE(fs::permissions(object_dir / "object", fs::perms::owner_all));
+  REQUIRE(fs::permissions(object_dir / "metadata.json", fs::perms::owner_all));
 }
 
 } // namespace
@@ -209,8 +215,8 @@ TEST_CASE("ingest stores a regular file as immutable metadata and content",
 
   const fs::path object_dir =
       object_dir_for(store, memix::MemoryObjectType::Documents, expected_hash);
-  REQUIRE(fs::is_regular_file(object_dir / "object"));
-  REQUIRE(fs::is_regular_file(object_dir / "metadata.json"));
+  REQUIRE(path_is_regular_file(object_dir / "object"));
+  REQUIRE(path_is_regular_file(object_dir / "metadata.json"));
   REQUIRE(read_file(object_dir / "object") == "abc");
 
   const std::string metadata = read_file(object_dir / "metadata.json");
@@ -296,7 +302,7 @@ TEST_CASE("agent blob ingest stores duplicate content once", "[store]") {
   REQUIRE(first->inserted);
   REQUIRE_FALSE(second->blob.inserted);
   REQUIRE(first->object.id == second->blob.object.id);
-  REQUIRE(fs::is_regular_file(
+  REQUIRE(path_is_regular_file(
       object_dir_for(store, memix::MemoryObjectType::Agents, first->object.id)
       / "object"));
 
@@ -321,30 +327,31 @@ TEST_CASE("agent ingest creates a generation and latest ref", "[store]") {
 
   REQUIRE(ingest->context_path == fs::path("lang/python/AGENTS.md"));
   REQUIRE_FALSE(ingest->previous_generation.has_value());
-  REQUIRE(fs::is_regular_file(
+  REQUIRE(path_is_regular_file(
       store.root() / "agents" / "blobs" / ingest->blob.object.id / "object"));
-  REQUIRE(fs::is_regular_file(
+  REQUIRE(path_is_regular_file(
       store.root()
       / "agents"
       / "trees"
       / std::format("{}.json", ingest->generation.root_tree)));
-  REQUIRE(fs::is_regular_file(store.root()
-                              / "agents"
-                              / "generations"
-                              / std::format("{}.json", ingest->generation.id)));
+  REQUIRE(
+      path_is_regular_file(store.root()
+                           / "agents"
+                           / "generations"
+                           / std::format("{}.json", ingest->generation.id)));
 
   const auto latest = store.read_ref("agents/latest");
   REQUIRE(latest.has_value());
   REQUIRE(latest->has_value());
   REQUIRE(**latest == ingest->generation.id);
-  REQUIRE(fs::is_regular_file(store.root() / "refs" / "agents" / "latest"));
+  REQUIRE(path_is_regular_file(store.root() / "refs" / "agents" / "latest"));
   REQUIRE(read_file(store.root() / "refs" / "agents" / "latest")
           == std::format("{}\n", ingest->generation.id));
   const auto first_generation_ref = store.read_ref("agents/generations/000001");
   REQUIRE(first_generation_ref.has_value());
   REQUIRE(first_generation_ref->has_value());
   REQUIRE(**first_generation_ref == ingest->generation.id);
-  REQUIRE(fs::is_regular_file(
+  REQUIRE(path_is_regular_file(
       store.root() / "refs" / "agents" / "generations" / "000001"));
 
   const auto file =
@@ -446,8 +453,8 @@ TEST_CASE("replacing an agent file leaves prior tree readable", "[store]") {
           == "pip workflow\n");
   REQUIRE(read_file(latest_file->object_dir / latest_file->content_path)
           == "uv workflow\n");
-  REQUIRE(fs::exists(object_dir_for(store, memix::MemoryObjectType::Agents,
-                                    first->blob.object.id)));
+  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Agents,
+                                     first->blob.object.id)));
 }
 
 TEST_CASE("documents can be ingested into a canonical context tree",
@@ -468,20 +475,21 @@ TEST_CASE("documents can be ingested into a canonical context tree",
   REQUIRE(ingest->type == memix::MemoryObjectType::Documents);
   REQUIRE(ingest->context_path == fs::path("notes/design.md"));
   REQUIRE_FALSE(ingest->previous_generation.has_value());
-  REQUIRE(fs::is_regular_file(store.root()
-                              / "documents"
-                              / "blobs"
-                              / ingest->blob.object.id
-                              / "object"));
-  REQUIRE(fs::is_regular_file(
+  REQUIRE(path_is_regular_file(store.root()
+                               / "documents"
+                               / "blobs"
+                               / ingest->blob.object.id
+                               / "object"));
+  REQUIRE(path_is_regular_file(
       store.root()
       / "documents"
       / "trees"
       / std::format("{}.json", ingest->generation.root_tree)));
-  REQUIRE(fs::is_regular_file(store.root()
-                              / "documents"
-                              / "generations"
-                              / std::format("{}.json", ingest->generation.id)));
+  REQUIRE(
+      path_is_regular_file(store.root()
+                           / "documents"
+                           / "generations"
+                           / std::format("{}.json", ingest->generation.id)));
 
   const auto latest = store.read_ref("documents/latest");
   REQUIRE(latest.has_value());
@@ -695,7 +703,8 @@ TEST_CASE("ref updates fail on expected old mismatches", "[store]") {
       second->generation.id);
   REQUIRE_FALSE(result.has_value());
 
-  fs::create_directory(store.root() / "refs" / "agents" / "latest.lock");
+  REQUIRE(fs::create_directory(store.root() / "refs" / "agents" / "latest.lock")
+              .value_or(false));
   const memix::StoreVoid locked_result = store.update_ref(
       "agents/latest", std::optional<std::string_view>{second->generation.id},
       first->generation.id);
@@ -723,7 +732,8 @@ TEST_CASE("failed latest update rolls back numbered generation ref",
   });
   REQUIRE(first.has_value());
 
-  fs::create_directory(store.root() / "refs" / "agents" / "latest.lock");
+  REQUIRE(fs::create_directory(store.root() / "refs" / "agents" / "latest.lock")
+              .value_or(false));
   const auto second = store.ingest_file({
       .type = memix::MemoryObjectType::Agents,
       .source_path = second_source,
@@ -764,10 +774,10 @@ TEST_CASE("the same content can exist independently across object types",
   REQUIRE(agents->blob.inserted);
   REQUIRE(documents->inserted);
   REQUIRE(agents->blob.object.id == documents->object.id);
-  REQUIRE(fs::exists(object_dir_for(store, memix::MemoryObjectType::Agents,
-                                    agents->blob.object.id)));
-  REQUIRE(fs::exists(object_dir_for(store, memix::MemoryObjectType::Documents,
-                                    documents->object.id)));
+  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Agents,
+                                     agents->blob.object.id)));
+  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Documents,
+                                     documents->object.id)));
   const auto objects = store.list();
   REQUIRE(objects.has_value());
   REQUIRE(objects->size() == 2);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 #include "memix/store.hpp"
 #include "memix/version.hpp"
 
@@ -14,7 +15,6 @@
 #include <concepts>
 #include <cstddef>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <fstream>
 #include <ios>
@@ -29,6 +29,8 @@
 #include <vector>
 
 namespace memix::cli_detail {
+
+namespace fs = memix::fs;
 
 inline constexpr std::size_t kShortIdLength = 12;
 
@@ -85,20 +87,19 @@ make_logger(std::string_view program_name) {
   return logger;
 }
 
-inline Result<std::filesystem::path>
-resolve_store_root(const std::filesystem::path &store_root_override) {
+inline Result<fs::path>
+resolve_store_root(const fs::path &store_root_override) {
   if (!store_root_override.empty()) {
     return store_root_override;
   }
-  const StoreResult<std::filesystem::path> root = default_store_root();
+  const StoreResult<fs::path> root = default_store_root();
   if (!root) {
     return unexpected_error(root.error());
   }
   return *root;
 }
 
-inline Result<std::string>
-read_file_contents(const std::filesystem::path &path) {
+inline Result<std::string> read_file_contents(const fs::path &path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
     return unexpected_error(
@@ -128,7 +129,7 @@ join_json_documents_as_array(const std::vector<std::string> &documents) {
 }
 
 struct CommonOptions {
-  std::filesystem::path store_root;
+  fs::path store_root;
   bool help_requested = false;
   bool version_requested = false;
 };
@@ -145,7 +146,7 @@ inline void add_common_options(Argum::Parser &parser, CommonOptions &options) {
                  .help("Store root. Defaults to MEMIX_STORE_HOME, "
                        "XDG_DATA_HOME/memix, or HOME/.memix.")
                  .handler([&options](std::string_view value) {
-                   options.store_root = std::filesystem::path(value);
+                   options.store_root = fs::path(value);
                  }));
 }
 

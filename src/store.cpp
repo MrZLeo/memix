@@ -1,9 +1,9 @@
 #include "memix/store.hpp"
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 
 #include "detail/error.hpp"
-#include "detail/fs.hpp"
 #include "detail/hash.hpp"
 #include "detail/json.hpp"
 #include "detail/scope_exit.hpp"
@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
@@ -36,7 +35,7 @@
 #include <openssl/evp.h>
 #include <simdjson.h>
 
-namespace fs = std::filesystem;
+namespace fs = memix::fs;
 
 namespace {
 
@@ -161,11 +160,9 @@ store_error(memix::detail::CommonError error) {
       memix::detail::translate_error<memix::StoreError>(std::move(error)));
 }
 
-namespace raw_fs = memix::detail::expected_fs;
-
 StoreVoid require_regular_file(const fs::path &path,
                                std::string missing_message) {
-  const memix::FsResult<bool> is_regular_file = raw_fs::is_regular_file(path);
+  const memix::FsResult<bool> is_regular_file = fs::is_regular_file(path);
   if (!is_regular_file) {
     return store_error(is_regular_file.error());
   }
@@ -176,7 +173,7 @@ StoreVoid require_regular_file(const fs::path &path,
 }
 
 StoreVoid require_directory(const fs::path &path, std::string missing_message) {
-  const memix::FsResult<bool> is_directory = raw_fs::is_directory(path);
+  const memix::FsResult<bool> is_directory = fs::is_directory(path);
   if (!is_directory) {
     return store_error(is_directory.error());
   }
@@ -238,7 +235,7 @@ struct SourceFileMetadata {
 };
 
 StoreResult<SourceFileMetadata> regular_file_metadata(const fs::path &path) {
-  const memix::FsResult<std::uintmax_t> size_bytes = raw_fs::file_size(path);
+  const memix::FsResult<std::uintmax_t> size_bytes = fs::file_size(path);
   if (!size_bytes) {
     return store_error(size_bytes.error());
   }
@@ -500,14 +497,13 @@ std::string update_lock_name(memix::MemoryObjectType type) {
 }
 
 StoreVoid ensure_directory(const fs::path &path, fs::perms permissions) {
-  const memix::FsResult<bool> directory_created =
-      raw_fs::create_directories(path);
+  const memix::FsResult<bool> directory_created = fs::create_directories(path);
   if (!directory_created) {
     return store_error(directory_created.error());
   }
 
   const memix::FsVoid permissions_set =
-      raw_fs::permissions(path, permissions, fs::perm_options::replace);
+      fs::permissions(path, permissions, fs::perm_options::replace);
   if (!permissions_set) {
     return store_error(permissions_set.error());
   }
@@ -537,9 +533,9 @@ StoreResult<std::string> utc_timestamp() {
 
 StoreResult<fs::path> unique_temp_dir(const fs::path &type_dir,
                                       std::string_view hash) {
-  memix::FsResult<fs::path> temp_dir = memix::detail::unique_temp_dir(
+  memix::FsResult<fs::path> temp_dir = fs::unique_temp_dir(
       type_dir,
-      memix::detail::TempDirOptions{
+      fs::TempDirOptions{
           .prefix = hash,
           .failure_message = "failed to allocate a temporary object directory",
       });
@@ -564,7 +560,7 @@ object_from_metadata_path(const fs::path &object_dir,
                           memix::MemoryObjectType dir_type,
                           const fs::path &metadata_path) {
   const memix::FsResult<std::string> metadata_text =
-      memix::detail::read_text_file(metadata_path, "metadata");
+      fs::read_text_file(metadata_path, "metadata");
   if (!metadata_text) {
     return store_error(metadata_text.error());
   }
@@ -714,7 +710,7 @@ StoreVoid validate_content_file(const memix::StoredObject &object) {
           std::format("object content is missing for `{}`", object.id))
           .and_then([&content_file] -> StoreResult<std::uintmax_t> {
             const memix::FsResult<std::uintmax_t> size =
-                raw_fs::file_size(content_file);
+                fs::file_size(content_file);
             if (!size) {
               return store_error(size.error());
             }
@@ -761,14 +757,14 @@ StoreResult<std::vector<memix::StoredObject>>
 read_objects_for_type(const fs::path &root, memix::MemoryObjectType type) {
   std::vector<memix::StoredObject> objects;
   const fs::path type_dir = blobs_dir_for(root, type);
-  const memix::FsResult<bool> exists = raw_fs::exists(type_dir);
+  const memix::FsResult<bool> exists = fs::exists(type_dir);
   if (!exists) {
     return store_error(exists.error());
   }
   if (!*exists) {
     return objects;
   }
-  const memix::FsResult<bool> is_directory = raw_fs::is_directory(type_dir);
+  const memix::FsResult<bool> is_directory = fs::is_directory(type_dir);
   if (!is_directory) {
     return store_error(is_directory.error());
   }
@@ -788,8 +784,8 @@ read_objects_for_type(const fs::path &root, memix::MemoryObjectType type) {
     std::error_code entry_error;
     const bool entry_is_directory = entry.is_directory(entry_error);
     if (entry_error) {
-      return store_error(memix::detail::make_fs_error(
-          "failed to inspect", entry_error, entry.path()));
+      return store_error(
+          fs::make_fs_error("failed to inspect", entry_error, entry.path()));
     }
     if (!entry_is_directory) {
       return store_error(std::format(
@@ -809,8 +805,8 @@ read_objects_for_type(const fs::path &root, memix::MemoryObjectType type) {
     objects.push_back(std::move(*object));
   }
   if (iterator_error) {
-    return store_error(memix::detail::make_fs_error("failed to list directory",
-                                                    iterator_error, type_dir));
+    return store_error(fs::make_fs_error("failed to list directory",
+                                         iterator_error, type_dir));
   }
   return objects;
 }
@@ -867,7 +863,7 @@ read_objects_for_existing_root(const fs::path &root,
 StoreResult<std::optional<memix::StoredObject>>
 read_existing_object_if_present(const fs::path &object_dir,
                                 memix::MemoryObjectType type) {
-  const memix::FsResult<bool> object_exists = raw_fs::exists(object_dir);
+  const memix::FsResult<bool> object_exists = fs::exists(object_dir);
   if (!object_exists) {
     return store_error(object_exists.error());
   }
@@ -916,8 +912,7 @@ StoreVoid acquire_directory_lock(const fs::path &lock_path,
     return std::unexpected(parent_created.error());
   }
 
-  const memix::FsResult<bool> lock_created =
-      raw_fs::create_directory(lock_path);
+  const memix::FsResult<bool> lock_created = fs::create_directory(lock_path);
   if (!lock_created) {
     return store_error(lock_created.error());
   }
@@ -930,13 +925,12 @@ StoreVoid acquire_directory_lock(const fs::path &lock_path,
 
 StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
                                               std::string_view contents) {
-  const memix::FsResult<bool> existing = raw_fs::exists(path);
+  const memix::FsResult<bool> existing = fs::exists(path);
   if (!existing) {
     return store_error(existing.error());
   }
   if (*existing) {
-    const memix::FsResult<bool> existing_is_file =
-        raw_fs::is_regular_file(path);
+    const memix::FsResult<bool> existing_is_file = fs::is_regular_file(path);
     if (!existing_is_file) {
       return store_error(existing_is_file.error());
     }
@@ -960,7 +954,7 @@ StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
   }
   const fs::path &temp_path = *temp_dir;
   const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(temp_path);
+      fs::create_directory(temp_path);
   if (!created_temp_dir) {
     return store_error(created_temp_dir.error());
   }
@@ -970,25 +964,23 @@ StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
                     temp_path.string()));
   }
   const memix::scope_exit temp_dir_cleanup([temp_path] {
-    std::error_code remove_error;
-    fs::remove_all(temp_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
   });
 
   const fs::path temp_file = temp_path / "object";
-  const memix::FsVoid written =
-      memix::detail::write_text_file(temp_file, contents);
+  const memix::FsVoid written = fs::write_text_file(temp_file, contents);
   if (!written) {
     return store_error(written.error());
   }
   const memix::FsVoid temp_file_read_only =
-      memix::detail::apply_read_only_file_permissions(temp_file);
+      fs::apply_read_only_file_permissions(temp_file);
   if (!temp_file_read_only) {
     return store_error(temp_file_read_only.error());
   }
 
-  const memix::FsVoid renamed = raw_fs::rename(temp_file, path);
+  const memix::FsVoid renamed = fs::rename(temp_file, path);
   if (!renamed) {
-    const memix::FsResult<bool> raced_existing = raw_fs::exists(path);
+    const memix::FsResult<bool> raced_existing = fs::exists(path);
     if (!raced_existing) {
       return store_error(raced_existing.error());
     }
@@ -1018,7 +1010,7 @@ publish_new_object(const PublishRequest &request) {
   const fs::path &temp_path = *temp_dir;
 
   const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(temp_path);
+      fs::create_directory(temp_path);
   if (!created_temp_dir) {
     return store_error(created_temp_dir.error());
   }
@@ -1028,15 +1020,14 @@ publish_new_object(const PublishRequest &request) {
                     temp_path.string()));
   }
   memix::scope_exit temp_dir_cleanup([temp_path] {
-    std::error_code remove_error;
-    fs::remove_all(temp_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
   });
 
   const fs::path temp_object = temp_path / kContentPath;
   const fs::path temp_metadata = temp_path / kMetadataFilename;
 
-  const memix::FsResult<bool> copied = raw_fs::copy_file(
-      request.source_path, temp_object, fs::copy_options::none);
+  const memix::FsResult<bool> copied =
+      fs::copy_file(request.source_path, temp_object, fs::copy_options::none);
   if (!copied) {
     return store_error(copied.error());
   }
@@ -1085,22 +1076,22 @@ publish_new_object(const PublishRequest &request) {
     return std::unexpected(metadata.error());
   }
   const memix::FsVoid metadata_written =
-      memix::detail::write_text_file(temp_metadata, *metadata);
+      fs::write_text_file(temp_metadata, *metadata);
   if (!metadata_written) {
     return store_error(metadata_written.error());
   }
   const memix::FsVoid object_read_only =
-      memix::detail::apply_read_only_file_permissions(temp_object);
+      fs::apply_read_only_file_permissions(temp_object);
   if (!object_read_only) {
     return store_error(object_read_only.error());
   }
   const memix::FsVoid metadata_read_only =
-      memix::detail::apply_read_only_file_permissions(temp_metadata);
+      fs::apply_read_only_file_permissions(temp_metadata);
   if (!metadata_read_only) {
     return store_error(metadata_read_only.error());
   }
 
-  const memix::FsVoid renamed = raw_fs::rename(temp_path, object_dir);
+  const memix::FsVoid renamed = fs::rename(temp_path, object_dir);
   if (!renamed) {
     StoreResult<std::optional<memix::StoredObject>> raced_existing =
         read_existing_object_if_present(object_dir, request.type);
@@ -1120,7 +1111,7 @@ publish_new_object(const PublishRequest &request) {
   temp_dir_cleanup.release();
 
   const memix::FsVoid object_dir_read_only =
-      memix::detail::apply_read_only_directory_permissions(object_dir);
+      fs::apply_read_only_directory_permissions(object_dir);
   if (!object_dir_read_only) {
     return store_error(object_dir_read_only.error());
   }
@@ -1338,7 +1329,7 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
   const fs::path object_path =
       trees_dir_for(root, type) / std::format("{}{}", object_id, kJsonSuffix);
   const memix::FsResult<std::string> tree_text =
-      memix::detail::read_text_file(object_path, "context tree");
+      fs::read_text_file(object_path, "context tree");
   if (!tree_text) {
     return store_error(tree_text.error());
   }
@@ -1477,7 +1468,7 @@ read_context_generation_object(const fs::path &root,
   const fs::path object_path = generations_dir_for(root, type)
                              / std::format("{}{}", object_id, kJsonSuffix);
   const memix::FsResult<std::string> generation_text =
-      memix::detail::read_text_file(object_path, "context generation");
+      fs::read_text_file(object_path, "context generation");
   if (!generation_text) {
     return store_error(generation_text.error());
   }
@@ -1816,14 +1807,14 @@ read_ref_value(const fs::path &root, std::string_view ref_name) {
   if (!path) {
     return std::unexpected(path.error());
   }
-  const memix::FsResult<bool> exists = raw_fs::exists(*path);
+  const memix::FsResult<bool> exists = fs::exists(*path);
   if (!exists) {
     return store_error(exists.error());
   }
   if (!*exists) {
     return StoreResult<std::optional<std::string>>{std::in_place, std::nullopt};
   }
-  const memix::FsResult<bool> is_file = raw_fs::is_regular_file(*path);
+  const memix::FsResult<bool> is_file = fs::is_regular_file(*path);
   if (!is_file) {
     return store_error(is_file.error());
   }
@@ -1833,8 +1824,7 @@ read_ref_value(const fs::path &root, std::string_view ref_name) {
         std::format("ref path is not a file `{}`", path->string()));
   }
 
-  memix::FsResult<std::string> contents =
-      memix::detail::read_text_file(*path, "ref");
+  memix::FsResult<std::string> contents = fs::read_text_file(*path, "ref");
   if (!contents) {
     return store_error(contents.error());
   }
@@ -1897,8 +1887,7 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
     return std::unexpected(lock.error());
   }
   const memix::scope_exit lock_cleanup([lock_path] {
-    std::error_code remove_error;
-    fs::remove_all(lock_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(lock_path));
   });
 
   StoreResult<std::optional<std::string>> current =
@@ -1924,7 +1913,7 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
   }
   const fs::path &temp_path = *temp_dir;
   const memix::FsResult<bool> created_temp_dir =
-      raw_fs::create_directory(temp_path);
+      fs::create_directory(temp_path);
   if (!created_temp_dir) {
     return store_error(created_temp_dir.error());
   }
@@ -1933,17 +1922,16 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
         "failed to create temporary ref directory `{}`", temp_path.string()));
   }
   const memix::scope_exit temp_dir_cleanup([temp_path] {
-    std::error_code remove_error;
-    fs::remove_all(temp_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
   });
   const fs::path temp_ref = temp_path / "ref";
-  const memix::FsVoid written = memix::detail::write_text_file(
-      temp_ref, std::format("{}\n", new_generation));
+  const memix::FsVoid written =
+      fs::write_text_file(temp_ref, std::format("{}\n", new_generation));
   if (!written) {
     return store_error(written.error());
   }
 
-  const memix::FsVoid renamed = raw_fs::rename(temp_ref, *ref_path);
+  const memix::FsVoid renamed = fs::rename(temp_ref, *ref_path);
   if (!renamed) {
     return store_error(renamed.error());
   }
@@ -1955,7 +1943,7 @@ StoreVoid remove_ref_unlocked(const fs::path &root, std::string_view ref_name) {
   if (!ref_path) {
     return std::unexpected(ref_path.error());
   }
-  const memix::FsResult<bool> removed = raw_fs::remove(*ref_path);
+  const memix::FsResult<bool> removed = fs::remove(*ref_path);
   if (!removed) {
     return store_error(removed.error());
   }
@@ -1991,7 +1979,7 @@ next_generation_ref_name(const fs::path &root, memix::MemoryObjectType type) {
   const fs::path generation_refs = refs_dir_for(root)
                                  / std::string(memix::to_string(type))
                                  / std::string(kGenerationsDir);
-  const memix::FsResult<bool> exists = raw_fs::exists(generation_refs);
+  const memix::FsResult<bool> exists = fs::exists(generation_refs);
   if (!exists) {
     return store_error(exists.error());
   }
@@ -1999,8 +1987,7 @@ next_generation_ref_name(const fs::path &root, memix::MemoryObjectType type) {
     return std::format("{}/{}/{:06}", memix::to_string(type), kGenerationsDir,
                        1);
   }
-  const memix::FsResult<bool> is_directory =
-      raw_fs::is_directory(generation_refs);
+  const memix::FsResult<bool> is_directory = fs::is_directory(generation_refs);
   if (!is_directory) {
     return store_error(is_directory.error());
   }
@@ -2019,8 +2006,8 @@ next_generation_ref_name(const fs::path &root, memix::MemoryObjectType type) {
     std::error_code entry_error;
     if (!entry.is_regular_file(entry_error)) {
       if (entry_error) {
-        return store_error(memix::detail::make_fs_error(
-            "failed to inspect", entry_error, entry.path()));
+        return store_error(
+            fs::make_fs_error("failed to inspect", entry_error, entry.path()));
       }
       continue;
     }
@@ -2032,8 +2019,8 @@ next_generation_ref_name(const fs::path &root, memix::MemoryObjectType type) {
     }
   }
   if (iterator_error) {
-    return store_error(memix::detail::make_fs_error(
-        "failed to list directory", iterator_error, generation_refs));
+    return store_error(fs::make_fs_error("failed to list directory",
+                                         iterator_error, generation_refs));
   }
   return std::format("{}/{}/{:06}", memix::to_string(type), kGenerationsDir,
                      max_generation + 1);
@@ -2302,8 +2289,7 @@ Store::ingest_file(const FileIngestRequest &request) const {
     return std::unexpected(update_lock.error());
   }
   const memix::scope_exit update_lock_cleanup([update_lock_path] {
-    std::error_code remove_error;
-    fs::remove_all(update_lock_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(update_lock_path));
   });
 
   const std::string latest_ref = latest_ref_name(request.type);
@@ -2446,15 +2432,14 @@ StoreVoid Store::update_ref(std::string_view ref_name,
     return std::unexpected(update_lock.error());
   }
   const memix::scope_exit update_lock_cleanup([update_lock_path] {
-    std::error_code remove_error;
-    fs::remove_all(update_lock_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(update_lock_path));
   });
   return update_ref_unlocked(root_, ref_name, expected_old, new_generation);
 }
 
 StoreResult<std::vector<StoredObject>>
 Store::list(std::optional<MemoryObjectType> type) const {
-  const memix::FsResult<bool> root_exists = raw_fs::exists(root_);
+  const memix::FsResult<bool> root_exists = fs::exists(root_);
   if (!root_exists) {
     return store_error(root_exists.error());
   }

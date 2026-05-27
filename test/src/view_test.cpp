@@ -5,7 +5,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <filesystem>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -16,7 +15,7 @@
 #include <thread>
 #include <vector>
 
-namespace fs = std::filesystem;
+namespace fs = memix::fs;
 
 namespace {
 
@@ -25,7 +24,9 @@ fs::path unique_test_path(std::string_view label) {
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   const auto nanos =
       std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-  return fs::temp_directory_path()
+  const memix::FsResult<fs::path> temp_dir = fs::temp_directory_path();
+  REQUIRE(temp_dir);
+  return *temp_dir
        / std::format("memix-view-{}-{}-{}", label, nanos, random_device());
 }
 
@@ -33,13 +34,10 @@ class TemporaryDirectory {
 public:
   explicit TemporaryDirectory(std::string_view label)
       : path_(unique_test_path(label)) {
-    fs::create_directories(path_);
+    REQUIRE(fs::create_directories(path_));
   }
 
-  ~TemporaryDirectory() {
-    std::error_code remove_error;
-    fs::remove_all(path_, remove_error);
-  }
+  ~TemporaryDirectory() { static_cast<void>(fs::remove_all(path_)); }
 
   [[nodiscard]] const fs::path &path() const noexcept { return path_; }
 
@@ -61,10 +59,16 @@ std::string read_file(const fs::path &path) {
           std::istreambuf_iterator<char>()};
 }
 
+bool path_exists(const fs::path &path) {
+  const memix::FsResult<bool> exists = fs::exists(path);
+  REQUIRE(exists);
+  return *exists;
+}
+
 bool owner_can_write(const fs::path &path) {
-  std::error_code status_error;
-  const fs::perms permissions = fs::status(path, status_error).permissions();
-  REQUIRE_FALSE(status_error);
+  const memix::FsResult<fs::file_status> status = fs::status(path);
+  REQUIRE(status);
+  const fs::perms permissions = status->permissions();
   return (permissions & fs::perms::owner_write) != fs::perms::none;
 }
 
@@ -84,12 +88,9 @@ memix::FileIngestResult ingest_context_file(const memix::Store &store,
 }
 
 std::size_t count_temp_directories(const fs::path &parent) {
-  std::error_code exists_error;
-  if (!fs::exists(parent, exists_error)) {
-    REQUIRE_FALSE(exists_error);
+  if (!path_exists(parent)) {
     return 0;
   }
-  REQUIRE_FALSE(exists_error);
 
   std::size_t count = 0;
   std::error_code iterator_error;
@@ -232,7 +233,7 @@ TEST_CASE("view optional file inputs skip missing paths", "[view]") {
   REQUIRE(read_file(derivation->tree_path / "agents" / "repo" / "AGENTS.md")
           == "present rules\n");
   REQUIRE_FALSE(
-      fs::exists(derivation->tree_path / "agents" / "repo" / "MISSING.md"));
+      path_exists(derivation->tree_path / "agents" / "repo" / "MISSING.md"));
 }
 
 TEST_CASE("view file tree environment records file and directory closure",
@@ -287,11 +288,11 @@ TEST_CASE("view file tree environment records file and directory closure",
       read_file(
           first->derivation.tree_path / "chat" / "task" / "2026-05-20" / "b.md")
       == "chat b\n");
-  REQUIRE_FALSE(fs::exists(first->derivation.tree_path
-                           / "chat"
-                           / "task"
-                           / "2026-05-21"
-                           / "other.md"));
+  REQUIRE_FALSE(path_exists(first->derivation.tree_path
+                            / "chat"
+                            / "task"
+                            / "2026-05-21"
+                            / "other.md"));
 
   const std::string manifest = read_file(first->derivation.manifest_path);
   REQUIRE(manifest.find("\"schema\":\"memix.view.derivation.v1\"")
@@ -333,7 +334,8 @@ TEST_CASE("view file tree environment records file and directory closure",
   const fs::path copied_environment_path =
       first->manifest_path.parent_path()
       / std::format("{}.json", copied_environment_id);
-  REQUIRE(fs::copy_file(first->manifest_path, copied_environment_path));
+  REQUIRE(fs::copy_file(first->manifest_path, copied_environment_path)
+              .value_or(false));
   const memix::ViewResult<memix::ViewEnvironment> mismatched =
       views.resolve_environment(copied_environment_id);
   REQUIRE_FALSE(mismatched.has_value());

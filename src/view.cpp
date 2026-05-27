@@ -1,10 +1,10 @@
 #include "memix/view.hpp"
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 #include "memix/store.hpp"
 
 #include "detail/error.hpp"
-#include "detail/fs.hpp"
 #include "detail/hash.hpp"
 #include "detail/json.hpp"
 #include "detail/scope_exit.hpp"
@@ -13,7 +13,6 @@
 #include <array>
 #include <cstddef>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <functional>
 #include <iterator>
@@ -28,7 +27,7 @@
 
 #include <simdjson.h>
 
-namespace fs = std::filesystem;
+namespace fs = memix::fs;
 
 namespace {
 
@@ -81,7 +80,6 @@ template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
 
 using ViewVoid = memix::ViewVoid;
-namespace raw_fs = memix::detail::expected_fs;
 
 struct VersionJson {
   std::string kind;
@@ -755,7 +753,7 @@ ViewResult<std::string> sha256_text(std::string_view text) {
 }
 
 ViewVoid ensure_directory(const fs::path &path) {
-  const memix::FsResult<bool> created = raw_fs::create_directories(path);
+  const memix::FsResult<bool> created = fs::create_directories(path);
   if (!created) {
     return view_error(created.error());
   }
@@ -772,16 +770,16 @@ ViewResult<std::vector<fs::path>> collect_directories(const fs::path &root) {
     std::error_code entry_error;
     if (!entry.is_directory(entry_error)) {
       if (entry_error) {
-        return view_error(memix::detail::make_fs_error(
-            "failed to inspect directory", entry_error, entry.path()));
+        return view_error(fs::make_fs_error("failed to inspect directory",
+                                            entry_error, entry.path()));
       }
       continue;
     }
     directories.push_back(entry.path());
   }
   if (iterator_error) {
-    return view_error(memix::detail::make_fs_error("failed to list directory",
-                                                   iterator_error, root));
+    return view_error(
+        fs::make_fs_error("failed to list directory", iterator_error, root));
   }
   return directories;
 }
@@ -796,9 +794,8 @@ ViewVoid apply_directory_tree_permissions(const fs::path &root, bool writable) {
   }
   for (const fs::path &directory : *directories) {
     const memix::FsVoid applied =
-        writable
-            ? memix::detail::apply_writable_directory_permissions(directory)
-            : memix::detail::apply_read_only_directory_permissions(directory);
+        writable ? fs::apply_writable_directory_permissions(directory)
+                 : fs::apply_read_only_directory_permissions(directory);
     if (!applied) {
       return view_error(applied.error());
     }
@@ -831,9 +828,9 @@ fs::path environment_path_for(const fs::path &root,
 
 ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
                                      std::string_view prefix) {
-  memix::FsResult<fs::path> temp_dir = memix::detail::unique_temp_dir(
+  memix::FsResult<fs::path> temp_dir = fs::unique_temp_dir(
       parent,
-      memix::detail::TempDirOptions{
+      fs::TempDirOptions{
           .prefix = prefix,
           .failure_message = "failed to allocate a temporary view directory",
       });
@@ -852,7 +849,7 @@ struct ExistingTextFileValidation {
 ViewVoid
 validate_existing_text_file(const ExistingTextFileValidation &request) {
   const memix::FsResult<std::string> existing =
-      memix::detail::read_text_file(request.path, request.label);
+      fs::read_text_file(request.path, request.label);
   if (!existing) {
     return view_error(existing.error());
   }
@@ -866,7 +863,7 @@ validate_existing_text_file(const ExistingTextFileValidation &request) {
 
 ViewResult<bool> write_text_file_if_absent(const fs::path &path,
                                            std::string_view contents) {
-  const memix::FsResult<bool> exists = raw_fs::exists(path);
+  const memix::FsResult<bool> exists = fs::exists(path);
   if (!exists) {
     return view_error(exists.error());
   }
@@ -892,7 +889,7 @@ ViewResult<bool> write_text_file_if_absent(const fs::path &path,
     return std::unexpected(temp_dir.error());
   }
   const fs::path &temp_path = *temp_dir;
-  const memix::FsResult<bool> created = raw_fs::create_directory(temp_path);
+  const memix::FsResult<bool> created = fs::create_directory(temp_path);
   if (!created) {
     return view_error(created.error());
   }
@@ -902,25 +899,23 @@ ViewResult<bool> write_text_file_if_absent(const fs::path &path,
                                   temp_path.string()));
   }
   const memix::scope_exit cleanup([temp_path] {
-    std::error_code remove_error;
-    fs::remove_all(temp_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
   });
 
   const fs::path temp_file = temp_path / "object";
-  const memix::FsVoid written =
-      memix::detail::write_text_file(temp_file, contents);
+  const memix::FsVoid written = fs::write_text_file(temp_file, contents);
   if (!written) {
     return view_error(written.error());
   }
   const memix::FsVoid read_only =
-      memix::detail::apply_read_only_file_permissions(temp_file);
+      fs::apply_read_only_file_permissions(temp_file);
   if (!read_only) {
     return view_error(read_only.error());
   }
 
-  const memix::FsVoid linked = raw_fs::create_hard_link(temp_file, path);
+  const memix::FsVoid linked = fs::create_hard_link(temp_file, path);
   if (!linked) {
-    const memix::FsResult<bool> raced_exists = raw_fs::exists(path);
+    const memix::FsResult<bool> raced_exists = fs::exists(path);
     if (!raced_exists) {
       return view_error(raced_exists.error());
     }
@@ -1135,12 +1130,12 @@ ViewVoid create_symlink_for_file(const fs::path &tree_dir,
   }
   const fs::path target = file.blob.object_dir / file.blob.content_path;
   memix::FsResult<fs::path> relative_target =
-      raw_fs::relative(target, link_path.parent_path());
+      fs::relative(target, link_path.parent_path());
   if (!relative_target) {
     return view_error(relative_target.error());
   }
   const memix::FsVoid symlink_created =
-      raw_fs::create_symlink(*relative_target, link_path);
+      fs::create_symlink(*relative_target, link_path);
   if (!symlink_created) {
     return view_error(symlink_created.error());
   }
@@ -1163,9 +1158,8 @@ ViewVoid create_file_tree(const fs::path &tree_dir,
 }
 
 ViewVoid freeze_derivation_directory(const fs::path &derivation_dir) {
-  const memix::FsVoid manifest_read_only =
-      memix::detail::apply_read_only_file_permissions(
-          derivation_dir / std::string(kManifestFilename));
+  const memix::FsVoid manifest_read_only = fs::apply_read_only_file_permissions(
+      derivation_dir / std::string(kManifestFilename));
   if (!manifest_read_only) {
     return view_error(manifest_read_only.error());
   }
@@ -1196,7 +1190,7 @@ ViewResult<bool> handle_derivation_rename_failure(
     const fs::path &temp_dir, const memix::ViewDerivation &derivation,
     std::string_view manifest_json, const memix::FsError &rename_error) {
   const memix::FsResult<bool> raced_exists =
-      raw_fs::exists(derivation.manifest_path.parent_path());
+      fs::exists(derivation.manifest_path.parent_path());
   if (!raced_exists) {
     const ViewVoid failed = fail_after_thawing_derivation(
         temp_dir, view_error_from_fs(raced_exists.error()));
@@ -1236,7 +1230,7 @@ write_derivation_directory(const memix::Store &store,
   }
   const fs::path derivation_dir =
       derivation_dir_for(store.root(), derivation.id);
-  const memix::FsResult<bool> exists = raw_fs::exists(derivation_dir);
+  const memix::FsResult<bool> exists = fs::exists(derivation_dir);
   if (!exists) {
     return view_error(exists.error());
   }
@@ -1258,7 +1252,7 @@ write_derivation_directory(const memix::Store &store,
     return std::unexpected(temp_dir.error());
   }
   const fs::path &temp_path = *temp_dir;
-  const memix::FsResult<bool> created = raw_fs::create_directory(temp_path);
+  const memix::FsResult<bool> created = fs::create_directory(temp_path);
   if (!created) {
     return view_error(created.error());
   }
@@ -1268,10 +1262,9 @@ write_derivation_directory(const memix::Store &store,
                                   temp_path.string()));
   }
   memix::scope_exit cleanup([temp_path] {
-    std::error_code remove_error;
-    fs::remove_all(temp_path, remove_error);
+    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
   });
-  const memix::FsVoid written = memix::detail::write_text_file(
+  const memix::FsVoid written = fs::write_text_file(
       temp_path / std::string(kManifestFilename), manifest_json);
   if (!written) {
     return view_error(written.error());
@@ -1281,7 +1274,7 @@ write_derivation_directory(const memix::Store &store,
   if (!tree_created) {
     return std::unexpected(tree_created.error());
   }
-  const memix::FsVoid renamed = raw_fs::rename(temp_path, derivation_dir);
+  const memix::FsVoid renamed = fs::rename(temp_path, derivation_dir);
   if (!renamed) {
     return handle_derivation_rename_failure(temp_path, derivation,
                                             manifest_json, renamed.error());
@@ -1378,7 +1371,7 @@ ViewResult<std::string> resolve_unique_environment_id(const memix::Store &store,
                                   prefix));
   }
   const fs::path environments_dir = environments_dir_for(store.root());
-  const memix::FsResult<bool> exists = raw_fs::exists(environments_dir);
+  const memix::FsResult<bool> exists = fs::exists(environments_dir);
   if (!exists) {
     return view_error(exists.error());
   }
@@ -1395,8 +1388,8 @@ ViewResult<std::string> resolve_unique_environment_id(const memix::Store &store,
     std::error_code entry_error;
     if (!entry.is_regular_file(entry_error)) {
       if (entry_error) {
-        return view_error(memix::detail::make_fs_error(
-            "failed to inspect", entry_error, entry.path()));
+        return view_error(
+            fs::make_fs_error("failed to inspect", entry_error, entry.path()));
       }
       continue;
     }
@@ -1410,8 +1403,8 @@ ViewResult<std::string> resolve_unique_environment_id(const memix::Store &store,
     }
   }
   if (iterator_error) {
-    return view_error(memix::detail::make_fs_error(
-        "failed to list directory", iterator_error, environments_dir));
+    return view_error(fs::make_fs_error("failed to list directory",
+                                        iterator_error, environments_dir));
   }
   if (matches.empty()) {
     return view_error(memix::ErrorKind::NotFound,
@@ -1687,7 +1680,7 @@ resolve_derivation(const memix::Store &store, std::string_view derivation_id) {
   const fs::path manifest_path = derivation_dir_for(store.root(), derivation_id)
                                / std::string(kManifestFilename);
   memix::FsResult<std::string> text =
-      memix::detail::read_text_file(manifest_path, "view derivation");
+      fs::read_text_file(manifest_path, "view derivation");
   if (!text) {
     return view_error(text.error());
   }
@@ -2001,7 +1994,7 @@ ViewService::resolve_environment(std::string_view environment_prefix) const {
   }
   const fs::path path = environment_path_for(store_.root(), *environment_id);
   memix::FsResult<std::string> text =
-      memix::detail::read_text_file(path, "view environment");
+      fs::read_text_file(path, "view environment");
   if (!text) {
     return view_error(text.error());
   }

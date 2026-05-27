@@ -1,9 +1,9 @@
 #pragma once
 
 #include "memix/error.hpp"
+#include "memix/fs.hpp"
 
 #include <cstdint>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,7 +23,7 @@ std::string_view to_string(ContextTreeEntryKind kind) noexcept;
 std::optional<ContextTreeEntryKind>
 parse_context_tree_entry_kind(std::string_view value) noexcept;
 
-StoreResult<std::filesystem::path> default_store_root();
+StoreResult<fs::path> default_store_root();
 
 struct StoredObject {
   int schema_version = 1;
@@ -35,9 +35,9 @@ struct StoredObject {
   std::uintmax_t size_bytes = 0;
   std::string filename;
   std::string created_at;
-  std::filesystem::path content_path = "object";
-  std::filesystem::path object_dir;
-  std::filesystem::path metadata_path;
+  fs::path content_path = "object";
+  fs::path object_dir;
+  fs::path metadata_path;
 };
 
 [[nodiscard]] StoreResult<std::string>
@@ -60,7 +60,7 @@ struct ContextTree {
   MemoryObjectType type = MemoryObjectType::Agents;
   std::string id;
   std::vector<ContextTreeEntry> entries;
-  std::filesystem::path object_path;
+  fs::path object_path;
 };
 
 struct ContextGeneration {
@@ -72,13 +72,13 @@ struct ContextGeneration {
   std::optional<std::string> parent;
   std::string created_at;
   std::string message;
-  std::filesystem::path object_path;
+  fs::path object_path;
 };
 
 struct FileIngestRequest {
   MemoryObjectType type = MemoryObjectType::Documents;
-  std::filesystem::path source_path;
-  std::filesystem::path context_path;
+  fs::path source_path;
+  fs::path context_path;
   std::string_view message;
 };
 
@@ -87,29 +87,26 @@ struct FileIngestResult {
   ContextGeneration generation;
   std::optional<std::string> previous_generation;
   MemoryObjectType type = MemoryObjectType::Documents;
-  std::filesystem::path context_path;
+  fs::path context_path;
 };
 
 struct StoreFile {
   MemoryObjectType type = MemoryObjectType::Documents;
-  std::filesystem::path context_path;
+  fs::path context_path;
   StoredObject blob;
 };
 
 class Store {
 public:
-  explicit Store(std::filesystem::path root) : root_(std::move(root)) {}
+  explicit Store(fs::path root) : root_(std::move(root)) {}
 
-  [[nodiscard]] const std::filesystem::path &root() const noexcept {
-    return root_;
-  }
+  [[nodiscard]] const fs::path &root() const noexcept { return root_; }
 
   [[nodiscard]] StoreResult<IngestResult>
-  ingest(MemoryObjectType type, const std::filesystem::path &source_path) const;
+  ingest(MemoryObjectType type, const fs::path &source_path) const;
 
   [[nodiscard]] StoreResult<IngestResult>
-  ingest_blob(MemoryObjectType type,
-              const std::filesystem::path &source_path) const;
+  ingest_blob(MemoryObjectType type, const fs::path &source_path) const;
 
   [[nodiscard]] StoreResult<FileIngestResult>
   ingest_file(const FileIngestRequest &request) const;
@@ -124,7 +121,7 @@ public:
   read_generation(MemoryObjectType type, std::string_view object_id) const;
 
   [[nodiscard]] StoreResult<StoredObject>
-  read_file(MemoryObjectType type, const std::filesystem::path &context_path,
+  read_file(MemoryObjectType type, const fs::path &context_path,
             std::optional<std::string_view> generation = std::nullopt) const;
 
   [[nodiscard]] StoreResult<std::vector<StoreFile>>
@@ -143,7 +140,7 @@ public:
   list(std::optional<MemoryObjectType> type = std::nullopt) const;
 
 private:
-  std::filesystem::path root_;
+  fs::path root_;
 };
 
 } // namespace memix
