@@ -35,23 +35,23 @@ struct ContentView: View {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .help("Ingest file")
-                .disabled(model.isInsideView)
+                .disabled(model.isInsideEnvironment)
 
                 Button {
-                    model.buildViewFromCurrentTree()
+                    model.buildEnvironmentFromCurrentTree()
                 } label: {
                     Image(systemName: "shippingbox")
                 }
-                .help("Build file-tree view")
+                .help("Build view environment")
                 .disabled(model.currentTreeFiles.isEmpty)
 
-                if model.isInsideView {
+                if model.isInsideEnvironment {
                     Button {
-                        model.exitView()
+                        model.exitEnvironment()
                     } label: {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
                     }
-                    .help("Exit view")
+                    .help("Exit environment")
                 }
             }
         }
@@ -73,14 +73,14 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(model.selectedType == type ? .primary : .secondary)
-                    .disabled(model.isInsideView)
-                    .help(model.isInsideView ? "Exit the locked view to switch object type" : type.title)
+                    .disabled(model.isInsideEnvironment)
+                    .help(model.isInsideEnvironment ? "Exit the environment to switch object type" : type.title)
                 }
             }
 
-            if let artifact = model.activeViewArtifact {
-                Section("Active View") {
-                    ActiveViewRow(artifact: artifact)
+            if let environment = model.activeViewEnvironment {
+                Section("Active Environment") {
+                    ActiveEnvironmentRow(environment: environment)
                 }
             }
         }
@@ -114,9 +114,9 @@ struct ContentView: View {
                         .frame(width: 74, height: 24)
                 }
 
-                if let artifact = model.activeViewArtifact {
+                if let environment = model.activeViewEnvironment {
                     Label(
-                        "View \(model.shortID(artifact.derivationID)) locked \(model.shortID(artifact.sourceGeneration))",
+                        "Environment \(model.shortID(environment.environmentID))",
                         systemImage: "lock"
                     )
                     .font(.caption)
@@ -142,11 +142,11 @@ struct ContentView: View {
                 TreeFileList()
             case .blobs:
                 BlobList()
-            case .views:
-                ViewArtifactList()
+            case .environments:
+                ViewEnvironmentList()
             }
         }
-        .navigationTitle(model.activeViewArtifact == nil ? model.selectedType.title : "Locked View")
+        .navigationTitle(model.activeViewEnvironment == nil ? model.selectedType.title : "View Environment")
     }
 
     @ViewBuilder
@@ -159,8 +159,8 @@ struct ContentView: View {
                 FileDetail()
             case .blobs:
                 ObjectDetail()
-            case .views:
-                ViewDetail()
+            case .environments:
+                EnvironmentDetail()
             }
         }
     }
@@ -182,14 +182,14 @@ private struct StoreRootRow: View {
     }
 }
 
-private struct ActiveViewRow: View {
+private struct ActiveEnvironmentRow: View {
     @EnvironmentObject private var model: InspectorModel
-    let artifact: MMXViewArtifact
+    let environment: MMXViewEnvironment
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label(model.shortID(artifact.derivationID), systemImage: "lock")
-            Text("\(artifact.sourceType.title) \(model.shortID(artifact.sourceGeneration))")
+            Label(model.shortID(environment.environmentID), systemImage: "lock")
+            Text(model.shortID(environment.derivation.derivationID))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -212,7 +212,7 @@ private struct TreeFileList: View {
         .overlay {
             if model.treeNodes.isEmpty {
                 EmptyState(
-                    title: model.isInsideView ? "No files in view" : "No tree files",
+                    title: model.isInsideEnvironment ? "No files in environment" : "No tree files",
                     systemImage: "folder"
                 )
             }
@@ -227,7 +227,7 @@ private struct TreeOutlineBrowser: View {
         List(selection: $model.selectedFileID) {
             OutlineGroup(model.treeNodes, children: \.outlineChildren) { node in
                 TreeNodeRow(node: node)
-                    .tag(node.file?.stableID)
+                    .tag(node.file?.id)
             }
         }
     }
@@ -286,7 +286,7 @@ private struct TreeColumnBrowser: View {
         for key in selectedIDsByDepth.keys where key > depth {
             selectedIDsByDepth.removeValue(forKey: key)
         }
-        model.selectedFileID = node.file?.stableID
+        model.selectedFileID = node.file?.id
     }
 
     private func columnWidth(for depth: Int) -> CGFloat {
@@ -453,30 +453,30 @@ private struct BlobList: View {
     }
 }
 
-private struct ViewArtifactList: View {
+private struct ViewEnvironmentList: View {
     @EnvironmentObject private var model: InspectorModel
 
     var body: some View {
-        List(selection: $model.selectedViewID) {
-            ForEach(model.viewArtifacts, id: \.stableID) { artifact in
+        List(selection: $model.selectedEnvironmentID) {
+            ForEach(model.viewEnvironments, id: \.stableID) { environment in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(model.shortID(artifact.derivationID))
+                    Text(model.shortID(environment.environmentID))
                         .font(.system(.body, design: .monospaced))
                     HStack {
-                        Text("\(artifact.inputBlobIDs.count) inputs")
-                        Text(artifact.sourceType.title)
-                        Text(model.shortID(artifact.sourceGeneration))
+                        Text("\(environment.derivation.resolvedFiles.count) files")
+                        Text("\(environment.closure.rawObjects.count) objects")
+                        Text(model.shortID(environment.derivation.derivationID))
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
-                .tag(artifact.stableID)
+                .tag(environment.stableID)
             }
         }
         .overlay {
-            if model.viewArtifacts.isEmpty {
-                EmptyState(title: "No views", systemImage: "shippingbox")
+            if model.viewEnvironments.isEmpty {
+                EmptyState(title: "No environments", systemImage: "shippingbox")
             }
         }
     }
@@ -490,9 +490,9 @@ private struct FileDetail: View {
             VStack(spacing: 0) {
                 InspectorHeader(
                     title: file.contextPath,
-                    subtitle: model.activeViewArtifact == nil
+                    subtitle: model.activeViewEnvironment == nil
                         ? file.blob.objectID
-                        : "locked \(file.blob.objectID)"
+                        : file.blob.objectID
                 )
                 Divider()
                 VSplitView {
@@ -519,14 +519,23 @@ private struct FileDetail: View {
         }
     }
 
-    private func fileRows(_ file: MMXStoreFile) -> [(String, String)] {
+    private func fileRows(_ file: InspectorFile) -> [(String, String)] {
         var rows: [(String, String)] = []
-        if let artifact = model.activeViewArtifact {
-            rows.append(("View", artifact.derivationID))
-            rows.append(("Source type", artifact.sourceType.title))
-            rows.append(("Locked generation", artifact.sourceGeneration))
+        if let environment = model.activeViewEnvironment {
+            rows.append(("Environment", environment.environmentID))
+            rows.append(("Derivation", environment.derivation.derivationID))
+        }
+        if let locator = file.locator {
+            rows.append(("Locator", locator))
+        }
+        if let sourcePath = file.sourcePath {
+            rows.append(("Source path", sourcePath))
+        }
+        if let sourceGeneration = file.sourceGeneration {
+            rows.append(("Source generation", sourceGeneration))
         }
         rows.append(contentsOf: [
+            ("Type", file.type.title),
             ("Blob", file.blob.objectID),
             ("Hash", file.blob.hashValue),
             ("Size", model.byteCount(file.blob.sizeBytes)),
@@ -567,38 +576,53 @@ private struct ObjectDetail: View {
     }
 }
 
-private struct ViewDetail: View {
+private struct EnvironmentDetail: View {
     @EnvironmentObject private var model: InspectorModel
 
     var body: some View {
-        if let artifact = model.selectedViewArtifact {
+        if let environment = model.selectedViewEnvironment {
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
-                    InspectorHeader(title: model.shortID(artifact.derivationID), subtitle: artifact.derivationID)
+                    InspectorHeader(
+                        title: model.shortID(environment.environmentID),
+                        subtitle: environment.environmentID
+                    )
                     Button {
-                        model.enterSelectedView()
+                        model.enterSelectedEnvironment()
                     } label: {
-                        Label("Enter View", systemImage: "arrow.right.square")
+                        Label("Enter Environment", systemImage: "arrow.right.square")
                     }
                     .padding(.top, 16)
                     .padding(.trailing, 16)
                 }
                 Divider()
-                MetadataGrid(rows: [
-                    ("Expression", artifact.expressionID),
-                    ("Source type", artifact.sourceType.title),
-                    ("Source generation", artifact.sourceGeneration),
-                    ("Inputs", "\(artifact.inputBlobIDs.count)"),
-                    ("Manifest", artifact.manifestPath),
-                    ("Tree", artifact.treePath),
-                    ("Inserted", artifact.inserted ? "true" : "false"),
-                ])
+                MetadataGrid(rows: environmentRows(environment))
                 .padding(16)
                 Spacer()
             }
         } else {
-            EmptyState(title: "Select a view", systemImage: "shippingbox")
+            EmptyState(title: "Select an environment", systemImage: "shippingbox")
         }
+    }
+
+    private func environmentRows(_ environment: MMXViewEnvironment) -> [(String, String)] {
+        [
+            ("Environment", environment.environmentID),
+            ("Environment manifest", environment.manifestPath),
+            ("Environment inserted", environment.inserted ? "true" : "false"),
+            ("Derivation", environment.derivation.derivationID),
+            ("IR hash", environment.derivation.irHash),
+            ("Target", environment.derivation.target.title),
+            ("Resolved files", "\(environment.derivation.resolvedFiles.count)"),
+            ("Outputs", environment.derivation.outputs.map(\.role).joined(separator: ", ")),
+            ("Derivation manifest", environment.derivation.manifestPath),
+            ("Tree", environment.derivation.treePath),
+            ("Derivation inserted", environment.derivation.inserted ? "true" : "false"),
+            ("Bindings", environment.bindings.map { "\($0.mount):\($0.outputRole)" }.joined(separator: ", ")),
+            ("Closure derivations", "\(environment.closure.derivations.count)"),
+            ("Closure artifacts", "\(environment.closure.artifacts.count)"),
+            ("Raw objects", "\(environment.closure.rawObjects.count)"),
+        ]
     }
 }
 

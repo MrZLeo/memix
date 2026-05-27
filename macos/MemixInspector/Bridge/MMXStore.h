@@ -8,6 +8,11 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
   MMXObjectTypeDocuments = 2,
 };
 
+typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
+  MMXViewTargetKindFileTree = 0,
+  MMXViewTargetKindContextPack = 1,
+};
+
 @interface MMXStoredObject : NSObject
 @property(nonatomic, readonly) NSInteger schemaVersion;
 @property(nonatomic, readonly) NSInteger objectVersion;
@@ -36,14 +41,53 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
 @property(nonatomic, readonly) BOOL inserted;
 @end
 
-@interface MMXViewArtifact : NSObject
-@property(nonatomic, copy, readonly) NSString *derivationID;
-@property(nonatomic, copy, readonly) NSString *expressionID;
-@property(nonatomic, readonly) MMXObjectType sourceType;
+@interface MMXResolvedViewFile : NSObject
+@property(nonatomic, copy, readonly) NSString *locator;
+@property(nonatomic, readonly) MMXObjectType type;
+@property(nonatomic, copy, readonly) NSString *sourcePath;
 @property(nonatomic, copy, readonly) NSString *sourceGeneration;
-@property(nonatomic, copy, readonly) NSArray<NSString *> *inputBlobIDs;
+@property(nonatomic, copy, readonly) NSString *outputPath;
+@property(nonatomic, strong, readonly) MMXStoredObject *blob;
+@end
+
+@interface MMXViewDerivationOutput : NSObject
+@property(nonatomic, copy, readonly) NSString *role;
+@property(nonatomic, copy, readonly) NSString *artifact;
+@property(nonatomic, copy, readonly) NSString *path;
+@end
+
+@interface MMXViewDerivation : NSObject
+@property(nonatomic, copy, readonly) NSString *derivationID;
+@property(nonatomic, copy, readonly) NSString *irHash;
+@property(nonatomic, readonly) MMXViewTargetKind target;
+@property(nonatomic, copy, readonly)
+    NSArray<MMXResolvedViewFile *> *resolvedFiles;
+@property(nonatomic, copy, readonly)
+    NSArray<MMXViewDerivationOutput *> *outputs;
 @property(nonatomic, copy, readonly) NSString *manifestPath;
 @property(nonatomic, copy, readonly) NSString *treePath;
+@property(nonatomic, readonly) BOOL inserted;
+@end
+
+@interface MMXViewEnvironmentBinding : NSObject
+@property(nonatomic, copy, readonly) NSString *mount;
+@property(nonatomic, copy, readonly) NSString *derivationID;
+@property(nonatomic, copy, readonly) NSString *outputRole;
+@end
+
+@interface MMXViewEnvironmentClosure : NSObject
+@property(nonatomic, copy, readonly) NSArray<NSString *> *derivations;
+@property(nonatomic, copy, readonly) NSArray<NSString *> *artifacts;
+@property(nonatomic, copy, readonly) NSArray<NSString *> *rawObjects;
+@end
+
+@interface MMXViewEnvironment : NSObject
+@property(nonatomic, copy, readonly) NSString *environmentID;
+@property(nonatomic, copy, readonly) NSString *manifestPath;
+@property(nonatomic, copy, readonly)
+    NSArray<MMXViewEnvironmentBinding *> *bindings;
+@property(nonatomic, strong, readonly) MMXViewEnvironmentClosure *closure;
+@property(nonatomic, strong, readonly) MMXViewDerivation *derivation;
 @property(nonatomic, readonly) BOOL inserted;
 @end
 
@@ -63,13 +107,13 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
 - (nullable NSArray<MMXStoredObject *> *)listAllObjectsAndReturnError:
     (NSError **)error NS_SWIFT_NAME(listAllObjects());
 
-- (nullable NSArray<MMXStoredObject *> *)listObjectsWithType:
-    (MMXObjectType)type error:(NSError **)error
+- (nullable NSArray<MMXStoredObject *> *)listObjectsWithType:(MMXObjectType)type
+                                                       error:(NSError **)error
     NS_SWIFT_NAME(listObjects(type:));
 
 - (nullable NSArray<MMXStoreFile *> *)listFilesWithType:(MMXObjectType)type
-                                            generation:
-                                                (nullable NSString *)generation
+                                             generation:
+                                                 (nullable NSString *)generation
                                                   error:(NSError **)error
     NS_SWIFT_NAME(listFiles(type:generation:));
 
@@ -79,14 +123,11 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
                                     error:(NSError **)error
     NS_SWIFT_NAME(readFileData(type:contextPath:generation:));
 
-- (nullable NSArray<MMXStoreFile *> *)listFilesInFileTreeViewWithDerivationID:
-    (NSString *)derivationID error:(NSError **)error
-    NS_SWIFT_NAME(listFilesInFileTreeView(derivationID:));
-
-- (nullable NSData *)readFileTreeViewDataWithDerivationID:
-    (NSString *)derivationID contextPath:(NSString *)contextPath
+- (nullable NSData *)
+    readFileTreeViewDataWithEnvironmentID:(NSString *)environmentID
+                               outputPath:(NSString *)outputPath
                                     error:(NSError **)error
-    NS_SWIFT_NAME(readFileTreeViewData(derivationID:contextPath:));
+    NS_SWIFT_NAME(readFileTreeViewData(environmentID:outputPath:));
 
 - (nullable MMXIngestResult *)ingestFileAtURL:(NSURL *)sourceURL
                                          type:(MMXObjectType)type
@@ -95,20 +136,19 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
                                         error:(NSError **)error
     NS_SWIFT_NAME(ingestFile(at:type:contextPath:message:));
 
-- (nullable NSArray<MMXViewArtifact *> *)listFileTreeViewsAndReturnError:
-    (NSError **)error NS_SWIFT_NAME(listFileTreeViews());
+- (nullable NSArray<MMXViewEnvironment *> *)listViewEnvironmentsAndReturnError:
+    (NSError **)error NS_SWIFT_NAME(listViewEnvironments());
 
-- (nullable MMXViewArtifact *)buildFileTreeWithName:(NSString *)name
-                                         sourceType:(MMXObjectType)sourceType
-                                requiredSourcePaths:
-                                    (NSArray<NSString *> *)requiredSourcePaths
-                                optionalSourcePaths:
-                                    (NSArray<NSString *> *)optionalSourcePaths
-                                         generation:
-                                             (nullable NSString *)generation
-                                                ref:(nullable NSString *)ref
-                                              error:(NSError **)error
-    NS_SWIFT_NAME(buildFileTree(name:sourceType:requiredSourcePaths:optionalSourcePaths:generation:ref:));
+- (nullable MMXViewEnvironment *)resolveViewEnvironmentWithID:
+                                     (NSString *)environmentID
+                                                        error:(NSError **)error
+    NS_SWIFT_NAME(resolveViewEnvironment(id:));
+
+- (nullable MMXViewEnvironment *)
+    buildViewEnvironmentWithSources:(NSArray<NSString *> *)sources
+                             target:(MMXViewTargetKind)target
+                              error:(NSError **)error
+    NS_SWIFT_NAME(buildViewEnvironment(sources:target:));
 
 @end
 

@@ -7,41 +7,48 @@
 #include <algorithm>
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <format>
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+namespace fs = memix::fs;
+
 namespace {
 
 NSString *const MMXErrorDomain = @"com.memix.inspector";
+constexpr std::size_t kSha256HexLength = 64;
+
+NSString *MMXString(std::string_view value);
+NSString *MMXString(const std::string &value);
 
 NSError *MMXMakeError(NSString *message) {
+  NSString *const description = message != nil ? message : @"Memix error";
   return [NSError errorWithDomain:MMXErrorDomain
                              code:1
-                         userInfo:@{NSLocalizedDescriptionKey : message}];
+                         userInfo:@{NSLocalizedDescriptionKey : description}];
 }
 
 NSError *MMXMakeError(const memix::StoreError &error) {
-  return MMXMakeError([NSString stringWithUTF8String:error.message.c_str()]);
+  return MMXMakeError(MMXString(error.message));
 }
 
 NSError *MMXMakeError(const memix::ViewError &error) {
-  return MMXMakeError([NSString stringWithUTF8String:error.message.c_str()]);
+  return MMXMakeError(MMXString(error.message));
 }
 
-memix::FsError
-MMXMakeFilesystemError(std::string_view operation, const std::error_code &error,
-                       std::vector<std::filesystem::path> paths) {
+memix::FsError MMXMakeFilesystemError(std::string_view operation,
+                                      const std::error_code &error,
+                                      std::vector<fs::path> paths) {
   std::string message{operation};
   std::string_view separator = " `";
-  for (const std::filesystem::path &path : paths) {
+  for (const fs::path &path : paths) {
     message += std::format("{}{}`", separator, path.string());
     separator = " to `";
   }
@@ -62,6 +69,14 @@ memix::ViewError MMXMakeViewError(memix::FsError error) {
   };
 }
 
+memix::ViewError MMXMakeViewError(memix::ErrorKind kind, std::string message) {
+  return memix::ViewError{
+      .message = std::move(message),
+      .filesystem_error = std::nullopt,
+      .kind = kind,
+  };
+}
+
 bool MMXSetError(NSError **out_error, NSError *error) {
   if (out_error != nullptr) {
     *out_error = error;
@@ -78,9 +93,10 @@ bool MMXSetViewError(NSError **out_error, const memix::ViewError &error) {
 }
 
 NSString *MMXString(std::string_view value) {
-  NSString *string = [[NSString alloc] initWithBytes:value.data()
-                                              length:value.size()
-                                            encoding:NSUTF8StringEncoding];
+  NSString *const string =
+      [[NSString alloc] initWithBytes:value.data()
+                               length:value.size()
+                             encoding:NSUTF8StringEncoding];
   return string != nil ? string : @"";
 }
 
@@ -88,21 +104,21 @@ NSString *MMXString(const std::string &value) {
   return MMXString(std::string_view(value));
 }
 
-NSString *MMXPathString(const std::filesystem::path &path) {
+NSString *MMXPathString(const fs::path &path) {
   return MMXString(path.generic_string());
 }
 
 std::string MMXStdString(NSString *value) {
-  return value == nil ? std::string() : std::string(value.UTF8String);
+  if (value == nil) {
+    return {};
+  }
+  const char *const utf8 = value.UTF8String;
+  return utf8 == nullptr ? std::string() : std::string(utf8);
 }
 
-std::filesystem::path MMXPath(NSString *value) {
-  return std::filesystem::path(MMXStdString(value));
-}
+fs::path MMXPath(NSString *value) { return {MMXStdString(value)}; }
 
-std::filesystem::path MMXPath(NSURL *url) {
-  return std::filesystem::path(MMXStdString(url.path));
-}
+fs::path MMXPath(NSURL *url) { return {MMXStdString(url.path)}; }
 
 MMXObjectType MMXObjectTypeFromMemory(memix::MemoryObjectType type) {
   switch (type) {
@@ -139,6 +155,38 @@ bool MMXRequireType(MMXObjectType type, memix::MemoryObjectType *out_type,
   return true;
 }
 
+MMXViewTargetKind MMXViewTargetKindFromMemory(memix::ViewTargetKind target) {
+  switch (target) {
+  case memix::ViewTargetKind::FileTree:
+    return MMXViewTargetKindFileTree;
+  case memix::ViewTargetKind::ContextPack:
+    return MMXViewTargetKindContextPack;
+  }
+}
+
+std::optional<memix::ViewTargetKind>
+MMXViewTargetKindFromBridge(MMXViewTargetKind target) {
+  switch (target) {
+  case MMXViewTargetKindFileTree:
+    return memix::ViewTargetKind::FileTree;
+  case MMXViewTargetKindContextPack:
+    return memix::ViewTargetKind::ContextPack;
+  }
+  return std::nullopt;
+}
+
+bool MMXRequireTarget(MMXViewTargetKind target,
+                      memix::ViewTargetKind *out_target, NSError **out_error) {
+  const std::optional<memix::ViewTargetKind> parsed =
+      MMXViewTargetKindFromBridge(target);
+  if (!parsed.has_value()) {
+    return MMXSetError(out_error,
+                       MMXMakeError(@"Unsupported memix view target."));
+  }
+  *out_target = *parsed;
+  return true;
+}
+
 std::optional<std::string> MMXOptionalString(NSString *value) {
   if (value == nil || value.length == 0) {
     return std::nullopt;
@@ -155,7 +203,7 @@ MMXOptionalStringView(const std::optional<std::string> &storage) {
 }
 
 NSArray<NSString *> *MMXStringArray(const std::vector<std::string> &values) {
-  NSMutableArray<NSString *> *items =
+  NSMutableArray<NSString *> *const items =
       [[NSMutableArray alloc] initWithCapacity:values.size()];
   for (const std::string &value : values) {
     [items addObject:MMXString(value)];
@@ -163,12 +211,22 @@ NSArray<NSString *> *MMXStringArray(const std::vector<std::string> &values) {
   return items;
 }
 
-NSData *MMXReadData(const std::filesystem::path &path, NSError **out_error) {
-  NSURL *url = [NSURL fileURLWithPath:MMXPathString(path)];
+std::vector<std::string> MMXStringVector(NSArray<NSString *> *values) {
+  std::vector<std::string> output;
+  output.reserve(values.count);
+  for (NSUInteger index = 0; index < values.count; ++index) {
+    NSString *const value = values[index];
+    output.push_back(MMXStdString(value));
+  }
+  return output;
+}
+
+NSData *MMXReadData(const fs::path &path, NSError **out_error) {
+  NSURL *const url = [NSURL fileURLWithPath:MMXPathString(path)];
   NSError *read_error = nil;
-  NSData *data = [NSData dataWithContentsOfURL:url
-                                       options:NSDataReadingMappedIfSafe
-                                         error:&read_error];
+  NSData *const data = [NSData dataWithContentsOfURL:url
+                                             options:NSDataReadingMappedIfSafe
+                                               error:&read_error];
   if (data == nil) {
     MMXSetError(out_error, read_error != nil
                                ? read_error
@@ -177,16 +235,27 @@ NSData *MMXReadData(const std::filesystem::path &path, NSError **out_error) {
   return data;
 }
 
-bool MMXPathIsSafeRelative(const std::filesystem::path &path) {
+bool MMXPathIsSafeRelative(const fs::path &path) {
   if (path.empty() || path.is_absolute()) {
     return false;
   }
-  for (const std::filesystem::path &component : path) {
-    if (component.empty() || component == "." || component == "..") {
-      return false;
-    }
+  return std::ranges::all_of(path, [](const fs::path &component) {
+    return !component.empty() && component != "." && component != "..";
+  });
+}
+
+bool MMXIsLowerHexSha256(std::string_view value) {
+  if (value.size() != kSha256HexLength) {
+    return false;
   }
-  return true;
+  return std::ranges::all_of(value, [](char character) {
+    return (character >= '0' && character <= '9')
+        || (character >= 'a' && character <= 'f');
+  });
+}
+
+fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
+  return root / "views" / "environments";
 }
 
 } // namespace
@@ -228,24 +297,78 @@ bool MMXPathIsSafeRelative(const std::filesystem::path &path) {
 @implementation MMXIngestResult
 @end
 
-@interface MMXViewArtifact ()
-@property(nonatomic, copy, readwrite) NSString *derivationID;
-@property(nonatomic, copy, readwrite) NSString *expressionID;
-@property(nonatomic, readwrite) MMXObjectType sourceType;
+@interface MMXResolvedViewFile ()
+@property(nonatomic, copy, readwrite) NSString *locator;
+@property(nonatomic, readwrite) MMXObjectType type;
+@property(nonatomic, copy, readwrite) NSString *sourcePath;
 @property(nonatomic, copy, readwrite) NSString *sourceGeneration;
-@property(nonatomic, copy, readwrite) NSArray<NSString *> *inputBlobIDs;
+@property(nonatomic, copy, readwrite) NSString *outputPath;
+@property(nonatomic, strong, readwrite) MMXStoredObject *blob;
+@end
+
+@implementation MMXResolvedViewFile
+@end
+
+@interface MMXViewDerivationOutput ()
+@property(nonatomic, copy, readwrite) NSString *role;
+@property(nonatomic, copy, readwrite) NSString *artifact;
+@property(nonatomic, copy, readwrite) NSString *path;
+@end
+
+@implementation MMXViewDerivationOutput
+@end
+
+@interface MMXViewDerivation ()
+@property(nonatomic, copy, readwrite) NSString *derivationID;
+@property(nonatomic, copy, readwrite) NSString *irHash;
+@property(nonatomic, readwrite) MMXViewTargetKind target;
+@property(nonatomic, copy, readwrite)
+    NSArray<MMXResolvedViewFile *> *resolvedFiles;
+@property(nonatomic, copy, readwrite)
+    NSArray<MMXViewDerivationOutput *> *outputs;
 @property(nonatomic, copy, readwrite) NSString *manifestPath;
 @property(nonatomic, copy, readwrite) NSString *treePath;
 @property(nonatomic, readwrite) BOOL inserted;
 @end
 
-@implementation MMXViewArtifact
+@implementation MMXViewDerivation
+@end
+
+@interface MMXViewEnvironmentBinding ()
+@property(nonatomic, copy, readwrite) NSString *mount;
+@property(nonatomic, copy, readwrite) NSString *derivationID;
+@property(nonatomic, copy, readwrite) NSString *outputRole;
+@end
+
+@implementation MMXViewEnvironmentBinding
+@end
+
+@interface MMXViewEnvironmentClosure ()
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *derivations;
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *artifacts;
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *rawObjects;
+@end
+
+@implementation MMXViewEnvironmentClosure
+@end
+
+@interface MMXViewEnvironment ()
+@property(nonatomic, copy, readwrite) NSString *environmentID;
+@property(nonatomic, copy, readwrite) NSString *manifestPath;
+@property(nonatomic, copy, readwrite)
+    NSArray<MMXViewEnvironmentBinding *> *bindings;
+@property(nonatomic, strong, readwrite) MMXViewEnvironmentClosure *closure;
+@property(nonatomic, strong, readwrite) MMXViewDerivation *derivation;
+@property(nonatomic, readwrite) BOOL inserted;
+@end
+
+@implementation MMXViewEnvironment
 @end
 
 namespace {
 
 MMXStoredObject *MMXWrapStoredObject(const memix::StoredObject &object) {
-  MMXStoredObject *wrapped = [[MMXStoredObject alloc] init];
+  MMXStoredObject *const wrapped = [[MMXStoredObject alloc] init];
   wrapped.schemaVersion = object.schema_version;
   wrapped.objectVersion = object.object_version;
   wrapped.type = MMXObjectTypeFromMemory(object.type);
@@ -262,98 +385,198 @@ MMXStoredObject *MMXWrapStoredObject(const memix::StoredObject &object) {
 }
 
 MMXStoreFile *MMXWrapStoreFile(const memix::StoreFile &file) {
-  MMXStoreFile *wrapped = [[MMXStoreFile alloc] init];
+  MMXStoreFile *const wrapped = [[MMXStoreFile alloc] init];
   wrapped.type = MMXObjectTypeFromMemory(file.type);
   wrapped.contextPath = MMXPathString(file.context_path);
   wrapped.blob = MMXWrapStoredObject(file.blob);
   return wrapped;
 }
 
-MMXViewArtifact *MMXWrapViewArtifact(const memix::ViewArtifact &artifact) {
-  MMXViewArtifact *wrapped = [[MMXViewArtifact alloc] init];
-  wrapped.derivationID = MMXString(artifact.derivation_id);
-  wrapped.expressionID = MMXString(artifact.expression_id);
-  wrapped.sourceType = MMXObjectTypeFromMemory(artifact.source_type);
-  wrapped.sourceGeneration = MMXString(artifact.source_generation);
-  wrapped.inputBlobIDs = MMXStringArray(artifact.input_blob_ids);
-  wrapped.manifestPath = MMXPathString(artifact.manifest_path);
-  wrapped.treePath = MMXPathString(artifact.tree_path);
-  wrapped.inserted = artifact.inserted;
+MMXResolvedViewFile *
+MMXWrapResolvedViewFile(const memix::ResolvedViewFile &file) {
+  MMXResolvedViewFile *const wrapped = [[MMXResolvedViewFile alloc] init];
+  wrapped.locator = MMXString(file.locator);
+  wrapped.type = MMXObjectTypeFromMemory(file.type);
+  wrapped.sourcePath = MMXPathString(file.source_path);
+  wrapped.sourceGeneration = MMXString(file.source_generation);
+  wrapped.outputPath = MMXPathString(file.output_path);
+  wrapped.blob = MMXWrapStoredObject(file.blob);
   return wrapped;
 }
 
-memix::ViewResult<std::vector<memix::StoreFile>>
-MMXCollectViewFiles(const memix::Store &store,
-                    const memix::ViewArtifact &artifact) {
-  std::vector<memix::StoreFile> files;
+NSArray<MMXResolvedViewFile *> *
+MMXWrapResolvedViewFiles(const std::vector<memix::ResolvedViewFile> &files) {
+  NSMutableArray<MMXResolvedViewFile *> *const wrapped =
+      [[NSMutableArray alloc] initWithCapacity:files.size()];
+  for (const memix::ResolvedViewFile &file : files) {
+    [wrapped addObject:MMXWrapResolvedViewFile(file)];
+  }
+  return wrapped;
+}
 
+MMXViewDerivationOutput *
+MMXWrapViewDerivationOutput(const memix::ViewDerivationOutput &output) {
+  MMXViewDerivationOutput *const wrapped =
+      [[MMXViewDerivationOutput alloc] init];
+  wrapped.role = MMXString(output.role);
+  wrapped.artifact = MMXString(output.artifact);
+  wrapped.path = MMXPathString(output.path);
+  return wrapped;
+}
+
+NSArray<MMXViewDerivationOutput *> *MMXWrapViewDerivationOutputs(
+    const std::vector<memix::ViewDerivationOutput> &outputs) {
+  NSMutableArray<MMXViewDerivationOutput *> *const wrapped =
+      [[NSMutableArray alloc] initWithCapacity:outputs.size()];
+  for (const memix::ViewDerivationOutput &output : outputs) {
+    [wrapped addObject:MMXWrapViewDerivationOutput(output)];
+  }
+  return wrapped;
+}
+
+MMXViewDerivation *
+MMXWrapViewDerivation(const memix::ViewDerivation &derivation) {
+  MMXViewDerivation *const wrapped = [[MMXViewDerivation alloc] init];
+  wrapped.derivationID = MMXString(derivation.id);
+  wrapped.irHash = MMXString(derivation.ir_hash);
+  wrapped.target = MMXViewTargetKindFromMemory(derivation.target);
+  wrapped.resolvedFiles = MMXWrapResolvedViewFiles(derivation.resolved_files);
+  wrapped.outputs = MMXWrapViewDerivationOutputs(derivation.outputs);
+  wrapped.manifestPath = MMXPathString(derivation.manifest_path);
+  wrapped.treePath = MMXPathString(derivation.tree_path);
+  wrapped.inserted = derivation.inserted;
+  return wrapped;
+}
+
+MMXViewEnvironmentBinding *
+MMXWrapViewEnvironmentBinding(const memix::ViewEnvironmentBinding &binding) {
+  MMXViewEnvironmentBinding *const wrapped =
+      [[MMXViewEnvironmentBinding alloc] init];
+  wrapped.mount = MMXPathString(binding.mount);
+  wrapped.derivationID = MMXString(binding.derivation_id);
+  wrapped.outputRole = MMXString(binding.output_role);
+  return wrapped;
+}
+
+NSArray<MMXViewEnvironmentBinding *> *MMXWrapViewEnvironmentBindings(
+    const std::vector<memix::ViewEnvironmentBinding> &bindings) {
+  NSMutableArray<MMXViewEnvironmentBinding *> *const wrapped =
+      [[NSMutableArray alloc] initWithCapacity:bindings.size()];
+  for (const memix::ViewEnvironmentBinding &binding : bindings) {
+    [wrapped addObject:MMXWrapViewEnvironmentBinding(binding)];
+  }
+  return wrapped;
+}
+
+MMXViewEnvironmentClosure *
+MMXWrapViewEnvironmentClosure(const memix::ViewEnvironmentClosure &closure) {
+  MMXViewEnvironmentClosure *const wrapped =
+      [[MMXViewEnvironmentClosure alloc] init];
+  wrapped.derivations = MMXStringArray(closure.derivations);
+  wrapped.artifacts = MMXStringArray(closure.artifacts);
+  wrapped.rawObjects = MMXStringArray(closure.raw_objects);
+  return wrapped;
+}
+
+MMXViewEnvironment *
+MMXWrapViewEnvironment(const memix::ViewEnvironment &environment) {
+  MMXViewEnvironment *const wrapped = [[MMXViewEnvironment alloc] init];
+  wrapped.environmentID = MMXString(environment.id);
+  wrapped.manifestPath = MMXPathString(environment.manifest_path);
+  wrapped.bindings = MMXWrapViewEnvironmentBindings(environment.bindings);
+  wrapped.closure = MMXWrapViewEnvironmentClosure(environment.closure);
+  wrapped.derivation = MMXWrapViewDerivation(environment.derivation);
+  wrapped.inserted = environment.inserted;
+  return wrapped;
+}
+
+memix::ViewResult<std::vector<memix::ViewEnvironment>>
+MMXListViewEnvironments(const fs::path &root) {
+  const fs::path environments_dir = MMXViewEnvironmentsDirectory(root);
+  const memix::FsResult<bool> exists = fs::exists(environments_dir);
+  if (!exists) {
+    return std::unexpected(MMXMakeViewError(exists.error()));
+  }
+  if (!*exists) {
+    return std::vector<memix::ViewEnvironment>{};
+  }
+
+  const memix::FsResult<bool> is_directory = fs::is_directory(environments_dir);
+  if (!is_directory) {
+    return std::unexpected(MMXMakeViewError(is_directory.error()));
+  }
+  if (!*is_directory) {
+    return std::unexpected(MMXMakeViewError(
+        memix::ErrorKind::InvalidData,
+        std::format("view environments path is not a directory `{}`",
+                    environments_dir.string())));
+  }
+
+  const memix::ViewService views{memix::Store(root)};
+  std::vector<memix::ViewEnvironment> environments;
   std::error_code iterator_error;
-  const std::filesystem::recursive_directory_iterator end;
-  for (std::filesystem::recursive_directory_iterator iterator{
-           artifact.tree_path, iterator_error};
+  const fs::directory_iterator end;
+  for (fs::directory_iterator iterator{environments_dir, iterator_error};
        !iterator_error && iterator != end; iterator.increment(iterator_error)) {
-    const std::filesystem::directory_entry &entry = *iterator;
-    std::error_code status_error;
-    const bool is_symlink =
-        std::filesystem::is_symlink(entry.symlink_status(status_error));
-    if (status_error) {
-      return std::unexpected(MMXMakeViewError(MMXMakeFilesystemError(
-          "failed to inspect view tree entry", status_error, {entry.path()})));
-    }
-    if (!is_symlink) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    if (!entry.is_regular_file(entry_error)) {
+      if (entry_error) {
+        return std::unexpected(MMXMakeViewError(
+            MMXMakeFilesystemError("failed to inspect view environment",
+                                   entry_error, {entry.path()})));
+      }
       continue;
     }
 
-    std::error_code symlink_error;
-    const std::filesystem::path target =
-        std::filesystem::read_symlink(entry.path(), symlink_error);
-    if (symlink_error) {
-      return std::unexpected(MMXMakeViewError(MMXMakeFilesystemError(
-          "failed to read view tree symlink", symlink_error, {entry.path()})));
-    }
-    if (target.filename() != "object") {
-      memix::ViewError error;
-      error.message = "view tree symlink target is not a memix object";
-      error.kind = memix::ErrorKind::InvalidData;
-      return std::unexpected(std::move(error));
+    const fs::path filename = entry.path().filename();
+    if (filename.extension() != ".json") {
+      continue;
     }
 
-    const std::string blob_id = target.parent_path().filename().string();
-    const std::expected<memix::StoredObject, memix::StoreError> blob =
-        store.read_blob(artifact.source_type, blob_id);
-    if (!blob) {
-      memix::ViewError error;
-      error.message = blob.error().message;
-      error.filesystem_error = blob.error().filesystem_error;
-      error.kind = blob.error().kind;
-      return std::unexpected(std::move(error));
+    const std::string environment_id = filename.stem().string();
+    if (!MMXIsLowerHexSha256(environment_id)) {
+      continue;
     }
 
-    files.push_back(memix::StoreFile{
-        .type = artifact.source_type,
-        .context_path = entry.path().lexically_relative(artifact.tree_path),
-        .blob = *blob,
-    });
+    memix::ViewResult<memix::ViewEnvironment> environment =
+        views.resolve_environment(environment_id);
+    if (!environment) {
+      return std::unexpected(std::move(environment.error()));
+    }
+    environments.push_back(std::move(*environment));
   }
   if (iterator_error) {
     return std::unexpected(MMXMakeViewError(
-        MMXMakeFilesystemError("failed to list view tree directory",
-                               iterator_error, {artifact.tree_path})));
+        MMXMakeFilesystemError("failed to list view environments",
+                               iterator_error, {environments_dir})));
   }
 
-  std::ranges::sort(files, {}, &memix::StoreFile::context_path);
-  return files;
+  std::ranges::sort(environments, {}, &memix::ViewEnvironment::id);
+  return environments;
+}
+
+memix::ViewResult<memix::ViewEnvironment>
+MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
+  const std::string id = MMXStdString(environmentID);
+  if (id.empty()) {
+    return std::unexpected(MMXMakeViewError(
+        memix::ErrorKind::InvalidArgument, "environment id must not be empty"));
+  }
+
+  const memix::ViewService views{memix::Store(root)};
+  return views.resolve_environment(id);
 }
 
 } // namespace
 
 @implementation MMXStore {
-  std::filesystem::path _root;
+  fs::path _root;
   std::unique_ptr<memix::Store> _store;
 }
 
 + (NSURL *)defaultStoreRootAndReturnError:(NSError **)error {
-  const std::expected<std::filesystem::path, memix::StoreError> root =
+  const std::expected<fs::path, memix::StoreError> root =
       memix::default_store_root();
   if (!root) {
     MMXSetStoreError(error, root.error());
@@ -466,60 +689,30 @@ MMXCollectViewFiles(const memix::Store &store,
   return MMXReadData(object->object_dir / object->content_path, error);
 }
 
-- (NSArray<MMXStoreFile *> *)
-    listFilesInFileTreeViewWithDerivationID:(NSString *)derivationID
-                                      error:(NSError **)error {
-  memix::ViewService views{memix::Store(_root)};
-  const memix::ViewResult<memix::ViewArtifact> artifact =
-      views.resolve_file_tree(MMXStdString(derivationID));
-  if (!artifact) {
-    MMXSetViewError(error, artifact.error());
+- (NSData *)readFileTreeViewDataWithEnvironmentID:(NSString *)environmentID
+                                       outputPath:(NSString *)outputPath
+                                            error:(NSError **)error {
+  const memix::ViewResult<memix::ViewEnvironment> environment =
+      MMXResolveViewEnvironment(_root, environmentID);
+  if (!environment) {
+    MMXSetViewError(error, environment.error());
     return nil;
   }
 
-  const memix::ViewResult<std::vector<memix::StoreFile>> files =
-      MMXCollectViewFiles(*_store, *artifact);
-  if (!files) {
-    MMXSetViewError(error, files.error());
-    return nil;
-  }
-
-  NSMutableArray<MMXStoreFile *> *wrapped =
-      [[NSMutableArray alloc] initWithCapacity:files->size()];
-  for (const memix::StoreFile &file : *files) {
-    [wrapped addObject:MMXWrapStoreFile(file)];
-  }
-  return wrapped;
-}
-
-- (NSData *)readFileTreeViewDataWithDerivationID:(NSString *)derivationID
-                                     contextPath:(NSString *)contextPath
-                                           error:(NSError **)error {
-  memix::ViewService views{memix::Store(_root)};
-  const memix::ViewResult<memix::ViewArtifact> artifact =
-      views.resolve_file_tree(MMXStdString(derivationID));
-  if (!artifact) {
-    MMXSetViewError(error, artifact.error());
-    return nil;
-  }
-
-  const std::filesystem::path relative_path = MMXPath(contextPath);
+  const fs::path relative_path = MMXPath(outputPath);
   if (!MMXPathIsSafeRelative(relative_path)) {
     MMXSetError(error,
                 MMXMakeError(@"View path must be a relative file path."));
     return nil;
   }
 
-  const std::filesystem::path file_path = artifact->tree_path / relative_path;
-  std::error_code status_error;
-  const bool is_symlink = std::filesystem::is_symlink(
-      std::filesystem::symlink_status(file_path, status_error));
-  if (status_error) {
-    MMXSetViewError(
-        error, MMXMakeViewError(MMXMakeFilesystemError(
-                   "failed to inspect view file", status_error, {file_path})));
+  const fs::path file_path = environment->derivation.tree_path / relative_path;
+  const memix::FsResult<fs::file_status> status = fs::symlink_status(file_path);
+  if (!status) {
+    MMXSetViewError(error, MMXMakeViewError(status.error()));
     return nil;
   }
+  const bool is_symlink = status->type() == fs::file_type::symlink;
   if (!is_symlink) {
     MMXSetError(error, MMXMakeError(@"View file is not present in this view."));
     return nil;
@@ -560,77 +753,57 @@ MMXCollectViewFiles(const memix::Store &store,
   return wrapped;
 }
 
-- (NSArray<MMXViewArtifact *> *)listFileTreeViewsAndReturnError:
+- (NSArray<MMXViewEnvironment *> *)listViewEnvironmentsAndReturnError:
     (NSError **)error {
-  memix::ViewService views{memix::Store(_root)};
-  const memix::ViewResult<std::vector<memix::ViewArtifact>> artifacts =
-      views.list_file_trees();
-  if (!artifacts) {
-    MMXSetViewError(error, artifacts.error());
+  const memix::ViewResult<std::vector<memix::ViewEnvironment>> environments =
+      MMXListViewEnvironments(_root);
+  if (!environments) {
+    MMXSetViewError(error, environments.error());
     return nil;
   }
 
-  NSMutableArray<MMXViewArtifact *> *wrapped =
-      [[NSMutableArray alloc] initWithCapacity:artifacts->size()];
-  for (const memix::ViewArtifact &artifact : *artifacts) {
-    [wrapped addObject:MMXWrapViewArtifact(artifact)];
+  NSMutableArray<MMXViewEnvironment *> *wrapped =
+      [[NSMutableArray alloc] initWithCapacity:environments->size()];
+  for (const memix::ViewEnvironment &environment : *environments) {
+    [wrapped addObject:MMXWrapViewEnvironment(environment)];
   }
   return wrapped;
 }
 
-- (MMXViewArtifact *)
-    buildFileTreeWithName:(NSString *)name
-               sourceType:(MMXObjectType)sourceType
-      requiredSourcePaths:(NSArray<NSString *> *)requiredSourcePaths
-      optionalSourcePaths:(NSArray<NSString *> *)optionalSourcePaths
-               generation:(NSString *)generation
-                      ref:(NSString *)ref
-                    error:(NSError **)error {
-  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
-  if (!MMXRequireType(sourceType, &memix_type, error)) {
+- (MMXViewEnvironment *)resolveViewEnvironmentWithID:(NSString *)environmentID
+                                               error:(NSError **)error {
+  const memix::ViewResult<memix::ViewEnvironment> environment =
+      MMXResolveViewEnvironment(_root, environmentID);
+  if (!environment) {
+    MMXSetViewError(error, environment.error());
     return nil;
   }
+  return MMXWrapViewEnvironment(*environment);
+}
 
-  memix::ViewExpression expression;
-  expression.source_type = memix_type;
-  expression.name = MMXStdString(name.length == 0 ? @"file-tree" : name);
-
-  if (generation.length > 0 && ref.length > 0) {
-    MMXSetError(error,
-                MMXMakeError(@"Use either generation or ref, not both."));
+- (MMXViewEnvironment *)
+    buildViewEnvironmentWithSources:(NSArray<NSString *> *)sources
+                             target:(MMXViewTargetKind)target
+                              error:(NSError **)error {
+  memix::ViewTargetKind memix_target = memix::ViewTargetKind::FileTree;
+  if (!MMXRequireTarget(target, &memix_target, error)) {
     return nil;
-  }
-  if (generation.length > 0) {
-    expression.source_generation = MMXStdString(generation);
-  } else if (ref.length > 0) {
-    expression.source_ref = MMXStdString(ref);
-  }
-
-  expression.selectors.reserve(requiredSourcePaths.count
-                               + optionalSourcePaths.count);
-  for (NSString *path in requiredSourcePaths) {
-    expression.selectors.push_back(memix::ViewSelector{
-        .source_path = MMXPath(path),
-        .scope_label = std::nullopt,
-        .required = true,
-    });
-  }
-  for (NSString *path in optionalSourcePaths) {
-    expression.selectors.push_back(memix::ViewSelector{
-        .source_path = MMXPath(path),
-        .scope_label = std::nullopt,
-        .required = false,
-    });
   }
 
   memix::ViewService views{memix::Store(_root)};
-  const memix::ViewResult<memix::ViewArtifact> artifact =
-      views.build_file_tree(expression);
-  if (!artifact) {
-    MMXSetViewError(error, artifact.error());
+  const memix::ViewResult<memix::AuthoredViewExpression> expression =
+      views.expression_from_sources(MMXStringVector(sources), memix_target);
+  if (!expression) {
+    MMXSetViewError(error, expression.error());
     return nil;
   }
-  return MMXWrapViewArtifact(*artifact);
+  const memix::ViewResult<memix::ViewEnvironment> environment =
+      views.build(*expression);
+  if (!environment) {
+    MMXSetViewError(error, environment.error());
+    return nil;
+  }
+  return MMXWrapViewEnvironment(*environment);
 }
 
 @end

@@ -16,6 +16,19 @@ extension MMXObjectType {
         }
     }
 
+    var locatorToken: String {
+        switch self {
+        case .agents:
+            return "agents"
+        case .chat:
+            return "chat"
+        case .documents:
+            return "documents"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .agents:
@@ -30,6 +43,19 @@ extension MMXObjectType {
     }
 }
 
+extension MMXViewTargetKind {
+    var title: String {
+        switch self {
+        case .fileTree:
+            return "File Tree"
+        case .contextPack:
+            return "Context Pack"
+        @unknown default:
+            return "Unknown"
+        }
+    }
+}
+
 extension MMXStoredObject {
     var stableID: String { objectID }
 }
@@ -38,14 +64,61 @@ extension MMXStoreFile {
     var stableID: String { "\(contextPath)|\(blob.objectID)" }
 }
 
-extension MMXViewArtifact {
-    var stableID: String { derivationID }
+extension MMXResolvedViewFile {
+    var stableID: String { "\(outputPath)|\(blob.objectID)" }
+}
+
+extension MMXViewEnvironment {
+    var stableID: String { environmentID }
+}
+
+struct InspectorFile: Identifiable {
+    let id: String
+    let type: MMXObjectType
+    let contextPath: String
+    let sourcePath: String?
+    let sourceGeneration: String?
+    let locator: String?
+    let blob: MMXStoredObject
+    let isResolvedViewFile: Bool
+
+    init(storeFile: MMXStoreFile) {
+        id = storeFile.stableID
+        type = storeFile.type
+        contextPath = storeFile.contextPath
+        sourcePath = nil
+        sourceGeneration = nil
+        locator = nil
+        blob = storeFile.blob
+        isResolvedViewFile = false
+    }
+
+    init(resolvedFile: MMXResolvedViewFile) {
+        id = resolvedFile.stableID
+        type = resolvedFile.type
+        contextPath = resolvedFile.outputPath
+        sourcePath = resolvedFile.sourcePath
+        sourceGeneration = resolvedFile.sourceGeneration
+        locator = resolvedFile.locator
+        blob = resolvedFile.blob
+        isResolvedViewFile = true
+    }
+
+    var sourceLocator: String {
+        if let sourcePath, let sourceGeneration, !sourceGeneration.isEmpty {
+            return "\(type.locatorToken)/\(sourcePath)@\(sourceGeneration)"
+        }
+        if let locator {
+            return locator
+        }
+        return "\(type.locatorToken)/\(contextPath)@latest"
+    }
 }
 
 enum InspectorBrowserMode: String, CaseIterable, Identifiable {
     case tree = "Tree"
     case blobs = "Blobs"
-    case views = "Views"
+    case environments = "Environments"
 
     var id: String { rawValue }
 }
@@ -70,7 +143,7 @@ struct FileTreeNode: Identifiable {
     let id: String
     let name: String
     let path: String
-    let file: MMXStoreFile?
+    let file: InspectorFile?
     let children: [FileTreeNode]
     var outlineChildren: [FileTreeNode]? {
         children.isEmpty ? nil : children
@@ -84,10 +157,10 @@ struct FileTreeNode: Identifiable {
 private final class MutableFileTreeNode {
     let name: String
     let path: String
-    var file: MMXStoreFile?
+    var file: InspectorFile?
     var children: [String: MutableFileTreeNode] = [:]
 
-    init(name: String, path: String, file: MMXStoreFile? = nil) {
+    init(name: String, path: String, file: InspectorFile? = nil) {
         self.name = name
         self.path = path
         self.file = file
@@ -104,7 +177,7 @@ private final class MutableFileTreeNode {
             .map { $0.frozen() }
 
         return FileTreeNode(
-            id: file?.stableID ?? "dir:\(path)",
+            id: file?.id ?? "dir:\(path)",
             name: name,
             path: path,
             file: file,
@@ -131,15 +204,15 @@ final class InspectorModel: ObservableObject {
     @Published var treeDisplayMode: TreeDisplayMode = .outline
     @Published private(set) var rootURL: URL?
     @Published private(set) var files: [MMXStoreFile] = []
-    @Published private(set) var activeViewFiles: [MMXStoreFile] = []
+    @Published private(set) var activeResolvedFiles: [MMXResolvedViewFile] = []
     @Published private(set) var objects: [MMXStoredObject] = []
-    @Published private(set) var viewArtifacts: [MMXViewArtifact] = []
-    @Published private(set) var activeViewArtifact: MMXViewArtifact?
+    @Published private(set) var viewEnvironments: [MMXViewEnvironment] = []
+    @Published private(set) var activeViewEnvironment: MMXViewEnvironment?
     @Published var selectedFileID: String? {
         didSet { loadSelectedFilePreview() }
     }
     @Published var selectedObjectID: String?
-    @Published var selectedViewID: String?
+    @Published var selectedEnvironmentID: String?
     @Published private(set) var previewText: String = ""
     @Published private(set) var status: String = ""
     @Published private(set) var errorMessage: String?
@@ -150,28 +223,31 @@ final class InspectorModel: ObservableObject {
         openDefaultStore()
     }
 
-    var selectedFile: MMXStoreFile? {
-        currentTreeFiles.first { $0.stableID == selectedFileID }
+    var selectedFile: InspectorFile? {
+        currentTreeFiles.first { $0.id == selectedFileID }
     }
 
     var selectedObject: MMXStoredObject? {
         objects.first { $0.stableID == selectedObjectID }
     }
 
-    var selectedViewArtifact: MMXViewArtifact? {
-        viewArtifacts.first { $0.stableID == selectedViewID }
+    var selectedViewEnvironment: MMXViewEnvironment? {
+        viewEnvironments.first { $0.stableID == selectedEnvironmentID }
     }
 
-    var currentTreeFiles: [MMXStoreFile] {
-        activeViewArtifact == nil ? files : activeViewFiles
+    var currentTreeFiles: [InspectorFile] {
+        if activeViewEnvironment == nil {
+            return files.map(InspectorFile.init(storeFile:))
+        }
+        return activeResolvedFiles.map(InspectorFile.init(resolvedFile:))
     }
 
     var treeNodes: [FileTreeNode] {
         buildTreeNodes(from: currentTreeFiles)
     }
 
-    var isInsideView: Bool {
-        activeViewArtifact != nil
+    var isInsideEnvironment: Bool {
+        activeViewEnvironment != nil
     }
 
     func openDefaultStore() {
@@ -206,7 +282,7 @@ final class InspectorModel: ObservableObject {
     }
 
     func selectObjectType(_ type: MMXObjectType) {
-        guard activeViewArtifact == nil else {
+        guard !isInsideEnvironment else {
             return
         }
         selectedType = type
@@ -220,16 +296,16 @@ final class InspectorModel: ObservableObject {
 
         do {
             do {
-                viewArtifacts = try store.listFileTreeViews()
+                viewEnvironments = try store.listViewEnvironments()
             } catch {
-                viewArtifacts = []
+                viewEnvironments = []
             }
-            if let activeViewArtifact {
-                if let refreshed = viewArtifacts.first(where: { $0.stableID == activeViewArtifact.stableID }) {
-                    self.activeViewArtifact = refreshed
-                }
-                activeViewFiles = try store.listFilesInFileTreeView(derivationID: activeViewArtifact.derivationID)
-                objects = visibleObjects(in: activeViewFiles)
+
+            if let activeViewEnvironment {
+                let refreshed = try store.resolveViewEnvironment(id: activeViewEnvironment.environmentID)
+                self.activeViewEnvironment = refreshed
+                activeResolvedFiles = refreshed.derivation.resolvedFiles
+                objects = visibleObjects(in: activeResolvedFiles.map(InspectorFile.init(resolvedFile:)))
                 files = []
             } else {
                 objects = try store.listObjects(type: selectedType)
@@ -238,7 +314,7 @@ final class InspectorModel: ObservableObject {
                 } catch {
                     files = []
                 }
-                activeViewFiles = []
+                activeResolvedFiles = []
             }
             errorMessage = nil
             updateStatus()
@@ -253,8 +329,8 @@ final class InspectorModel: ObservableObject {
         guard let store else {
             return
         }
-        guard activeViewArtifact == nil else {
-            errorMessage = "Exit the locked view before ingesting."
+        guard !isInsideEnvironment else {
+            errorMessage = "Exit the view environment before ingesting."
             return
         }
 
@@ -283,39 +359,30 @@ final class InspectorModel: ObservableObject {
         }
     }
 
-    func buildViewFromCurrentTree() {
+    func buildEnvironmentFromCurrentTree() {
         guard let store else {
             return
         }
 
         do {
-            let paths = currentTreeFiles.map(\.contextPath)
-            let artifact = try store.buildFileTree(
-                name: "inspector-file-tree",
-                sourceType: selectedType,
-                requiredSourcePaths: paths,
-                optionalSourcePaths: [],
-                generation: activeViewArtifact?.sourceGeneration,
-                ref: nil
-            )
+            let sources = currentTreeFiles.map(\.sourceLocator)
+            let environment = try store.buildViewEnvironment(sources: sources, target: .fileTree)
             refresh()
-            selectedViewID = artifact.derivationID
-            browserMode = .views
-            status = "Built view \(shortID(artifact.derivationID))"
+            selectedEnvironmentID = environment.environmentID
+            browserMode = .environments
+            status = "Built environment \(shortID(environment.environmentID))"
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func enterSelectedView() {
-        guard let artifact = selectedViewArtifact else {
+    func enterSelectedEnvironment() {
+        guard let environment = selectedViewEnvironment else {
             return
         }
 
-        if selectedType != artifact.sourceType {
-            selectedType = artifact.sourceType
-        }
-        activeViewArtifact = artifact
+        activeViewEnvironment = environment
+        activeResolvedFiles = environment.derivation.resolvedFiles
         selectedFileID = nil
         selectedObjectID = nil
         previewText = ""
@@ -323,9 +390,9 @@ final class InspectorModel: ObservableObject {
         refresh()
     }
 
-    func exitView() {
-        activeViewArtifact = nil
-        activeViewFiles = []
+    func exitEnvironment() {
+        activeViewEnvironment = nil
+        activeResolvedFiles = []
         selectedFileID = nil
         previewText = ""
         refresh()
@@ -342,11 +409,11 @@ final class InspectorModel: ObservableObject {
     private func openStore(rootURL: URL) throws {
         store = try MMXStore(rootURL: rootURL)
         self.rootURL = rootURL
-        activeViewArtifact = nil
-        activeViewFiles = []
+        activeViewEnvironment = nil
+        activeResolvedFiles = []
         selectedFileID = nil
         selectedObjectID = nil
-        selectedViewID = nil
+        selectedEnvironmentID = nil
         previewText = ""
         refresh()
     }
@@ -359,14 +426,14 @@ final class InspectorModel: ObservableObject {
 
         do {
             let data: Data
-            if let activeViewArtifact {
+            if let activeViewEnvironment {
                 data = try store.readFileTreeViewData(
-                    derivationID: activeViewArtifact.derivationID,
-                    contextPath: file.contextPath
+                    environmentID: activeViewEnvironment.environmentID,
+                    outputPath: file.contextPath
                 )
             } else {
                 data = try store.readFileData(
-                    type: selectedType,
+                    type: file.type,
                     contextPath: file.contextPath,
                     generation: nil
                 )
@@ -383,22 +450,22 @@ final class InspectorModel: ObservableObject {
     }
 
     private func updateStatus() {
-        if let activeViewArtifact {
-            status = "View \(shortID(activeViewArtifact.derivationID)) locked to \(shortID(activeViewArtifact.sourceGeneration)): \(activeViewFiles.count) files, \(objects.count) blobs"
+        if let activeViewEnvironment {
+            status = "Environment \(shortID(activeViewEnvironment.environmentID)): \(activeResolvedFiles.count) files, \(objects.count) blobs"
         } else {
-            status = "\(objects.count) blobs, \(files.count) tree files, \(viewArtifacts.count) views"
+            status = "\(objects.count) blobs, \(files.count) tree files, \(viewEnvironments.count) environments"
         }
     }
 
-    private func visibleObjects(in files: [MMXStoreFile]) -> [MMXStoredObject] {
+    private func visibleObjects(in files: [InspectorFile]) -> [MMXStoredObject] {
         var seen = Set<String>()
         return files.compactMap { file in
-            let inserted = seen.insert(file.blob.objectID).inserted
+            let inserted = seen.insert("\(file.type.rawValue)|\(file.blob.objectID)").inserted
             return inserted ? file.blob : nil
         }
     }
 
-    private func buildTreeNodes(from files: [MMXStoreFile]) -> [FileTreeNode] {
+    private func buildTreeNodes(from files: [InspectorFile]) -> [FileTreeNode] {
         let root = MutableFileTreeNode(name: "", path: "")
         for file in files {
             let components = file.contextPath
