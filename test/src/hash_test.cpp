@@ -5,25 +5,19 @@
 #include <string>
 
 TEST_CASE("sha256 text matches standard test vectors", "[hash]") {
-  const memix::detail::CommonResult<std::string> empty =
-      memix::detail::sha256_text("");
-  REQUIRE(empty);
-  REQUIRE(*empty
+  const std::string empty = memix::detail::sha256_text("");
+  REQUIRE(empty
           == "e3b0c44298fc1c149afbf4c8996fb924"
              "27ae41e4649b934ca495991b7852b855");
 
-  const memix::detail::CommonResult<std::string> abc =
-      memix::detail::sha256_text("abc");
-  REQUIRE(abc);
-  REQUIRE(*abc
+  const std::string abc = memix::detail::sha256_text("abc");
+  REQUIRE(abc
           == "ba7816bf8f01cfea414140de5dae2223"
              "b00361a396177a9cb410ff61f20015ad");
 
-  const memix::detail::CommonResult<std::string> multi_block =
-      memix::detail::sha256_text(
-          "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
-  REQUIRE(multi_block);
-  REQUIRE(*multi_block
+  const std::string multi_block = memix::detail::sha256_text(
+      "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+  REQUIRE(multi_block
           == "248d6a61d20638b8e5c026930c3e6039"
              "a33ce45964ff2167f6ecedd419db06c1");
 }

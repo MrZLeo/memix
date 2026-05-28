@@ -355,7 +355,7 @@ CommonResult<std::string> sha256_file(const std::filesystem::path &path) {
   return sha256.final_hex();
 }
 
-CommonResult<std::string> sha256_text(std::string_view text) {
+std::string sha256_text(std::string_view text) {
   Sha256 sha256;
   sha256.update(text);
   return sha256.final_hex();

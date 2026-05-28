@@ -42,7 +42,7 @@ private:
 
 std::string hex_encode(std::span<const unsigned char> bytes);
 CommonResult<std::string> sha256_file(const std::filesystem::path &path);
-CommonResult<std::string> sha256_text(std::string_view text);
+std::string sha256_text(std::string_view text);
 bool is_lower_hex_sha256(std::string_view value) noexcept;
 bool is_lower_hex_prefix(std::string_view value) noexcept;
 

@@ -1283,12 +1283,8 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
   if (!tree_text) {
     return store_error(tree_text.error());
   }
-  memix::detail::CommonResult<std::string> actual_hash =
-      memix::detail::sha256_text(*tree_text);
-  if (!actual_hash) {
-    return store_error(std::move(actual_hash.error()));
-  }
-  if (*actual_hash != object_id) {
+  const std::string actual_hash = memix::detail::sha256_text(*tree_text);
+  if (actual_hash != object_id) {
     return store_error(std::format("context tree hash does not match `{}`",
                                    object_path.string()));
   }
@@ -1383,14 +1379,10 @@ write_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
   if (!json) {
     return std::unexpected(json.error());
   }
-  memix::detail::CommonResult<std::string> hash =
-      memix::detail::sha256_text(*json);
-  if (!hash) {
-    return store_error(std::move(hash.error()));
-  }
+  std::string hash = memix::detail::sha256_text(*json);
 
   const fs::path object_path =
-      trees_dir_for(root, type) / std::format("{}{}", *hash, kJsonSuffix);
+      trees_dir_for(root, type) / std::format("{}{}", hash, kJsonSuffix);
   const StoreVoid written =
       write_immutable_text_file_if_absent(object_path, *json);
   if (!written) {
@@ -1398,7 +1390,7 @@ write_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
   }
   return memix::ContextTree{
       .type = type,
-      .id = *hash,
+      .id = std::move(hash),
       .entries = std::move(*canonical_entries),
       .object_path = object_path,
   };
@@ -1422,12 +1414,8 @@ read_context_generation_object(const fs::path &root,
   if (!generation_text) {
     return store_error(generation_text.error());
   }
-  memix::detail::CommonResult<std::string> actual_hash =
-      memix::detail::sha256_text(*generation_text);
-  if (!actual_hash) {
-    return store_error(std::move(actual_hash.error()));
-  }
-  if (*actual_hash != object_id) {
+  const std::string actual_hash = memix::detail::sha256_text(*generation_text);
+  if (actual_hash != object_id) {
     return store_error(std::format(
         "context generation hash does not match `{}`", object_path.string()));
   }
@@ -1578,14 +1566,10 @@ StoreResult<memix::ContextGeneration> write_context_generation_object(
   if (!json) {
     return std::unexpected(json.error());
   }
-  memix::detail::CommonResult<std::string> hash =
-      memix::detail::sha256_text(*json);
-  if (!hash) {
-    return store_error(std::move(hash.error()));
-  }
+  std::string hash = memix::detail::sha256_text(*json);
 
   const fs::path object_path =
-      generations_dir_for(root, type) / std::format("{}{}", *hash, kJsonSuffix);
+      generations_dir_for(root, type) / std::format("{}{}", hash, kJsonSuffix);
   const StoreVoid written =
       write_immutable_text_file_if_absent(object_path, *json);
   if (!written) {
@@ -1593,7 +1577,7 @@ StoreResult<memix::ContextGeneration> write_context_generation_object(
   }
   return memix::ContextGeneration{
       .type = type,
-      .id = *hash,
+      .id = std::move(hash),
       .root_tree = std::string(root_tree),
       .parent = parent.transform(
           [](std::string_view value) { return std::string(value); }),

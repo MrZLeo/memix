@@ -743,13 +743,8 @@ binding_json(const std::vector<memix::ViewEnvironmentBinding> &bindings) {
        | std::ranges::to<std::vector>();
 }
 
-ViewResult<std::string> sha256_text(std::string_view text) {
-  memix::detail::CommonResult<std::string> hash =
-      memix::detail::sha256_text(text);
-  if (!hash) {
-    return view_error(std::move(hash.error()));
-  }
-  return std::move(*hash);
+std::string sha256_text(std::string_view text) {
+  return memix::detail::sha256_text(text);
 }
 
 ViewVoid ensure_directory(const fs::path &path) {
@@ -1084,8 +1079,8 @@ unique_blob_ids(const std::vector<memix::ResolvedViewFile> &files) {
   return ids;
 }
 
-ViewResult<std::string> artifact_id_for(std::string_view derivation_id,
-                                        std::string_view role) {
+std::string artifact_id_for(std::string_view derivation_id,
+                            std::string_view role) {
   return sha256_text(std::format("{}:{}", role, derivation_id));
 }
 
@@ -1097,25 +1092,18 @@ outputs_for_derivation(std::string_view derivation_id,
                       "only file_tree target builds are supported in v1");
   }
 
-  ViewResult<std::string> tree_artifact =
-      artifact_id_for(derivation_id, "file_tree");
-  if (!tree_artifact) {
-    return std::unexpected(tree_artifact.error());
-  }
-  ViewResult<std::string> manifest_artifact =
+  std::string tree_artifact = artifact_id_for(derivation_id, "file_tree");
+  std::string manifest_artifact =
       artifact_id_for(derivation_id, "provenance_manifest");
-  if (!manifest_artifact) {
-    return std::unexpected(manifest_artifact.error());
-  }
   return std::vector<memix::ViewDerivationOutput>{
       memix::ViewDerivationOutput{
           .role = "file_tree",
-          .artifact = *tree_artifact,
+          .artifact = std::move(tree_artifact),
           .path = fs::path(kTreeDir),
       },
       memix::ViewDerivationOutput{
           .role = "provenance_manifest",
-          .artifact = *manifest_artifact,
+          .artifact = std::move(manifest_artifact),
           .path = fs::path(kManifestFilename),
       },
   };
@@ -1330,13 +1318,8 @@ environment_for_derivation(const memix::Store &store,
   if (!basis) {
     return std::unexpected(basis.error());
   }
-  ViewResult<std::string> environment_id = sha256_text(*basis);
-  if (!environment_id) {
-    return std::unexpected(environment_id.error());
-  }
-
   memix::ViewEnvironment environment;
-  environment.id = *environment_id;
+  environment.id = sha256_text(*basis);
   environment.manifest_path =
       environment_path_for(store.root(), environment.id);
   environment.bindings = {
@@ -1923,35 +1906,29 @@ ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
   if (!ir_json) {
     return std::unexpected(ir_json.error());
   }
-  ViewResult<std::string> ir_hash = sha256_text(*ir_json);
-  if (!ir_hash) {
-    return std::unexpected(ir_hash.error());
-  }
+  std::string ir_hash = sha256_text(*ir_json);
   ViewResult<std::vector<ResolvedViewFile>> files = resolve_inputs(store_, ir);
   if (!files) {
     return std::unexpected(files.error());
   }
   const std::vector<ResolvedInputJson> inputs = resolved_input_json(*files);
   ViewResult<std::string> basis =
-      ir_basis_json_for(*ir_hash, inputs, ir.target.kind);
+      ir_basis_json_for(ir_hash, inputs, ir.target.kind);
   if (!basis) {
     return std::unexpected(basis.error());
   }
-  ViewResult<std::string> derivation_id = sha256_text(*basis);
-  if (!derivation_id) {
-    return std::unexpected(derivation_id.error());
-  }
+  std::string derivation_id = sha256_text(*basis);
   ViewResult<std::vector<ViewDerivationOutput>> outputs =
-      outputs_for_derivation(*derivation_id, ir.target.kind);
+      outputs_for_derivation(derivation_id, ir.target.kind);
   if (!outputs) {
     return std::unexpected(outputs.error());
   }
 
   const fs::path derivation_dir =
-      derivation_dir_for(store_.root(), *derivation_id);
+      derivation_dir_for(store_.root(), derivation_id);
   ViewDerivation derivation{
-      .id = *derivation_id,
-      .ir_hash = *ir_hash,
+      .id = std::move(derivation_id),
+      .ir_hash = std::move(ir_hash),
       .target = ir.target.kind,
       .resolved_files = std::move(*files),
       .outputs = std::move(*outputs),
