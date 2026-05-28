@@ -43,8 +43,15 @@ using FsVoid = std::expected<void, FsError>;
 
 namespace memix::fs {
 
-std::unexpected<FsError> fs_error(FsError error);
-std::unexpected<FsError> fs_error(std::string message);
+inline std::unexpected<memix::FsError> fs_error(memix::FsError error) {
+  return std::unexpected(std::move(error));
+}
+
+inline std::unexpected<memix::FsError> fs_error(std::string message) {
+  memix::FsError error;
+  error.message = std::move(message);
+  return fs_error(std::move(error));
+}
 
 template <typename... Paths>
 std::string filesystem_error_message(std::string_view operation,

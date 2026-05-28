@@ -12,7 +12,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <utility>
 
 namespace std_fs = std::filesystem;
 
@@ -41,16 +40,6 @@ FsVoid fs_void(const std::error_code &error, std::string_view operation,
 }
 
 } // namespace
-
-std::unexpected<memix::FsError> fs_error(memix::FsError error) {
-  return std::unexpected(std::move(error));
-}
-
-std::unexpected<memix::FsError> fs_error(std::string message) {
-  memix::FsError error;
-  error.message = std::move(message);
-  return fs_error(std::move(error));
-}
 
 FsResult<bool> exists(const path &path) {
   std::error_code error;
