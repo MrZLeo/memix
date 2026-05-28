@@ -1,0 +1,4 @@
+interface:
+  display_name: "Memix CLI"
+  short_description: "Use memix-store and memix-view effectively"
+  default_prompt: "Use $memix-cli to store files and build a memix file-tree view."
