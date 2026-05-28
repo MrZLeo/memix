@@ -16,12 +16,9 @@
 #include <ctime>
 #include <expected>
 #include <format>
-#include <fstream>
 #include <functional>
-#include <ios>
 #include <iterator>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -32,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-#include <openssl/evp.h>
 #include <simdjson.h>
 
 namespace fs = memix::fs;
@@ -53,8 +49,6 @@ constexpr std::string_view kContextGenerationKind = "context_generation";
 constexpr std::string_view kLegacyContextTreeKind = "agent_tree";
 constexpr std::string_view kLegacyContextGenerationKind = "agent_generation";
 constexpr std::string_view kJsonSuffix = ".json";
-constexpr std::size_t kSha256DigestBytes = 32;
-constexpr std::size_t kHashReadBufferBytes = 8192;
 constexpr std::size_t kTimestampBufferBytes = 21;
 constexpr std::uint64_t kDecimalRadix = 10;
 
@@ -183,52 +177,6 @@ StoreVoid require_directory(const fs::path &path, std::string missing_message) {
   return {};
 }
 
-StoreResult<std::string> sha256_file(const fs::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    return store_error(
-        std::format("failed to open `{}` for hashing", path.string()));
-  }
-
-  using DigestContext = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-  const DigestContext digest_context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-  if (!digest_context) {
-    return store_error("failed to allocate sha256 context");
-  }
-  if (EVP_DigestInit_ex(digest_context.get(), EVP_sha256(), nullptr) != 1) {
-    return store_error("failed to initialize sha256 context");
-  }
-
-  std::array<char, kHashReadBufferBytes> buffer{};
-  while (input) {
-    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const std::streamsize read_count = input.gcount();
-    if (read_count > 0
-        && EVP_DigestUpdate(digest_context.get(), buffer.data(),
-                            static_cast<std::size_t>(read_count))
-               != 1) {
-      return store_error("failed to update sha256 digest");
-    }
-  }
-
-  if (input.bad()) {
-    return store_error(std::format("failed while reading `{}`", path.string()));
-  }
-
-  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-  unsigned int digest_length = 0;
-  if (EVP_DigestFinal_ex(digest_context.get(), digest.data(), &digest_length)
-      != 1) {
-    return store_error("failed to finalize sha256 digest");
-  }
-  if (digest_length != kSha256DigestBytes) {
-    return store_error("sha256 digest produced an unexpected length");
-  }
-
-  return memix::detail::hex_encode(
-      std::span<const unsigned char>{digest.data(), digest_length});
-}
-
 struct SourceFileMetadata {
   std::uintmax_t size_bytes = 0;
   std::string hash;
@@ -239,9 +187,10 @@ StoreResult<SourceFileMetadata> regular_file_metadata(const fs::path &path) {
   if (!size_bytes) {
     return store_error(size_bytes.error());
   }
-  StoreResult<std::string> hash = sha256_file(path);
+  memix::detail::CommonResult<std::string> hash =
+      memix::detail::sha256_file(path);
   if (!hash) {
-    return std::unexpected(hash.error());
+    return store_error(std::move(hash.error()));
   }
   return SourceFileMetadata{
       .size_bytes = *size_bytes,
@@ -724,9 +673,10 @@ StoreVoid validate_content_file(const memix::StoredObject &object) {
         "object content size does not match metadata for `{}`", object.id));
   }
 
-  const StoreResult<std::string> content_hash = sha256_file(content_file);
+  memix::detail::CommonResult<std::string> content_hash =
+      memix::detail::sha256_file(content_file);
   if (!content_hash) {
-    return std::unexpected(content_hash.error());
+    return store_error(std::move(content_hash.error()));
   }
   if (*content_hash != object.hash) {
     return store_error(std::format(

@@ -8,7 +8,6 @@ class Memix < Formula
 
   depends_on "cmake" => :build
   depends_on "ninja" => :build
-  depends_on "openssl@3"
 
   resource "cpm" do
     url "https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.42.0/CPM.cmake"
@@ -45,7 +44,6 @@ class Memix < Formula
       -DCPM_SOURCE_CACHE=#{cpm_cache}
       -Dmemix_BUILD_MACOS_INSPECTOR=OFF
       -Dmemix_ENABLE_UNIT_TESTING=OFF
-      -DOPENSSL_ROOT_DIR=#{Formula["openssl@3"].opt_prefix}
     ]
 
     system "cmake", "-S", ".", "-B", "build", "-G", "Ninja", *args

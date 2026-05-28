@@ -31,14 +31,13 @@ have GitHub authentication configured for Homebrew's clone/fetch step.
 The formula declares:
 
 * build dependencies: `cmake`, `ninja`
-* runtime/build link dependency: `openssl@3`
 * bundled source resources: CPM.cmake 0.42.0, `simdjson` 4.6.2, `argum` 2.8,
   and `spdlog` 1.17.0
 
 The formula preloads the source resources into the CPM cache before running
 CMake. That keeps the Homebrew build offline while preserving memix's current
 linking model: `simdjson`, `argum`, and `spdlog` are built with the project from
-source, and only OpenSSL is linked from Homebrew.
+source.
 
 ## Release Publishing
 

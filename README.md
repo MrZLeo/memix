@@ -17,9 +17,6 @@ The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 * [spdlog 1.17.0](https://github.com/gabime/spdlog/releases/tag/v1.17.0) for executable logging
 * [Catch2 3.11.0](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) for tests
 
-The immutable store uses OpenSSL libcrypto through CMake's `OpenSSL::Crypto`
-target for SHA-256 content hashing.
-
 ## Build
 
 ```bash

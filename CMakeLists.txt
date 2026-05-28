@@ -193,7 +193,6 @@ include(cmake/Doxygen.cmake)
 # Model project dependencies
 #
 
-find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 CPMAddPackage(
   NAME simdjson
   GITHUB_REPOSITORY simdjson/simdjson
@@ -217,12 +216,6 @@ target_include_directories(
   ${PROJECT_NAME}
   SYSTEM PRIVATE
     ${simdjson_SOURCE_DIR}/singleheader
-)
-
-target_link_libraries(
-  ${PROJECT_NAME}
-  PRIVATE
-    OpenSSL::Crypto
 )
 
 # Identify and link with the specific "packages" the project uses

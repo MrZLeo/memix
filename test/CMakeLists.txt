@@ -78,6 +78,11 @@ foreach(file ${test_sources})
       ${${CMAKE_PROJECT_NAME}_TEST_LIB}
       Threads::Threads
   )
+  target_include_directories(
+    ${test_name}_Tests
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/src
+  )
 
   catch_discover_tests(${test_name}_Tests)
 endforeach()
