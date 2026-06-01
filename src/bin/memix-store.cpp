@@ -4,6 +4,8 @@
 #include "memix/fs.hpp"
 
 #include "cli_common.hpp"
+#include "detail/error.hpp"
+#include "detail/json.hpp"
 
 #include <array>
 #include <cstddef>
@@ -74,10 +76,10 @@ std::string supported_types_message() {
        | std::ranges::to<std::string>();
 }
 
-std::unexpected<memix::StoreError> store_error(std::string message) {
-  memix::StoreError error;
-  error.message = std::move(message);
-  return std::unexpected(std::move(error));
+std::unexpected<memix::StoreError>
+store_error(memix::detail::CommonError error) {
+  return std::unexpected(
+      memix::detail::translate_error<memix::StoreError>(std::move(error)));
 }
 
 memix::cli_detail::Result<memix::MemoryObjectType>
@@ -164,13 +166,10 @@ metadata_json_array(const std::vector<memix::StoredObject> &objects) {
 
 std::expected<std::string, memix::StoreError>
 pretty_json(std::string_view json) {
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  const simdjson::padded_string padded_json(json);
-  const simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("failed to parse generated JSON: {}",
-                                   simdjson::error_message(error)));
+  auto document = memix::detail::parse_json(json);
+  if (!document) {
+    return store_error(memix::detail::with_error_context(
+        std::move(document.error()), "generated JSON"));
   }
 
   simdjson::fractured_json_options options;
@@ -180,7 +179,7 @@ pretty_json(std::string_view json) {
   options.max_compact_array_complexity = 0;
   options.enable_table_format = false;
   options.enable_compact_multiline = false;
-  return simdjson::fractured_json(document, options);
+  return simdjson::fractured_json(document->root(), options);
 }
 
 memix::cli_detail::VoidResult

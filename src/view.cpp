@@ -80,6 +80,7 @@ template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
 
 using ViewVoid = memix::ViewVoid;
+using memix::detail::JsonObjectReader;
 
 struct VersionJson {
   std::string kind;
@@ -285,23 +286,21 @@ std::unexpected<memix::ViewError> view_error(memix::detail::CommonError error) {
       memix::detail::translate_error<memix::ViewError>(std::move(error)));
 }
 
-std::string simdjson_error_text(simdjson::error_code error) {
-  return simdjson::error_message(error);
+std::unexpected<memix::ViewError>
+view_error(memix::detail::CommonError error, memix::ErrorKind kind) {
+  error.kind = kind;
+  return view_error(std::move(error));
 }
 
 ViewResult<std::string>
 json_from_builder(const simdjson::builder::string_builder &builder) {
   memix::detail::CommonResult<std::string> json =
-      memix::detail::json_from_builder(
-          builder,
-          memix::detail::JsonBuilderMessages{
-              .invalid_utf8_message = "view JSON contains invalid UTF-8",
-              .build_error_prefix = "failed to build view JSON",
-          });
+      memix::detail::json_from_builder(builder);
   if (!json) {
-    return view_error(std::move(json.error()));
+    return view_error(memix::detail::with_error_context(
+        std::move(json.error()), "view JSON"));
   }
-  return std::move(*json);
+  return ViewResult<std::string>{std::in_place, std::move(*json)};
 }
 
 std::string trim_copy(std::string_view text) {
@@ -345,51 +344,30 @@ std::vector<std::string> split_source_list(std::string_view text) {
   return sources;
 }
 
-template <typename Value>
-ViewResult<Value> require_field_as(simdjson::dom::object fields,
-                                   std::string_view key,
-                                   std::string_view expected_type) {
-  Value parsed{};
-  const simdjson::error_code error = fields.at_key(key).get(parsed);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("expression field `{}` must be {}: {}", key,
-                                  expected_type, simdjson_error_text(error)));
-  }
-  return parsed;
-}
-
 ViewResult<std::optional<std::string>>
-optional_string(simdjson::dom::object fields, std::string_view key) {
-  std::string_view value;
-  const simdjson::error_code error = fields.at_key(key).get(value);
-  if (error == simdjson::NO_SUCH_FIELD) {
-    return std::optional<std::string>{};
+optional_string(const JsonObjectReader &fields, std::string_view key) {
+  memix::detail::CommonResult<std::optional<std::string>> value =
+      fields.optional_string(key);
+  if (!value) {
+    return view_error(std::move(value.error()), memix::ErrorKind::InvalidData);
   }
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("expression field `{}` must be a string: {}",
-                                  key, simdjson_error_text(error)));
-  }
-  return std::optional<std::string>{std::string(value)};
+  return ViewResult<std::optional<std::string>>{std::in_place,
+                                                std::move(*value)};
 }
 
 ViewResult<simdjson::dom::array>
-optional_sources_array(simdjson::dom::object fields, bool &has_sources) {
-  simdjson::dom::array sources;
-  const simdjson::error_code error = fields.at_key("sources").get(sources);
-  if (error == simdjson::NO_SUCH_FIELD) {
+optional_sources_array(const JsonObjectReader &fields, bool &has_sources) {
+  memix::detail::CommonResult<std::optional<simdjson::dom::array>> sources =
+      fields.optional_array("sources");
+  if (!sources) {
+    return view_error(std::move(sources.error()), memix::ErrorKind::InvalidData);
+  }
+  if (!sources->has_value()) {
     has_sources = false;
     return simdjson::dom::array{};
   }
   has_sources = true;
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("expression field `sources` must be an "
-                                  "array: {}",
-                                  simdjson_error_text(error)));
-  }
-  return sources;
+  return **sources;
 }
 
 bool valid_logical_component(std::string_view component) {
@@ -563,24 +541,15 @@ parse_required_target(std::string_view value) {
 
 ViewResult<memix::AuthoredViewExpression>
 parse_expression_json(std::string_view text) {
-  const simdjson::padded_string padded_json(text);
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("invalid view expression JSON: {}",
-                                  simdjson_error_text(error)));
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(text);
+  if (!document) {
+    return view_error(memix::detail::with_error_context(
+        std::move(document.error()), "invalid view expression JSON",
+        memix::ErrorKind::InvalidData));
   }
-
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("view expression JSON must be an "
-                                  "object: {}",
-                                  simdjson_error_text(error)));
-  }
+  const JsonObjectReader fields =
+      JsonObjectReader(document->root_object());
 
   memix::AuthoredViewExpression expression;
   ViewResult<std::optional<std::string>> schema =
@@ -628,15 +597,14 @@ parse_expression_json(std::string_view text) {
   }
   if (has_sources) {
     for (const simdjson::dom::element source_element : *sources) {
-      std::string_view source;
-      error = source_element.get(source);
-      if (error != simdjson::SUCCESS) {
-        return view_error(memix::ErrorKind::InvalidData,
-                          std::format("view expression sources must be "
-                                      "strings: {}",
-                                      simdjson_error_text(error)));
+      memix::detail::CommonResult<std::string_view> source =
+          memix::detail::json_value_as<std::string_view>(source_element);
+      if (!source) {
+        return view_error(memix::detail::with_error_context(
+            std::move(source.error()), "view expression sources",
+            memix::ErrorKind::InvalidData));
       }
-      expression.sources.emplace_back(source);
+      expression.sources.emplace_back(*source);
     }
   }
 
@@ -832,7 +800,7 @@ ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
   if (!temp_dir) {
     return view_error(std::move(temp_dir.error()));
   }
-  return std::move(*temp_dir);
+  return ViewResult<fs::path>{std::in_place, std::move(*temp_dir)};
 }
 
 struct ExistingTextFileValidation {
@@ -1402,38 +1370,28 @@ ViewResult<std::string> resolve_unique_environment_id(const memix::Store &store,
 }
 
 ViewResult<std::vector<std::string>>
-read_string_array(simdjson::dom::object fields, std::string_view key) {
-  simdjson::dom::array values;
-  const simdjson::error_code error = fields.at_key(key).get(values);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("environment field `{}` must be an array: "
-                                  "{}",
-                                  key, simdjson_error_text(error)));
+read_string_array(const JsonObjectReader &fields, std::string_view key) {
+  memix::detail::CommonResult<std::vector<std::string>> values =
+      fields.string_array(key);
+  if (!values) {
+    return view_error(std::move(values.error()), memix::ErrorKind::InvalidData);
   }
-  std::vector<std::string> output;
-  for (const simdjson::dom::element value_element : values) {
-    std::string_view value;
-    const simdjson::error_code value_error = value_element.get(value);
-    if (value_error != simdjson::SUCCESS) {
-      return view_error(memix::ErrorKind::InvalidData,
-                        std::format("environment field `{}` values must be "
-                                    "strings: {}",
-                                    key, simdjson_error_text(value_error)));
-    }
-    output.emplace_back(value);
-  }
-  return output;
+  return ViewResult<std::vector<std::string>>{std::in_place,
+                                              std::move(*values)};
 }
 
-ViewResult<std::string> read_string_field(simdjson::dom::object fields,
+ViewResult<std::string> read_string_field(const JsonObjectReader &fields,
                                           std::string_view key) {
-  return require_field_as<std::string_view>(fields, key, "a string")
-      .transform([](std::string_view value) { return std::string(value); });
+  memix::detail::CommonResult<std::string> value =
+      fields.require_string(key);
+  if (!value) {
+    return view_error(std::move(value.error()), memix::ErrorKind::InvalidData);
+  }
+  return ViewResult<std::string>{std::in_place, std::move(*value)};
 }
 
 ViewResult<memix::MemoryObjectType>
-read_memory_object_type(simdjson::dom::object fields, std::string_view key) {
+read_memory_object_type(const JsonObjectReader &fields, std::string_view key) {
   ViewResult<std::string> type_name = read_string_field(fields, key);
   if (!type_name) {
     return std::unexpected(type_name.error());
@@ -1450,13 +1408,15 @@ read_memory_object_type(simdjson::dom::object fields, std::string_view key) {
 
 ViewResult<memix::ViewDerivationOutput>
 derivation_output_from_json(simdjson::dom::element output_element) {
-  simdjson::dom::object fields;
-  const simdjson::error_code error = output_element.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("derivation output must be an object: {}",
-                                  simdjson_error_text(error)));
+  memix::detail::CommonResult<simdjson::dom::object> fields_result =
+      memix::detail::json_object_from_element(output_element);
+  if (!fields_result) {
+    return view_error(memix::detail::with_error_context(
+        std::move(fields_result.error()), "derivation output",
+        memix::ErrorKind::InvalidData));
   }
+  const JsonObjectReader fields =
+      JsonObjectReader(*fields_result);
   ViewResult<std::string> role = read_string_field(fields, "role");
   ViewResult<std::string> artifact = read_string_field(fields, "artifact");
   ViewResult<std::string> path = read_string_field(fields, "path");
@@ -1477,16 +1437,15 @@ derivation_output_from_json(simdjson::dom::element output_element) {
 }
 
 ViewResult<std::vector<memix::ViewDerivationOutput>>
-derivation_outputs_from_json(simdjson::dom::object fields) {
-  simdjson::dom::array outputs;
-  const simdjson::error_code error = fields.at_key("outputs").get(outputs);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("derivation outputs must be an array: {}",
-                                  simdjson_error_text(error)));
+derivation_outputs_from_json(const JsonObjectReader &fields) {
+  memix::detail::CommonResult<simdjson::dom::array> outputs_result =
+      fields.require_array("outputs");
+  if (!outputs_result) {
+    return view_error(std::move(outputs_result.error()),
+                      memix::ErrorKind::InvalidData);
   }
   std::vector<memix::ViewDerivationOutput> parsed;
-  for (const simdjson::dom::element output_element : outputs) {
+  for (const simdjson::dom::element output_element : *outputs_result) {
     ViewResult<memix::ViewDerivationOutput> output =
         derivation_output_from_json(output_element);
     if (!output) {
@@ -1500,13 +1459,15 @@ derivation_outputs_from_json(simdjson::dom::object fields) {
 ViewResult<memix::ResolvedViewFile>
 resolved_file_from_json(const memix::Store &store,
                         simdjson::dom::element input_element) {
-  simdjson::dom::object fields;
-  const simdjson::error_code error = input_element.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("resolved input must be an object: {}",
-                                  simdjson_error_text(error)));
+  memix::detail::CommonResult<simdjson::dom::object> fields_result =
+      memix::detail::json_object_from_element(input_element);
+  if (!fields_result) {
+    return view_error(memix::detail::with_error_context(
+        std::move(fields_result.error()), "resolved input",
+        memix::ErrorKind::InvalidData));
   }
+  const JsonObjectReader fields =
+      JsonObjectReader(*fields_result);
   ViewResult<std::string> locator = read_string_field(fields, "locator");
   ViewResult<memix::MemoryObjectType> type =
       read_memory_object_type(fields, "type");
@@ -1551,18 +1512,15 @@ resolved_file_from_json(const memix::Store &store,
 
 ViewResult<std::vector<memix::ResolvedViewFile>>
 resolved_files_from_json(const memix::Store &store,
-                         simdjson::dom::object fields) {
-  simdjson::dom::array inputs;
-  const simdjson::error_code error =
-      fields.at_key("resolved_inputs").get(inputs);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("derivation resolved_inputs must be an "
-                                  "array: {}",
-                                  simdjson_error_text(error)));
+                         const JsonObjectReader &fields) {
+  memix::detail::CommonResult<simdjson::dom::array> inputs_result =
+      fields.require_array("resolved_inputs");
+  if (!inputs_result) {
+    return view_error(std::move(inputs_result.error()),
+                      memix::ErrorKind::InvalidData);
   }
   std::vector<memix::ResolvedViewFile> files;
-  for (const simdjson::dom::element input_element : inputs) {
+  for (const simdjson::dom::element input_element : *inputs_result) {
     ViewResult<memix::ResolvedViewFile> file =
         resolved_file_from_json(store, input_element);
     if (!file) {
@@ -1576,25 +1534,17 @@ resolved_files_from_json(const memix::Store &store,
 ViewResult<memix::ViewDerivation>
 derivation_from_json(const memix::Store &store, std::string_view text,
                      const fs::path &manifest_path) {
-  const simdjson::padded_string padded_json(text);
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("invalid derivation JSON `{}`: {}",
-                                  manifest_path.string(),
-                                  simdjson_error_text(error)));
+  const std::string json_context =
+      std::format("invalid derivation JSON `{}`", manifest_path.string());
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(text);
+  if (!document) {
+    return view_error(memix::detail::with_error_context(
+        std::move(document.error()), json_context,
+        memix::ErrorKind::InvalidData));
   }
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("derivation JSON must be an object "
-                                  "`{}`: {}",
-                                  manifest_path.string(),
-                                  simdjson_error_text(error)));
-  }
+  const JsonObjectReader fields =
+      JsonObjectReader(document->root_object());
 
   ViewResult<std::string> schema = read_string_field(fields, "schema");
   ViewResult<std::string> derivation_id =
@@ -1672,28 +1622,18 @@ resolve_derivation(const memix::Store &store, std::string_view derivation_id) {
 
 ViewResult<memix::ViewEnvironment>
 environment_from_json(std::string_view text, const fs::path &manifest_path) {
-  const simdjson::padded_string padded_json(text);
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("invalid environment JSON `{}`: {}",
-                                  manifest_path.string(),
-                                  simdjson_error_text(error)));
+  const std::string json_context =
+      std::format("invalid environment JSON `{}`", manifest_path.string());
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(text);
+  if (!document) {
+    return view_error(memix::detail::with_error_context(
+        std::move(document.error()), json_context,
+        memix::ErrorKind::InvalidData));
   }
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("environment JSON must be an object "
-                                  "`{}`: {}",
-                                  manifest_path.string(),
-                                  simdjson_error_text(error)));
-  }
-  ViewResult<std::string> schema =
-      require_field_as<std::string_view>(fields, "schema", "a string")
-          .transform([](std::string_view value) { return std::string(value); });
+  const JsonObjectReader fields =
+      JsonObjectReader(document->root_object());
+  ViewResult<std::string> schema = read_string_field(fields, "schema");
   if (!schema) {
     return std::unexpected(schema.error());
   }
@@ -1703,8 +1643,7 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
         std::format("unsupported environment schema `{}`", *schema));
   }
   ViewResult<std::string> environment_id =
-      require_field_as<std::string_view>(fields, "environment_id", "a string")
-          .transform([](std::string_view value) { return std::string(value); });
+      read_string_field(fields, "environment_id");
   if (!environment_id) {
     return std::unexpected(environment_id.error());
   }
@@ -1734,36 +1673,27 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
   environment.id = *environment_id;
   environment.manifest_path = manifest_path;
 
-  simdjson::dom::array bindings;
-  error = fields.at_key("bindings").get(bindings);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("environment bindings must be an array: "
-                                  "{}",
-                                  simdjson_error_text(error)));
+  memix::detail::CommonResult<simdjson::dom::array> bindings =
+      fields.require_array("bindings");
+  if (!bindings) {
+    return view_error(std::move(bindings.error()), memix::ErrorKind::InvalidData);
   }
-  for (const simdjson::dom::element binding_element : bindings) {
-    simdjson::dom::object binding_fields;
-    error = binding_element.get(binding_fields);
-    if (error != simdjson::SUCCESS) {
-      return view_error(memix::ErrorKind::InvalidData,
-                        std::format("environment binding must be an object: "
-                                    "{}",
-                                    simdjson_error_text(error)));
+  for (const simdjson::dom::element binding_element : *bindings) {
+    memix::detail::CommonResult<simdjson::dom::object> binding_fields_result =
+        memix::detail::json_object_from_element(binding_element);
+    if (!binding_fields_result) {
+      return view_error(memix::detail::with_error_context(
+          std::move(binding_fields_result.error()), "environment binding",
+          memix::ErrorKind::InvalidData));
     }
+    const JsonObjectReader binding_fields =
+        JsonObjectReader(*binding_fields_result);
     ViewResult<std::string> mount =
-        require_field_as<std::string_view>(binding_fields, "mount", "a string")
-            .transform(
-                [](std::string_view value) { return std::string(value); });
+        read_string_field(binding_fields, "mount");
     ViewResult<std::string> derivation =
-        require_field_as<std::string_view>(binding_fields, "derivation",
-                                           "a string")
-            .transform(
-                [](std::string_view value) { return std::string(value); });
+        read_string_field(binding_fields, "derivation");
     ViewResult<std::string> output =
-        require_field_as<std::string_view>(binding_fields, "output", "a string")
-            .transform(
-                [](std::string_view value) { return std::string(value); });
+        read_string_field(binding_fields, "output");
     if (!mount) {
       return std::unexpected(mount.error());
     }
@@ -1780,20 +1710,20 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
     });
   }
 
-  simdjson::dom::object closure_fields;
-  error = fields.at_key("closure").get(closure_fields);
-  if (error != simdjson::SUCCESS) {
-    return view_error(memix::ErrorKind::InvalidData,
-                      std::format("environment closure must be an object: "
-                                  "{}",
-                                  simdjson_error_text(error)));
+  memix::detail::CommonResult<simdjson::dom::object> closure_fields =
+      fields.require_object("closure");
+  if (!closure_fields) {
+    return view_error(std::move(closure_fields.error()),
+                      memix::ErrorKind::InvalidData);
   }
+  const JsonObjectReader closure =
+      JsonObjectReader(*closure_fields);
   ViewResult<std::vector<std::string>> derivations =
-      read_string_array(closure_fields, "derivations");
+      read_string_array(closure, "derivations");
   ViewResult<std::vector<std::string>> artifacts =
-      read_string_array(closure_fields, "artifacts");
+      read_string_array(closure, "artifacts");
   ViewResult<std::vector<std::string>> raw_objects =
-      read_string_array(closure_fields, "raw_objects");
+      read_string_array(closure, "raw_objects");
   if (!derivations) {
     return std::unexpected(derivations.error());
   }

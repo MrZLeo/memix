@@ -3,13 +3,16 @@
 #include "memix/error.hpp"
 
 #include <expected>
+#include <format>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace memix::detail {
 
 struct CommonError {
   std::string message;
+  ErrorKind kind = ErrorKind::Unknown;
 };
 
 template <typename Value>
@@ -59,6 +62,22 @@ void consume_cleanup_result(
 
 inline std::unexpected<CommonError> common_error(std::string message) {
   return std::unexpected(CommonError{.message = std::move(message)});
+}
+
+inline std::unexpected<CommonError> common_error(ErrorKind kind,
+                                                 std::string message) {
+  return std::unexpected(
+      CommonError{.message = std::move(message), .kind = kind});
+}
+
+inline CommonError with_error_context(CommonError error,
+                                      std::string_view context,
+                                      ErrorKind kind = ErrorKind::Unknown) {
+  error.message = std::format("{}: {}", context, error.message);
+  if (kind != ErrorKind::Unknown)
+    error.kind = kind;
+
+  return error;
 }
 
 } // namespace memix::detail

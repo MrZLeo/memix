@@ -94,6 +94,7 @@ using StoreResult = memix::StoreResult<Value>;
 using StoreVoid = memix::StoreVoid;
 
 using memix::detail::is_lower_hex_sha256;
+using memix::detail::JsonObjectReader;
 
 struct ContextTreeEntryJson {
   std::string_view name;
@@ -154,6 +155,15 @@ store_error(memix::detail::CommonError error) {
       memix::detail::translate_error<memix::StoreError>(std::move(error)));
 }
 
+template <typename Value>
+StoreResult<Value>
+store_json_result(memix::detail::CommonResult<Value> result) {
+  if (!result) {
+    return store_error(std::move(result.error()));
+  }
+  return StoreResult<Value>{std::in_place, std::move(*result)};
+}
+
 StoreVoid require_regular_file(const fs::path &path,
                                std::string missing_message) {
   const memix::FsResult<bool> is_regular_file = fs::is_regular_file(path);
@@ -189,32 +199,24 @@ StoreResult<SourceFileMetadata> regular_file_metadata(const fs::path &path) {
   }
   memix::detail::CommonResult<std::string> hash =
       memix::detail::sha256_file(path);
-  if (!hash) {
+  if (!hash)
     return store_error(std::move(hash.error()));
-  }
+
   return SourceFileMetadata{
       .size_bytes = *size_bytes,
       .hash = std::move(*hash),
   };
 }
 
-std::string simdjson_error_text(simdjson::error_code error) {
-  return simdjson::error_message(error);
-}
-
 StoreResult<std::string>
 json_from_builder(const simdjson::builder::string_builder &builder) {
   memix::detail::CommonResult<std::string> json =
-      memix::detail::json_from_builder(
-          builder,
-          memix::detail::JsonBuilderMessages{
-              .invalid_utf8_message = "metadata JSON contains invalid UTF-8",
-              .build_error_prefix = "failed to build metadata JSON",
-          });
+      memix::detail::json_from_builder(builder);
   if (!json) {
-    return store_error(std::move(json.error()));
+    return store_error(memix::detail::with_error_context(
+        std::move(json.error()), "metadata JSON"));
   }
-  return std::move(*json);
+  return StoreResult<std::string>{std::in_place, std::move(*json)};
 }
 
 StoreResult<std::string> metadata_json_for(const memix::StoredObject &object) {
@@ -302,41 +304,27 @@ context_generation_json_for(ContextGenerationJsonRequest request) {
   return json_from_builder(builder);
 }
 
-template <typename Value>
-StoreResult<Value> require_field_as(simdjson::dom::object fields,
-                                    std::string_view key,
-                                    std::string_view expected_type) {
-  Value parsed{};
-  const simdjson::error_code error = fields.at_key(key).get(parsed);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("metadata field `{}` must be {}: {}", key,
-                                   expected_type, simdjson_error_text(error)));
-  }
-  return parsed;
+StoreResult<simdjson::dom::element>
+require_field(const JsonObjectReader &fields, std::string_view key) {
+  return store_json_result(fields.require_field(key));
 }
 
-StoreResult<simdjson::dom::element> require_field(simdjson::dom::object fields,
-                                                  std::string_view key) {
-  return require_field_as<simdjson::dom::element>(fields, key, "present");
-}
-
-StoreResult<std::string> require_string(simdjson::dom::object fields,
+StoreResult<std::string> require_string(const JsonObjectReader &fields,
                                         std::string_view key) {
-  return require_field_as<std::string_view>(fields, key, "a string")
-      .transform([](std::string_view value) { return std::string(value); });
+  return store_json_result(fields.require_string(key));
 }
 
-StoreResult<std::uintmax_t> require_number(simdjson::dom::object fields,
+StoreResult<std::uintmax_t> require_number(const JsonObjectReader &fields,
                                            std::string_view key) {
-  return require_field_as<std::uint64_t>(fields, key, "an unsigned integer")
+  return store_json_result(fields.require_uint64(key))
       .transform([](std::uint64_t value) {
         return static_cast<std::uintmax_t>(value);
       });
 }
 
-StoreResult<simdjson::dom::array> require_array(simdjson::dom::object fields,
+StoreResult<simdjson::dom::array> require_array(const JsonObjectReader &fields,
                                                 std::string_view key) {
-  return require_field_as<simdjson::dom::array>(fields, key, "an array");
+  return store_json_result(fields.require_array(key));
 }
 
 StoreResult<int> checked_int(std::uintmax_t value,
@@ -348,7 +336,7 @@ StoreResult<int> checked_int(std::uintmax_t value,
   return static_cast<int>(value);
 }
 
-StoreResult<int> require_int(simdjson::dom::object fields,
+StoreResult<int> require_int(const JsonObjectReader &fields,
                              std::string_view key) {
   return require_number(fields, key).and_then([key](std::uintmax_t value) {
     return checked_int(value, key);
@@ -356,7 +344,8 @@ StoreResult<int> require_int(simdjson::dom::object fields,
 }
 
 StoreResult<memix::MemoryObjectType>
-require_memory_object_type(simdjson::dom::object fields, std::string_view key) {
+require_memory_object_type(const JsonObjectReader &fields,
+                           std::string_view key) {
   return require_string(fields, key)
       .and_then([](std::string_view type_text)
                     -> StoreResult<memix::MemoryObjectType> {
@@ -370,19 +359,19 @@ require_memory_object_type(simdjson::dom::object fields, std::string_view key) {
       });
 }
 
-StoreVoid validate_optional_memory_object_type(simdjson::dom::object fields,
+StoreVoid validate_optional_memory_object_type(const JsonObjectReader &fields,
                                                std::string_view key,
                                                memix::MemoryObjectType type,
                                                std::string_view subject) {
-  std::string_view type_text;
-  const simdjson::error_code error = fields.at_key(key).get(type_text);
-  if (error == simdjson::NO_SUCH_FIELD) {
+  memix::detail::CommonResult<std::optional<std::string>> optional_type =
+      fields.optional_string(key);
+  if (!optional_type) {
+    return store_error(std::move(optional_type.error()));
+  }
+  if (!optional_type->has_value()) {
     return {};
   }
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("{} field `{}` must be a string: {}",
-                                   subject, key, simdjson_error_text(error)));
-  }
+  const std::string &type_text = **optional_type;
   const std::optional<memix::MemoryObjectType> parsed_type =
       memix::parse_memory_object_type(type_text);
   if (!parsed_type.has_value()) {
@@ -397,7 +386,7 @@ StoreVoid validate_optional_memory_object_type(simdjson::dom::object fields,
 }
 
 StoreResult<memix::ContextTreeEntryKind>
-require_context_tree_entry_kind(simdjson::dom::object fields,
+require_context_tree_entry_kind(const JsonObjectReader &fields,
                                 std::string_view key) {
   return require_string(fields, key)
       .and_then([](std::string_view kind_text)
@@ -491,11 +480,11 @@ StoreResult<fs::path> unique_temp_dir(const fs::path &type_dir,
   if (!temp_dir) {
     return store_error(std::move(temp_dir.error()));
   }
-  return std::move(*temp_dir);
+  return StoreResult<fs::path>{std::in_place, std::move(*temp_dir)};
 }
 
 StoreResult<memix::StoredObject>
-metadata_object_from_fields(simdjson::dom::object fields,
+metadata_object_from_fields(const JsonObjectReader &fields,
                             const fs::path &object_dir,
                             const fs::path &metadata_path);
 
@@ -508,48 +497,35 @@ StoreResult<memix::StoredObject>
 object_from_metadata_path(const fs::path &object_dir,
                           memix::MemoryObjectType dir_type,
                           const fs::path &metadata_path) {
-  const memix::FsResult<std::string> metadata_text =
-      fs::read_text_file(metadata_path, "metadata");
-  if (!metadata_text) {
+  const auto metadata_text = fs::read_text_file(metadata_path, "metadata");
+  if (!metadata_text)
     return store_error(metadata_text.error());
-  }
-  const simdjson::padded_string metadata_json(*metadata_text);
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(metadata_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("invalid metadata JSON `{}`: {}",
-                                   metadata_path.string(),
-                                   simdjson_error_text(error)));
-  }
 
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("metadata JSON must be an object `{}`: {}",
-                                   metadata_path.string(),
-                                   simdjson_error_text(error)));
+  auto document = memix::detail::parse_json_object(*metadata_text);
+  if (!document) {
+    return store_error(memix::detail::with_error_context(
+        std::move(document.error()),
+        std::format("invalid metadata JSON `{}`", metadata_path.string())));
   }
+  JsonObjectReader fields(document->root_object());
 
-  StoreResult<memix::StoredObject> object =
-      metadata_object_from_fields(fields, object_dir, metadata_path);
-  if (!object) {
+  auto object = metadata_object_from_fields(fields, object_dir, metadata_path);
+  if (!object)
     return std::unexpected(object.error());
-  }
-  const StoreVoid metadata_valid = validate_metadata_object(*object, dir_type);
-  if (!metadata_valid) {
+
+  auto metadata_valid = validate_metadata_object(*object, dir_type);
+  if (!metadata_valid)
     return std::unexpected(metadata_valid.error());
-  }
-  const StoreVoid content_valid = validate_content_file(*object);
-  if (!content_valid) {
+
+  auto content_valid = validate_content_file(*object);
+  if (!content_valid)
     return std::unexpected(content_valid.error());
-  }
 
   return object;
 }
 
 StoreResult<memix::StoredObject>
-metadata_object_from_fields(simdjson::dom::object fields,
+metadata_object_from_fields(const JsonObjectReader &fields,
                             const fs::path &object_dir,
                             const fs::path &metadata_path) {
   memix::StoredObject object;
@@ -1237,14 +1213,16 @@ StoreResult<memix::StoredObject> read_blob_object(const fs::path &root,
       });
 }
 
-StoreResult<memix::ContextTreeEntry>
-context_tree_entry_from_json(simdjson::dom::element entry_element) {
-  simdjson::dom::object entry_fields;
-  const simdjson::error_code error = entry_element.get(entry_fields);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("context tree entry must be an object: {}",
-                                   simdjson_error_text(error)));
+  StoreResult<memix::ContextTreeEntry>
+  context_tree_entry_from_json(simdjson::dom::element entry_element) {
+  memix::detail::CommonResult<simdjson::dom::object> entry_fields_result =
+      memix::detail::json_object_from_element(entry_element);
+  if (!entry_fields_result) {
+    return store_error(memix::detail::with_error_context(
+        std::move(entry_fields_result.error()), "context tree entry"));
   }
+  const JsonObjectReader entry_fields =
+      JsonObjectReader(*entry_fields_result);
 
   const StoreResult<std::string> name = require_string(entry_fields, "name");
   if (!name) {
@@ -1289,23 +1267,16 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
                                    object_path.string()));
   }
 
-  const simdjson::padded_string padded_json(*tree_text);
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("invalid context tree JSON `{}`: {}",
-                                   object_path.string(),
-                                   simdjson_error_text(error)));
+  const std::string json_context =
+      std::format("invalid context tree JSON `{}`", object_path.string());
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(*tree_text);
+  if (!document) {
+    return store_error(memix::detail::with_error_context(
+        std::move(document.error()), json_context));
   }
-
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return store_error(
-        std::format("context tree JSON must be an object `{}`: {}",
-                    object_path.string(), simdjson_error_text(error)));
-  }
+  const JsonObjectReader fields =
+      JsonObjectReader(document->root_object());
 
   memix::ContextTree tree;
   tree.type = type;
@@ -1420,23 +1391,16 @@ read_context_generation_object(const fs::path &root,
         "context generation hash does not match `{}`", object_path.string()));
   }
 
-  const simdjson::padded_string padded_json(*generation_text);
-  simdjson::dom::parser parser;
-  simdjson::dom::element document;
-  simdjson::error_code error = parser.parse(padded_json).get(document);
-  if (error != simdjson::SUCCESS) {
-    return store_error(std::format("invalid context generation JSON `{}`: {}",
-                                   object_path.string(),
-                                   simdjson_error_text(error)));
+  const std::string json_context =
+      std::format("invalid context generation JSON `{}`", object_path.string());
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(*generation_text);
+  if (!document) {
+    return store_error(memix::detail::with_error_context(
+        std::move(document.error()), json_context));
   }
-
-  simdjson::dom::object fields;
-  error = document.get(fields);
-  if (error != simdjson::SUCCESS) {
-    return store_error(
-        std::format("context generation JSON must be an object `{}`: {}",
-                    object_path.string(), simdjson_error_text(error)));
-  }
+  const JsonObjectReader fields =
+      JsonObjectReader(document->root_object());
 
   memix::ContextGeneration generation;
   generation.type = type;
@@ -1495,21 +1459,21 @@ read_context_generation_object(const fs::path &root,
     return std::unexpected(parent_field.error());
   }
   if (!parent_field->is_null()) {
-    std::string_view parent;
-    error = parent_field->get(parent);
-    if (error != simdjson::SUCCESS) {
-      return store_error(
-          std::format("metadata field `parent` must be null or a string: {}",
-                      simdjson_error_text(error)));
+    memix::detail::CommonResult<std::string_view> parent_result =
+        memix::detail::json_value_as<std::string_view>(*parent_field);
+    if (!parent_result) {
+      return store_error(memix::detail::with_error_context(
+          std::move(parent_result.error()),
+          "context generation field `parent`"));
     }
     const StoreVoid parent_valid = validate_context_object_id({
-        .object_id = parent,
+        .object_id = *parent_result,
         .object_kind = "context generation parent",
     });
     if (!parent_valid) {
       return std::unexpected(parent_valid.error());
     }
-    generation.parent = std::string(parent);
+    generation.parent = std::string(*parent_result);
   }
 
   const StoreResult<std::string> created_at =
