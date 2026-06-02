@@ -18,7 +18,6 @@ namespace memix::detail {
 
 namespace {
 
-constexpr std::size_t kSha256HexDigestLength = Sha256::kDigestBytes * 2;
 constexpr std::size_t kHashReadBufferBytes = 8192;
 constexpr std::size_t kWordBytes = 4;
 constexpr std::size_t kLengthOffsetBytes = 56;
@@ -49,46 +48,46 @@ constexpr std::array<std::uint32_t, Sha256::kStateWords> kInitialState = {
     0x510E527FU, 0x9B05688CU, 0x1F83D9ABU, 0x5BE0CD19U,
 };
 
-std::uint32_t byte_value(std::byte byte) noexcept {
+constexpr std::uint32_t byte_value(std::byte byte) noexcept {
   return std::to_integer<std::uint32_t>(byte);
 }
 
-std::uint32_t choose(std::uint32_t x, std::uint32_t y,
-                     std::uint32_t z) noexcept {
+constexpr std::uint32_t
+choose(std::uint32_t x, std::uint32_t y, std::uint32_t z) noexcept {
   return (x & y) ^ (~x & z);
 }
 
-std::uint32_t majority(std::uint32_t x, std::uint32_t y,
-                       std::uint32_t z) noexcept {
+constexpr std::uint32_t
+majority(std::uint32_t x, std::uint32_t y, std::uint32_t z) noexcept {
   return (x & y) ^ (x & z) ^ (y & z);
 }
 
-std::uint32_t big_sigma0(std::uint32_t value) noexcept {
+constexpr std::uint32_t big_sigma0(std::uint32_t value) noexcept {
   return std::rotr(value, kBigSigma0Rotate0)
        ^ std::rotr(value, kBigSigma0Rotate1)
        ^ std::rotr(value, kBigSigma0Rotate2);
 }
 
-std::uint32_t big_sigma1(std::uint32_t value) noexcept {
+constexpr std::uint32_t big_sigma1(std::uint32_t value) noexcept {
   return std::rotr(value, kBigSigma1Rotate0)
        ^ std::rotr(value, kBigSigma1Rotate1)
        ^ std::rotr(value, kBigSigma1Rotate2);
 }
 
-std::uint32_t small_sigma0(std::uint32_t value) noexcept {
+constexpr std::uint32_t small_sigma0(std::uint32_t value) noexcept {
   return std::rotr(value, kSmallSigma0Rotate0)
        ^ std::rotr(value, kSmallSigma0Rotate1)
        ^ (value >> kSmallSigma0Shift);
 }
 
-std::uint32_t small_sigma1(std::uint32_t value) noexcept {
+constexpr std::uint32_t small_sigma1(std::uint32_t value) noexcept {
   return std::rotr(value, kSmallSigma1Rotate0)
        ^ std::rotr(value, kSmallSigma1Rotate1)
        ^ (value >> kSmallSigma1Shift);
 }
 
-std::uint32_t block_word(std::span<const std::byte> block,
-                         std::size_t word_index) noexcept {
+std::uint32_t
+block_word(std::span<const std::byte> block, std::size_t word_index) noexcept {
   const std::size_t offset = word_index * kWordBytes;
   std::array<std::byte, kWordBytes> bytes{};
   std::ranges::copy(block.subspan(offset, kWordBytes), bytes.begin());
@@ -99,11 +98,11 @@ std::uint32_t block_word(std::span<const std::byte> block,
 }
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
-void f_expand(std::uint32_t &a, std::uint32_t &b, std::uint32_t &c,
-              std::uint32_t &d, std::uint32_t &e, std::uint32_t &f,
-              std::uint32_t &g, std::uint32_t &h, std::uint32_t &w,
-              std::uint32_t s1_source, std::uint32_t add_source,
-              std::uint32_t s0_source, std::uint32_t k) noexcept {
+void
+f_expand(std::uint32_t &a, std::uint32_t &b, std::uint32_t &c, std::uint32_t &d,
+         std::uint32_t &e, std::uint32_t &f, std::uint32_t &g, std::uint32_t &h,
+         std::uint32_t &w, std::uint32_t s1_source, std::uint32_t add_source,
+         std::uint32_t s0_source, std::uint32_t k) noexcept {
   h += big_sigma1(e) + choose(e, f, g) + w + k;
   d += h;
   h += big_sigma0(a) + majority(a, b, c);
@@ -359,26 +358,6 @@ std::string sha256_text(std::string_view text) {
   Sha256 sha256;
   sha256.update(text);
   return sha256.final_hex();
-}
-
-bool is_lower_hex_sha256(std::string_view value) noexcept {
-  if (value.size() != kSha256HexDigestLength) {
-    return false;
-  }
-  return std::ranges::all_of(value, [](char character) {
-    return (character >= '0' && character <= '9')
-        || (character >= 'a' && character <= 'f');
-  });
-}
-
-bool is_lower_hex_prefix(std::string_view value) noexcept {
-  if (value.empty() || value.size() > kSha256HexDigestLength) {
-    return false;
-  }
-  return std::ranges::all_of(value, [](char character) {
-    return (character >= '0' && character <= '9')
-        || (character >= 'a' && character <= 'f');
-  });
 }
 
 } // namespace memix::detail

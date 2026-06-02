@@ -4,6 +4,13 @@
 
 #include <string>
 
+static_assert(
+    memix::detail::is_lower_hex_sha256("e3b0c44298fc1c149afbf4c8996fb924"
+                                       "27ae41e4649b934ca495991b7852b855"));
+static_assert(!memix::detail::is_lower_hex_sha256("not-a-digest"));
+static_assert(memix::detail::is_lower_hex_prefix("abc123"));
+static_assert(!memix::detail::is_lower_hex_prefix("ABC123"));
+
 TEST_CASE("sha256 text matches standard test vectors", "[hash]") {
   const std::string empty = memix::detail::sha256_text("");
   REQUIRE(empty

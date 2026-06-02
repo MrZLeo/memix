@@ -15,6 +15,15 @@
 
 namespace fs = memix::fs;
 
+static_assert(memix::to_string(memix::MemoryObjectType::Agents) == "agents");
+static_assert(memix::parse_memory_object_type("documents")
+              == memix::MemoryObjectType::Documents);
+static_assert(memix::memory_object_type_values()[1]
+              == memix::MemoryObjectType::Chat);
+static_assert(memix::to_string(memix::ContextTreeEntryKind::Tree) == "tree");
+static_assert(memix::parse_context_tree_entry_kind("blob")
+              == memix::ContextTreeEntryKind::Blob);
+
 namespace {
 
 void set_environment_value(const char *name,

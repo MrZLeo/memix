@@ -2,6 +2,7 @@
 
 #include "detail/error.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -43,7 +44,28 @@ private:
 std::string hex_encode(std::span<const unsigned char> bytes);
 CommonResult<std::string> sha256_file(const std::filesystem::path &path);
 std::string sha256_text(std::string_view text);
-bool is_lower_hex_sha256(std::string_view value) noexcept;
-bool is_lower_hex_prefix(std::string_view value) noexcept;
+
+inline constexpr std::size_t kSha256HexDigestLength = Sha256::kDigestBytes * 2;
+
+[[nodiscard]] constexpr bool is_lower_hex_digit(char character) noexcept {
+  return (character >= '0' && character <= '9')
+      || (character >= 'a' && character <= 'f');
+}
+
+[[nodiscard]] constexpr bool
+is_lower_hex_sha256(std::string_view value) noexcept {
+  if (value.size() != kSha256HexDigestLength) {
+    return false;
+  }
+  return std::ranges::all_of(value, is_lower_hex_digit);
+}
+
+[[nodiscard]] constexpr bool
+is_lower_hex_prefix(std::string_view value) noexcept {
+  if (value.empty() || value.size() > kSha256HexDigestLength) {
+    return false;
+  }
+  return std::ranges::all_of(value, is_lower_hex_digit);
+}
 
 } // namespace memix::detail

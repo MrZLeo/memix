@@ -10,7 +10,6 @@
 #include "detail/scope_exit.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <expected>
 #include <format>
@@ -43,38 +42,6 @@ constexpr std::string_view kTreeDir = "tree";
 constexpr std::string_view kJsonSuffix = ".json";
 constexpr std::string_view kLatestVersion = "latest";
 constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
-
-struct ViewTargetKindToken {
-  memix::ViewTargetKind value;
-  std::string_view token;
-};
-
-struct ViewVersionKindToken {
-  memix::ViewVersionKind value;
-  std::string_view token;
-};
-
-constexpr std::array kViewTargetKindTokens{
-    ViewTargetKindToken{
-        .value = memix::ViewTargetKind::FileTree,
-        .token = "file_tree",
-    },
-    ViewTargetKindToken{
-        .value = memix::ViewTargetKind::ContextPack,
-        .token = "context_pack",
-    },
-};
-
-constexpr std::array kViewVersionKindTokens{
-    ViewVersionKindToken{
-        .value = memix::ViewVersionKind::Ref,
-        .token = "ref",
-    },
-    ViewVersionKindToken{
-        .value = memix::ViewVersionKind::Generation,
-        .token = "generation",
-    },
-};
 
 template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
@@ -259,8 +226,8 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.end_object();
 }
 
-std::unexpected<memix::ViewError> view_error(memix::ErrorKind kind,
-                                             std::string message) {
+std::unexpected<memix::ViewError>
+view_error(memix::ErrorKind kind, std::string message) {
   memix::ViewError error;
   error.message = std::move(message);
   error.kind = kind;
@@ -297,8 +264,8 @@ json_from_builder(const simdjson::builder::string_builder &builder) {
   memix::detail::CommonResult<std::string> json =
       memix::detail::json_from_builder(builder);
   if (!json) {
-    return view_error(memix::detail::with_error_context(
-        std::move(json.error()), "view JSON"));
+    return view_error(memix::detail::with_error_context(std::move(json.error()),
+                                                        "view JSON"));
   }
   return ViewResult<std::string>{std::in_place, std::move(*json)};
 }
@@ -360,7 +327,8 @@ optional_sources_array(const JsonObjectReader &fields, bool &has_sources) {
   memix::detail::CommonResult<std::optional<simdjson::dom::array>> sources =
       fields.optional_array("sources");
   if (!sources) {
-    return view_error(std::move(sources.error()), memix::ErrorKind::InvalidData);
+    return view_error(std::move(sources.error()),
+                      memix::ErrorKind::InvalidData);
   }
   if (!sources->has_value()) {
     has_sources = false;
@@ -370,7 +338,7 @@ optional_sources_array(const JsonObjectReader &fields, bool &has_sources) {
   return **sources;
 }
 
-bool valid_logical_component(std::string_view component) {
+constexpr bool valid_logical_component(std::string_view component) {
   return !component.empty()
       && component != "."
       && component != ".."
@@ -438,8 +406,8 @@ memix::ViewVersionSelector parse_version_selector(std::string_view value) {
   };
 }
 
-std::string version_ref_name(memix::MemoryObjectType type,
-                             std::string_view version) {
+std::string
+version_ref_name(memix::MemoryObjectType type, std::string_view version) {
   if (version == kLatestVersion) {
     return std::format("{}/latest", memix::to_string(type));
   }
@@ -456,10 +424,9 @@ std::string version_ref_name(memix::MemoryObjectType type,
   return std::format("{}/{}", memix::to_string(type), version);
 }
 
-std::string canonical_locator(memix::MemoryObjectType type,
-                              const fs::path &path,
-                              const memix::ViewVersionSelector &version,
-                              bool recursive) {
+std::string
+canonical_locator(memix::MemoryObjectType type, const fs::path &path,
+                  const memix::ViewVersionSelector &version, bool recursive) {
   std::string output =
       std::format("{}/{}", memix::to_string(type), path.generic_string());
   if (recursive) {
@@ -548,8 +515,7 @@ parse_expression_json(std::string_view text) {
         std::move(document.error()), "invalid view expression JSON",
         memix::ErrorKind::InvalidData));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(document->root_object());
+  const JsonObjectReader fields = JsonObjectReader(document->root_object());
 
   memix::AuthoredViewExpression expression;
   ViewResult<std::optional<std::string>> schema =
@@ -778,19 +744,19 @@ fs::path environments_dir_for(const fs::path &root) {
   return views_dir_for(root) / std::string(kEnvironmentsDir);
 }
 
-fs::path derivation_dir_for(const fs::path &root,
-                            std::string_view derivation_id) {
+fs::path
+derivation_dir_for(const fs::path &root, std::string_view derivation_id) {
   return derivations_dir_for(root) / std::string(derivation_id);
 }
 
-fs::path environment_path_for(const fs::path &root,
-                              std::string_view environment_id) {
+fs::path
+environment_path_for(const fs::path &root, std::string_view environment_id) {
   return environments_dir_for(root)
        / std::format("{}{}", environment_id, kJsonSuffix);
 }
 
-ViewResult<fs::path> unique_temp_dir(const fs::path &parent,
-                                     std::string_view prefix) {
+ViewResult<fs::path>
+unique_temp_dir(const fs::path &parent, std::string_view prefix) {
   memix::FsResult<fs::path> temp_dir = fs::unique_temp_dir(
       parent,
       fs::TempDirOptions{
@@ -824,8 +790,8 @@ validate_existing_text_file(const ExistingTextFileValidation &request) {
   return {};
 }
 
-ViewResult<bool> write_text_file_if_absent(const fs::path &path,
-                                           std::string_view contents) {
+ViewResult<bool>
+write_text_file_if_absent(const fs::path &path, std::string_view contents) {
   const memix::FsResult<bool> exists = fs::exists(path);
   if (!exists) {
     return view_error(exists.error());
@@ -861,9 +827,8 @@ ViewResult<bool> write_text_file_if_absent(const fs::path &path,
                                   "directory `{}`",
                                   temp_path.string()));
   }
-  const memix::scope_exit cleanup([temp_path] {
-    std::ignore = fs::remove_all(temp_path);
-  });
+  const memix::scope_exit cleanup(
+      [temp_path] { std::ignore = fs::remove_all(temp_path); });
 
   const fs::path temp_file = temp_path / "object";
   const memix::FsVoid written = fs::write_text_file(temp_file, contents);
@@ -1047,8 +1012,8 @@ unique_blob_ids(const std::vector<memix::ResolvedViewFile> &files) {
   return ids;
 }
 
-std::string artifact_id_for(std::string_view derivation_id,
-                            std::string_view role) {
+std::string
+artifact_id_for(std::string_view derivation_id, std::string_view role) {
   return sha256_text(std::format("{}:{}", role, derivation_id));
 }
 
@@ -1142,9 +1107,11 @@ ViewVoid fail_after_thawing_derivation(const fs::path &derivation_dir,
   return std::unexpected(std::move(original_error));
 }
 
-ViewResult<bool> handle_derivation_rename_failure(
-    const fs::path &temp_dir, const memix::ViewDerivation &derivation,
-    std::string_view manifest_json, const memix::FsError &rename_error) {
+ViewResult<bool>
+handle_derivation_rename_failure(const fs::path &temp_dir,
+                                 const memix::ViewDerivation &derivation,
+                                 std::string_view manifest_json,
+                                 const memix::FsError &rename_error) {
   const memix::FsResult<bool> raced_exists =
       fs::exists(derivation.manifest_path.parent_path());
   if (!raced_exists) {
@@ -1217,9 +1184,8 @@ write_derivation_directory(const memix::Store &store,
                                   "derivation `{}`",
                                   temp_path.string()));
   }
-  memix::scope_exit cleanup([temp_path] {
-    std::ignore = fs::remove_all(temp_path);
-  });
+  memix::scope_exit cleanup(
+      [temp_path] { std::ignore = fs::remove_all(temp_path); });
   const memix::FsVoid written = fs::write_text_file(
       temp_path / std::string(kManifestFilename), manifest_json);
   if (!written) {
@@ -1380,10 +1346,9 @@ read_string_array(const JsonObjectReader &fields, std::string_view key) {
                                               std::move(*values)};
 }
 
-ViewResult<std::string> read_string_field(const JsonObjectReader &fields,
-                                          std::string_view key) {
-  memix::detail::CommonResult<std::string> value =
-      fields.require_string(key);
+ViewResult<std::string>
+read_string_field(const JsonObjectReader &fields, std::string_view key) {
+  memix::detail::CommonResult<std::string> value = fields.require_string(key);
   if (!value) {
     return view_error(std::move(value.error()), memix::ErrorKind::InvalidData);
   }
@@ -1415,8 +1380,7 @@ derivation_output_from_json(simdjson::dom::element output_element) {
         std::move(fields_result.error()), "derivation output",
         memix::ErrorKind::InvalidData));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(*fields_result);
+  const JsonObjectReader fields = JsonObjectReader(*fields_result);
   ViewResult<std::string> role = read_string_field(fields, "role");
   ViewResult<std::string> artifact = read_string_field(fields, "artifact");
   ViewResult<std::string> path = read_string_field(fields, "path");
@@ -1466,8 +1430,7 @@ resolved_file_from_json(const memix::Store &store,
         std::move(fields_result.error()), "resolved input",
         memix::ErrorKind::InvalidData));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(*fields_result);
+  const JsonObjectReader fields = JsonObjectReader(*fields_result);
   ViewResult<std::string> locator = read_string_field(fields, "locator");
   ViewResult<memix::MemoryObjectType> type =
       read_memory_object_type(fields, "type");
@@ -1543,8 +1506,7 @@ derivation_from_json(const memix::Store &store, std::string_view text,
         std::move(document.error()), json_context,
         memix::ErrorKind::InvalidData));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(document->root_object());
+  const JsonObjectReader fields = JsonObjectReader(document->root_object());
 
   ViewResult<std::string> schema = read_string_field(fields, "schema");
   ViewResult<std::string> derivation_id =
@@ -1631,8 +1593,7 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
         std::move(document.error()), json_context,
         memix::ErrorKind::InvalidData));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(document->root_object());
+  const JsonObjectReader fields = JsonObjectReader(document->root_object());
   ViewResult<std::string> schema = read_string_field(fields, "schema");
   if (!schema) {
     return std::unexpected(schema.error());
@@ -1676,7 +1637,8 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
   memix::detail::CommonResult<simdjson::dom::array> bindings =
       fields.require_array("bindings");
   if (!bindings) {
-    return view_error(std::move(bindings.error()), memix::ErrorKind::InvalidData);
+    return view_error(std::move(bindings.error()),
+                      memix::ErrorKind::InvalidData);
   }
   for (const simdjson::dom::element binding_element : *bindings) {
     memix::detail::CommonResult<simdjson::dom::object> binding_fields_result =
@@ -1688,8 +1650,7 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
     }
     const JsonObjectReader binding_fields =
         JsonObjectReader(*binding_fields_result);
-    ViewResult<std::string> mount =
-        read_string_field(binding_fields, "mount");
+    ViewResult<std::string> mount = read_string_field(binding_fields, "mount");
     ViewResult<std::string> derivation =
         read_string_field(binding_fields, "derivation");
     ViewResult<std::string> output =
@@ -1716,8 +1677,7 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
     return view_error(std::move(closure_fields.error()),
                       memix::ErrorKind::InvalidData);
   }
-  const JsonObjectReader closure =
-      JsonObjectReader(*closure_fields);
+  const JsonObjectReader closure = JsonObjectReader(*closure_fields);
   ViewResult<std::vector<std::string>> derivations =
       read_string_array(closure, "derivations");
   ViewResult<std::vector<std::string>> artifacts =
@@ -1744,37 +1704,6 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
 } // namespace
 
 namespace memix {
-
-std::string_view to_string(ViewTargetKind target) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  auto it = std::ranges::find(kViewTargetKindTokens, target,
-                              &ViewTargetKindToken::value);
-  if (it == std::ranges::end(kViewTargetKindTokens))
-    return {};
-  return it->token;
-}
-
-std::optional<ViewTargetKind>
-parse_view_target_kind(std::string_view value) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  auto it = std::ranges::find(kViewTargetKindTokens, value,
-                              &ViewTargetKindToken::token);
-  if (it == std::ranges::end(kViewTargetKindTokens))
-    return std::nullopt;
-  return it->value;
-}
-
-std::string_view to_string(ViewVersionKind kind) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  auto it = std::ranges::find(kViewVersionKindTokens, kind,
-                              &ViewVersionKindToken::value);
-  if (it == std::ranges::end(kViewVersionKindTokens))
-    return {};
-  return it->token;
-}
 
 ViewResult<AuthoredViewExpression>
 ViewService::parse_expression(std::string_view expression_or_sources) const {

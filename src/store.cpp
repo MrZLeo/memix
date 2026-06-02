@@ -51,42 +51,6 @@ constexpr std::string_view kJsonSuffix = ".json";
 constexpr std::size_t kTimestampBufferBytes = 21;
 constexpr std::uint64_t kDecimalRadix = 10;
 
-struct MemoryObjectTypeToken {
-  memix::MemoryObjectType value;
-  std::string_view token;
-};
-
-struct ContextTreeEntryKindToken {
-  memix::ContextTreeEntryKind value;
-  std::string_view token;
-};
-
-constexpr std::array kMemoryObjectTypeTokens{
-    MemoryObjectTypeToken{
-        .value = memix::MemoryObjectType::Agents,
-        .token = "agents",
-    },
-    MemoryObjectTypeToken{
-        .value = memix::MemoryObjectType::Chat,
-        .token = "chat",
-    },
-    MemoryObjectTypeToken{
-        .value = memix::MemoryObjectType::Documents,
-        .token = "documents",
-    },
-};
-
-constexpr std::array kContextTreeEntryKindTokens{
-    ContextTreeEntryKindToken{
-        .value = memix::ContextTreeEntryKind::Blob,
-        .token = "blob",
-    },
-    ContextTreeEntryKindToken{
-        .value = memix::ContextTreeEntryKind::Tree,
-        .token = "tree",
-    },
-};
-
 template <typename Value>
 using StoreResult = memix::StoreResult<Value>;
 
@@ -117,7 +81,7 @@ std::string type_to_owned_string(memix::MemoryObjectType type) {
   return std::string(memix::to_string(type));
 }
 
-std::string_view context_label(memix::MemoryObjectType type) {
+constexpr std::string_view context_label(memix::MemoryObjectType type) {
   return memix::to_string(type);
 }
 
@@ -131,8 +95,8 @@ std::optional<std::string> env_value(const char *name) {
   return std::string(value);
 }
 
-std::unexpected<memix::StoreError> store_error(memix::ErrorKind kind,
-                                               std::string message) {
+std::unexpected<memix::StoreError>
+store_error(memix::ErrorKind kind, std::string message) {
   memix::StoreError error;
   error.message = std::move(message);
   error.kind = kind;
@@ -163,8 +127,8 @@ store_json_result(memix::detail::CommonResult<Value> result) {
   return StoreResult<Value>{std::in_place, std::move(*result)};
 }
 
-StoreVoid require_regular_file(const fs::path &path,
-                               std::string missing_message) {
+StoreVoid
+require_regular_file(const fs::path &path, std::string missing_message) {
   const memix::FsResult<bool> is_regular_file = fs::is_regular_file(path);
   if (!is_regular_file) {
     return store_error(is_regular_file.error());
@@ -308,26 +272,26 @@ require_field(const JsonObjectReader &fields, std::string_view key) {
   return store_json_result(fields.require_field(key));
 }
 
-StoreResult<std::string> require_string(const JsonObjectReader &fields,
-                                        std::string_view key) {
+StoreResult<std::string>
+require_string(const JsonObjectReader &fields, std::string_view key) {
   return store_json_result(fields.require_string(key));
 }
 
-StoreResult<std::uintmax_t> require_number(const JsonObjectReader &fields,
-                                           std::string_view key) {
+StoreResult<std::uintmax_t>
+require_number(const JsonObjectReader &fields, std::string_view key) {
   return store_json_result(fields.require_uint64(key))
       .transform([](std::uint64_t value) {
         return static_cast<std::uintmax_t>(value);
       });
 }
 
-StoreResult<simdjson::dom::array> require_array(const JsonObjectReader &fields,
-                                                std::string_view key) {
+StoreResult<simdjson::dom::array>
+require_array(const JsonObjectReader &fields, std::string_view key) {
   return store_json_result(fields.require_array(key));
 }
 
-StoreResult<int> checked_int(std::uintmax_t value,
-                             std::string_view field_name) {
+StoreResult<int>
+checked_int(std::uintmax_t value, std::string_view field_name) {
   if (value > static_cast<std::uintmax_t>(std::numeric_limits<int>::max())) {
     return store_error(
         std::format("metadata field `{}` is too large", field_name));
@@ -335,8 +299,8 @@ StoreResult<int> checked_int(std::uintmax_t value,
   return static_cast<int>(value);
 }
 
-StoreResult<int> require_int(const JsonObjectReader &fields,
-                             std::string_view key) {
+StoreResult<int>
+require_int(const JsonObjectReader &fields, std::string_view key) {
   return require_number(fields, key).and_then([key](std::uintmax_t value) {
     return checked_int(value, key);
   });
@@ -412,8 +376,8 @@ fs::path trees_dir_for(const fs::path &root, memix::MemoryObjectType type) {
   return type_dir_for(root, type) / std::string(kTreesDir);
 }
 
-fs::path generations_dir_for(const fs::path &root,
-                             memix::MemoryObjectType type) {
+fs::path
+generations_dir_for(const fs::path &root, memix::MemoryObjectType type) {
   return type_dir_for(root, type) / std::string(kGenerationsDir);
 }
 
@@ -468,8 +432,8 @@ StoreResult<std::string> utc_timestamp() {
   return {buffer.data()};
 }
 
-StoreResult<fs::path> unique_temp_dir(const fs::path &type_dir,
-                                      std::string_view hash) {
+StoreResult<fs::path>
+unique_temp_dir(const fs::path &type_dir, std::string_view hash) {
   memix::FsResult<fs::path> temp_dir = fs::unique_temp_dir(
       type_dir,
       fs::TempDirOptions{
@@ -809,8 +773,8 @@ read_existing_object_if_present(const fs::path &object_dir,
   };
 }
 
-StoreVoid ensure_store_directories(const fs::path &root,
-                                   const fs::path &type_dir) {
+StoreVoid
+ensure_store_directories(const fs::path &root, const fs::path &type_dir) {
   const StoreVoid root_created = ensure_directory(root, fs::perms::owner_all);
   if (!root_created) {
     return std::unexpected(root_created.error());
@@ -823,8 +787,8 @@ StoreVoid ensure_store_directories(const fs::path &root,
   return {};
 }
 
-StoreVoid acquire_directory_lock(const fs::path &lock_path,
-                                 std::string_view lock_name) {
+StoreVoid
+acquire_directory_lock(const fs::path &lock_path, std::string_view lock_name) {
   const StoreVoid parent_created =
       ensure_directory(lock_path.parent_path(), fs::perms::owner_all);
   if (!parent_created) {
@@ -914,21 +878,21 @@ StoreResult<memix::IngestResult>
 publish_new_object(const fs::path &root, memix::MemoryObjectType type,
                    const fs::path &source_path) {
   const fs::path type_dir = blobs_dir_for(root, type);
-  const StoreVoid directories_created = ensure_store_directories(root, type_dir);
+  const StoreVoid directories_created =
+      ensure_store_directories(root, type_dir);
   if (!directories_created) {
     return std::unexpected(directories_created.error());
   }
 
   const StoreVoid source_is_regular = require_regular_file(
-      source_path,
-      std::format("ingest source must be a regular file `{}`",
-                  source_path.string()));
+      source_path, std::format("ingest source must be a regular file `{}`",
+                               source_path.string()));
   if (!source_is_regular) {
     return std::unexpected(source_is_regular.error());
   }
 
-  const StoreResult<fs::path> temp_dir = unique_temp_dir(
-      type_dir, source_path.filename().string());
+  const StoreResult<fs::path> temp_dir =
+      unique_temp_dir(type_dir, source_path.filename().string());
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
@@ -1046,7 +1010,7 @@ publish_new_object(const fs::path &root, memix::MemoryObjectType type,
   };
 }
 
-bool valid_logical_component(std::string_view component) {
+constexpr bool valid_logical_component(std::string_view component) {
   return !component.empty()
       && component != "."
       && component != ".."
@@ -1198,9 +1162,9 @@ canonical_context_tree_entries(std::vector<memix::ContextTreeEntry> entries) {
       [&entries] { return std::move(entries); });
 }
 
-StoreResult<memix::StoredObject> read_blob_object(const fs::path &root,
-                                                  memix::MemoryObjectType type,
-                                                  std::string_view object_id) {
+StoreResult<memix::StoredObject>
+read_blob_object(const fs::path &root, memix::MemoryObjectType type,
+                 std::string_view object_id) {
   return validate_context_object_id({
                                         .object_id = object_id,
                                         .object_kind = "blob",
@@ -1486,10 +1450,12 @@ read_context_generation_object(const fs::path &root,
   return generation;
 }
 
-StoreResult<memix::ContextGeneration> write_context_generation_object(
-    const fs::path &root, memix::MemoryObjectType type,
-    std::string_view root_tree, std::optional<std::string_view> parent,
-    std::string_view message) {
+StoreResult<memix::ContextGeneration>
+write_context_generation_object(const fs::path &root,
+                                memix::MemoryObjectType type,
+                                std::string_view root_tree,
+                                std::optional<std::string_view> parent,
+                                std::string_view message) {
   const StoreVoid root_tree_valid = validate_context_object_id({
       .object_id = root_tree,
       .object_kind = "context generation root tree",
@@ -1665,8 +1631,8 @@ attach_blob_to_context_tree(const fs::path &root, memix::MemoryObjectType type,
   return child_id;
 }
 
-StoreResult<fs::path> ref_path_for(const fs::path &root,
-                                   std::string_view ref_name) {
+StoreResult<fs::path>
+ref_path_for(const fs::path &root, std::string_view ref_name) {
   return ref_name_components(ref_name).transform(
       [&root](const LogicalPathComponents &components) {
         return refs_dir_for(root) / components.path();
@@ -1932,8 +1898,8 @@ root_tree_id_for_generation(const fs::path &root, memix::MemoryObjectType type,
       });
 }
 
-StoreResult<std::string> latest_root_tree_id(const fs::path &root,
-                                             memix::MemoryObjectType type) {
+StoreResult<std::string>
+latest_root_tree_id(const fs::path &root, memix::MemoryObjectType type) {
   StoreResult<std::optional<std::string>> latest =
       read_ref_value(root, latest_ref_name(type));
   if (!latest) {
@@ -1977,18 +1943,18 @@ resolve_context_file(const fs::path &root, memix::MemoryObjectType type,
     const auto entry = std::ranges::find(current_tree->entries, name,
                                          &memix::ContextTreeEntry::name);
     if (entry == current_tree->entries.end()) {
-      return store_error(
-          memix::ErrorKind::ContextPathNotFound,
-          std::format("{} path does not exist `{}`",
-                      context_label(type), context_path.generic_string()));
+      return store_error(memix::ErrorKind::ContextPathNotFound,
+                         std::format("{} path does not exist `{}`",
+                                     context_label(type),
+                                     context_path.generic_string()));
     }
     const bool is_last = std::next(component) == components->end();
     if (is_last) {
       if (entry->kind != memix::ContextTreeEntryKind::Blob) {
-        return store_error(
-            memix::ErrorKind::InvalidArgument,
-            std::format("{} path is not a file `{}`",
-                        context_label(type), context_path.generic_string()));
+        return store_error(memix::ErrorKind::InvalidArgument,
+                           std::format("{} path is not a file `{}`",
+                                       context_label(type),
+                                       context_path.generic_string()));
       }
       return read_blob_object(root, type, entry->id);
     }
@@ -2010,10 +1976,10 @@ struct ContextFileVisit {
   std::string object_id;
 };
 
-StoreVoid collect_context_files(const fs::path &root, std::string_view tree_id,
-                                memix::MemoryObjectType type,
-                                const fs::path &prefix,
-                                std::vector<memix::StoreFile> &files) {
+StoreVoid
+collect_context_files(const fs::path &root, std::string_view tree_id,
+                      memix::MemoryObjectType type, const fs::path &prefix,
+                      std::vector<memix::StoreFile> &files) {
   std::vector<ContextFileVisit> pending;
   pending.push_back(ContextFileVisit{
       .path = prefix,
@@ -2060,54 +2026,6 @@ StoreVoid collect_context_files(const fs::path &root, std::string_view tree_id,
 
 namespace memix {
 
-std::string_view to_string(MemoryObjectType type) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  const auto it = std::ranges::find(kMemoryObjectTypeTokens, type,
-                                    &MemoryObjectTypeToken::value);
-  if (it == std::ranges::end(kMemoryObjectTypeTokens))
-    return {};
-  return it->token;
-}
-
-std::optional<MemoryObjectType>
-parse_memory_object_type(std::string_view value) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  const auto it = std::ranges::find(kMemoryObjectTypeTokens, value,
-                                    &MemoryObjectTypeToken::token);
-  if (it == std::ranges::end(kMemoryObjectTypeTokens))
-    return std::nullopt;
-  return it->value;
-}
-
-std::vector<MemoryObjectType> memory_object_types() {
-  return kMemoryObjectTypeTokens
-       | std::views::transform(&MemoryObjectTypeToken::value)
-       | std::ranges::to<std::vector>();
-}
-
-std::string_view to_string(ContextTreeEntryKind kind) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  const auto it = std::ranges::find(kContextTreeEntryKindTokens, kind,
-                                    &ContextTreeEntryKindToken::value);
-  if (it == std::ranges::end(kContextTreeEntryKindTokens))
-    return std::string_view{};
-  return it->token;
-}
-
-std::optional<ContextTreeEntryKind>
-parse_context_tree_entry_kind(std::string_view value) noexcept {
-  // MSVC array iterators are not pointers.
-  // NOLINTNEXTLINE(readability-qualified-auto)
-  const auto it = std::ranges::find(kContextTreeEntryKindTokens, value,
-                                    &ContextTreeEntryKindToken::token);
-  if (it == std::ranges::end(kContextTreeEntryKindTokens))
-    return std::nullopt;
-  return it->value;
-}
-
 StoreResult<fs::path> default_store_root() {
   if (const auto memix_store_home = env_value("MEMIX_STORE_HOME");
       memix_store_home.has_value()) {
@@ -2128,8 +2046,8 @@ StoreResult<std::string> metadata_json(const StoredObject &object) {
   return metadata_json_for(object);
 }
 
-StoreResult<IngestResult> Store::ingest(MemoryObjectType type,
-                                        const fs::path &source_path) const {
+StoreResult<IngestResult>
+Store::ingest(MemoryObjectType type, const fs::path &source_path) const {
   return ingest_blob(type, source_path);
 }
 
@@ -2239,13 +2157,13 @@ Store::ingest_file(const FileIngestRequest &request) const {
   };
 }
 
-StoreResult<StoredObject> Store::read_blob(MemoryObjectType type,
-                                           std::string_view object_id) const {
+StoreResult<StoredObject>
+Store::read_blob(MemoryObjectType type, std::string_view object_id) const {
   return read_blob_object(root_, type, object_id);
 }
 
-StoreResult<ContextTree> Store::read_tree(MemoryObjectType type,
-                                          std::string_view object_id) const {
+StoreResult<ContextTree>
+Store::read_tree(MemoryObjectType type, std::string_view object_id) const {
   return read_context_tree_object(root_, type, object_id);
 }
 

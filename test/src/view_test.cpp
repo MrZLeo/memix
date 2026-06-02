@@ -17,6 +17,12 @@
 
 namespace fs = memix::fs;
 
+static_assert(memix::to_string(memix::ViewTargetKind::FileTree) == "file_tree");
+static_assert(memix::parse_view_target_kind("context_pack")
+              == memix::ViewTargetKind::ContextPack);
+static_assert(memix::to_string(memix::ViewVersionKind::Generation)
+              == "generation");
+
 namespace {
 
 fs::path unique_test_path(std::string_view label) {
@@ -72,11 +78,10 @@ bool owner_can_write(const fs::path &path) {
   return (permissions & fs::perms::owner_write) != fs::perms::none;
 }
 
-memix::FileIngestResult ingest_context_file(const memix::Store &store,
-                                            memix::MemoryObjectType type,
-                                            const fs::path &source,
-                                            const fs::path &context_path,
-                                            std::string_view message) {
+memix::FileIngestResult
+ingest_context_file(const memix::Store &store, memix::MemoryObjectType type,
+                    const fs::path &source, const fs::path &context_path,
+                    std::string_view message) {
   const memix::StoreResult<memix::FileIngestResult> result = store.ingest_file({
       .type = type,
       .source_path = source,

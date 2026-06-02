@@ -3,6 +3,9 @@
 #include "memix/error.hpp"
 #include "memix/fs.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,15 +16,104 @@
 namespace memix {
 
 enum class MemoryObjectType : std::uint8_t { Agents, Chat, Documents };
-std::string_view to_string(MemoryObjectType type) noexcept;
-std::optional<MemoryObjectType>
-parse_memory_object_type(std::string_view value) noexcept;
-
 enum class ContextTreeEntryKind : std::uint8_t { Blob, Tree };
-std::vector<MemoryObjectType> memory_object_types();
-std::string_view to_string(ContextTreeEntryKind kind) noexcept;
-std::optional<ContextTreeEntryKind>
-parse_context_tree_entry_kind(std::string_view value) noexcept;
+
+namespace detail {
+
+template <typename EntryRange, typename Enum>
+[[nodiscard]] constexpr std::string_view
+token_for(const EntryRange &entries, Enum value) noexcept {
+  auto it = std::ranges::find(entries, value,
+                              [](const auto &entry) { return entry.value; });
+
+  if (it != std::ranges::end(entries))
+    return it->token;
+  return {};
+}
+
+template <typename Enum, typename EntryRange>
+[[nodiscard]] constexpr std::optional<Enum>
+value_for_token(const EntryRange &entries, std::string_view token) noexcept {
+  auto it = std::ranges::find(entries, token,
+                              [](const auto entry) { return entry.token; });
+
+  if (it != std::ranges::end(entries))
+    return it->value;
+  return std::nullopt;
+}
+
+struct MemoryObjectTypeToken {
+  MemoryObjectType value;
+  std::string_view token;
+};
+
+struct ContextTreeEntryKindToken {
+  ContextTreeEntryKind value;
+  std::string_view token;
+};
+
+inline constexpr std::array kMemoryObjectTypeTokens{
+    MemoryObjectTypeToken{
+        .value = MemoryObjectType::Agents,
+        .token = "agents",
+    },
+    MemoryObjectTypeToken{
+        .value = MemoryObjectType::Chat,
+        .token = "chat",
+    },
+    MemoryObjectTypeToken{
+        .value = MemoryObjectType::Documents,
+        .token = "documents",
+    },
+};
+
+inline constexpr std::array kContextTreeEntryKindTokens{
+    ContextTreeEntryKindToken{
+        .value = ContextTreeEntryKind::Blob,
+        .token = "blob",
+    },
+    ContextTreeEntryKindToken{
+        .value = ContextTreeEntryKind::Tree,
+        .token = "tree",
+    },
+};
+
+} // namespace detail
+
+[[nodiscard]] constexpr std::string_view
+to_string(MemoryObjectType type) noexcept {
+  return detail::token_for(detail::kMemoryObjectTypeTokens, type);
+}
+
+[[nodiscard]] constexpr std::optional<MemoryObjectType>
+parse_memory_object_type(std::string_view value) noexcept {
+  return detail::value_for_token<MemoryObjectType>(
+      detail::kMemoryObjectTypeTokens, value);
+}
+
+[[nodiscard]] constexpr auto memory_object_type_values() noexcept {
+  std::array<MemoryObjectType, detail::kMemoryObjectTypeTokens.size()> types{};
+  for (std::size_t index = 0; index < types.size(); ++index) {
+    types[index] = detail::kMemoryObjectTypeTokens[index].value;
+  }
+  return types;
+}
+
+[[nodiscard]] constexpr std::vector<MemoryObjectType> memory_object_types() {
+  const auto types = memory_object_type_values();
+  return {types.begin(), types.end()};
+}
+
+[[nodiscard]] constexpr std::string_view
+to_string(ContextTreeEntryKind kind) noexcept {
+  return detail::token_for(detail::kContextTreeEntryKindTokens, kind);
+}
+
+[[nodiscard]] constexpr std::optional<ContextTreeEntryKind>
+parse_context_tree_entry_kind(std::string_view value) noexcept {
+  return detail::value_for_token<ContextTreeEntryKind>(
+      detail::kContextTreeEntryKindTokens, value);
+}
 
 StoreResult<fs::path> default_store_root();
 

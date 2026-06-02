@@ -4,6 +4,7 @@
 #include "memix/fs.hpp"
 #include "memix/store.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,12 +15,59 @@
 namespace memix {
 
 enum class ViewTargetKind : std::uint8_t { FileTree, ContextPack };
-std::string_view to_string(ViewTargetKind target) noexcept;
-std::optional<ViewTargetKind>
-parse_view_target_kind(std::string_view value) noexcept;
-
 enum class ViewVersionKind : std::uint8_t { Ref, Generation };
-std::string_view to_string(ViewVersionKind kind) noexcept;
+
+namespace detail {
+
+struct ViewTargetKindToken {
+  ViewTargetKind value;
+  std::string_view token;
+};
+
+struct ViewVersionKindToken {
+  ViewVersionKind value;
+  std::string_view token;
+};
+
+inline constexpr std::array kViewTargetKindTokens{
+    ViewTargetKindToken{
+        .value = ViewTargetKind::FileTree,
+        .token = "file_tree",
+    },
+    ViewTargetKindToken{
+        .value = ViewTargetKind::ContextPack,
+        .token = "context_pack",
+    },
+};
+
+inline constexpr std::array kViewVersionKindTokens{
+    ViewVersionKindToken{
+        .value = ViewVersionKind::Ref,
+        .token = "ref",
+    },
+    ViewVersionKindToken{
+        .value = ViewVersionKind::Generation,
+        .token = "generation",
+    },
+};
+
+} // namespace detail
+
+[[nodiscard]] constexpr std::string_view
+to_string(ViewTargetKind target) noexcept {
+  return detail::token_for(detail::kViewTargetKindTokens, target);
+}
+
+[[nodiscard]] constexpr std::optional<ViewTargetKind>
+parse_view_target_kind(std::string_view value) noexcept {
+  return detail::value_for_token<ViewTargetKind>(detail::kViewTargetKindTokens,
+                                                 value);
+}
+
+[[nodiscard]] constexpr std::string_view
+to_string(ViewVersionKind kind) noexcept {
+  return detail::token_for(detail::kViewVersionKindTokens, kind);
+}
 
 struct AuthoredViewExpression {
   std::string schema = "memix.view.expr.v1";

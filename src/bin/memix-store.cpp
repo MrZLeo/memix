@@ -1,11 +1,9 @@
-#include "memix/store.hpp"
-
-#include "memix/error.hpp"
-#include "memix/fs.hpp"
-
 #include "cli_common.hpp"
 #include "detail/error.hpp"
 #include "detail/json.hpp"
+#include "memix/error.hpp"
+#include "memix/fs.hpp"
+#include "memix/store.hpp"
 
 #include <array>
 #include <cstddef>
@@ -663,8 +661,8 @@ dispatch(const StoreCliOptions &options,
   return memix::cli_detail::unexpected_error("unknown command");
 }
 
-int run_cli(int argc, char **argv,
-            const std::shared_ptr<spdlog::logger> &logger) {
+int
+run_cli(int argc, char **argv, const std::shared_ptr<spdlog::logger> &logger) {
   Argum::Parser parser;
   StoreCliOptions options;
 
