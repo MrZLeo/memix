@@ -52,14 +52,6 @@ TargetError translate_error(FsError error) {
   return translated;
 }
 
-template <typename Value, typename Error>
-void consume_cleanup_result(
-    [[maybe_unused]] std::expected<Value, Error> result) noexcept {}
-
-template <typename Error>
-void consume_cleanup_result(
-    [[maybe_unused]] std::expected<void, Error> result) noexcept {}
-
 inline std::unexpected<CommonError> common_error(std::string message) {
   return std::unexpected(CommonError{.message = std::move(message)});
 }

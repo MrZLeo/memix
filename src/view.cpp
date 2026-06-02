@@ -862,7 +862,7 @@ ViewResult<bool> write_text_file_if_absent(const fs::path &path,
                                   temp_path.string()));
   }
   const memix::scope_exit cleanup([temp_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
+    std::ignore = fs::remove_all(temp_path);
   });
 
   const fs::path temp_file = temp_path / "object";
@@ -1218,7 +1218,7 @@ write_derivation_directory(const memix::Store &store,
                                   temp_path.string()));
   }
   memix::scope_exit cleanup([temp_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
+    std::ignore = fs::remove_all(temp_path);
   });
   const memix::FsVoid written = fs::write_text_file(
       temp_path / std::string(kManifestFilename), manifest_json);

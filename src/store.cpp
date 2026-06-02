@@ -16,7 +16,6 @@
 #include <ctime>
 #include <expected>
 #include <format>
-#include <functional>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -824,12 +823,6 @@ StoreVoid ensure_store_directories(const fs::path &root,
   return {};
 }
 
-struct PublishRequest {
-  memix::MemoryObjectType type;
-  fs::path source_path;
-  fs::path type_dir;
-};
-
 StoreVoid acquire_directory_lock(const fs::path &lock_path,
                                  std::string_view lock_name) {
   const StoreVoid parent_created =
@@ -889,9 +882,8 @@ StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
         std::format("failed to create temporary object directory `{}`",
                     temp_path.string()));
   }
-  const memix::scope_exit temp_dir_cleanup([temp_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
-  });
+  const memix::scope_exit temp_dir_cleanup(
+      [temp_path] { std::ignore = fs::remove_all(temp_path); });
 
   const fs::path temp_file = temp_path / "object";
   const memix::FsVoid written = fs::write_text_file(temp_file, contents);
@@ -919,17 +911,24 @@ StoreVoid write_immutable_text_file_if_absent(const fs::path &path,
 }
 
 StoreResult<memix::IngestResult>
-publish_new_object(const PublishRequest &request) {
+publish_new_object(const fs::path &root, memix::MemoryObjectType type,
+                   const fs::path &source_path) {
+  const fs::path type_dir = blobs_dir_for(root, type);
+  const StoreVoid directories_created = ensure_store_directories(root, type_dir);
+  if (!directories_created) {
+    return std::unexpected(directories_created.error());
+  }
+
   const StoreVoid source_is_regular = require_regular_file(
-      request.source_path,
+      source_path,
       std::format("ingest source must be a regular file `{}`",
-                  request.source_path.string()));
+                  source_path.string()));
   if (!source_is_regular) {
     return std::unexpected(source_is_regular.error());
   }
 
   const StoreResult<fs::path> temp_dir = unique_temp_dir(
-      request.type_dir, request.source_path.filename().string());
+      type_dir, source_path.filename().string());
   if (!temp_dir) {
     return std::unexpected(temp_dir.error());
   }
@@ -945,30 +944,29 @@ publish_new_object(const PublishRequest &request) {
         std::format("failed to create temporary object directory `{}`",
                     temp_path.string()));
   }
-  memix::scope_exit temp_dir_cleanup([temp_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
-  });
+  memix::scope_exit temp_dir_cleanup(
+      [temp_path] { std::ignore = fs::remove_all(temp_path); });
 
   const fs::path temp_object = temp_path / kContentPath;
   const fs::path temp_metadata = temp_path / kMetadataFilename;
 
   const memix::FsResult<bool> copied =
-      fs::copy_file(request.source_path, temp_object, fs::copy_options::none);
+      fs::copy_file(source_path, temp_object, fs::copy_options::none);
   if (!copied) {
     return store_error(copied.error());
   }
   if (!*copied) {
     return store_error(std::format("failed to copy source into store `{}`",
-                                   request.source_path.string()));
+                                   source_path.string()));
   }
 
   StoreResult<SourceFileMetadata> source = regular_file_metadata(temp_object);
   if (!source) {
     return std::unexpected(source.error());
   }
-  const fs::path object_dir = request.type_dir / source->hash;
+  const fs::path object_dir = type_dir / source->hash;
   StoreResult<std::optional<memix::StoredObject>> existing =
-      read_existing_object_if_present(object_dir, request.type);
+      read_existing_object_if_present(object_dir, type);
   if (!existing) {
     return std::unexpected(existing.error());
   }
@@ -986,12 +984,12 @@ publish_new_object(const PublishRequest &request) {
   }
 
   memix::StoredObject object;
-  object.type = request.type;
+  object.type = type;
   object.id = source->hash;
   object.hash = std::move(source->hash);
   object.hash_algorithm = std::string(kHashAlgorithm);
   object.size_bytes = source->size_bytes;
-  object.filename = request.source_path.filename().string();
+  object.filename = source_path.filename().string();
   object.created_at = *created_at;
   object.content_path = fs::path(kContentPath);
   object.object_dir = object_dir;
@@ -1020,7 +1018,7 @@ publish_new_object(const PublishRequest &request) {
   const memix::FsVoid renamed = fs::rename(temp_path, object_dir);
   if (!renamed) {
     StoreResult<std::optional<memix::StoredObject>> raced_existing =
-        read_existing_object_if_present(object_dir, request.type);
+        read_existing_object_if_present(object_dir, type);
     if (!raced_existing) {
       return std::unexpected(raced_existing.error());
     }
@@ -1213,16 +1211,15 @@ StoreResult<memix::StoredObject> read_blob_object(const fs::path &root,
       });
 }
 
-  StoreResult<memix::ContextTreeEntry>
-  context_tree_entry_from_json(simdjson::dom::element entry_element) {
+StoreResult<memix::ContextTreeEntry>
+context_tree_entry_from_json(simdjson::dom::element entry_element) {
   memix::detail::CommonResult<simdjson::dom::object> entry_fields_result =
       memix::detail::json_object_from_element(entry_element);
   if (!entry_fields_result) {
     return store_error(memix::detail::with_error_context(
         std::move(entry_fields_result.error()), "context tree entry"));
   }
-  const JsonObjectReader entry_fields =
-      JsonObjectReader(*entry_fields_result);
+  const JsonObjectReader entry_fields = JsonObjectReader(*entry_fields_result);
 
   const StoreResult<std::string> name = require_string(entry_fields, "name");
   if (!name) {
@@ -1275,8 +1272,7 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
     return store_error(memix::detail::with_error_context(
         std::move(document.error()), json_context));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(document->root_object());
+  const JsonObjectReader fields = JsonObjectReader(document->root_object());
 
   memix::ContextTree tree;
   tree.type = type;
@@ -1399,8 +1395,7 @@ read_context_generation_object(const fs::path &root,
     return store_error(memix::detail::with_error_context(
         std::move(document.error()), json_context));
   }
-  const JsonObjectReader fields =
-      JsonObjectReader(document->root_object());
+  const JsonObjectReader fields = JsonObjectReader(document->root_object());
 
   memix::ContextGeneration generation;
   generation.type = type;
@@ -1784,9 +1779,8 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
   if (!lock) {
     return std::unexpected(lock.error());
   }
-  const memix::scope_exit lock_cleanup([lock_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(lock_path));
-  });
+  const memix::scope_exit lock_cleanup(
+      [lock_path] { std::ignore = fs::remove_all(lock_path); });
 
   StoreResult<std::optional<std::string>> current =
       read_ref_value(root, ref_name);
@@ -1819,9 +1813,8 @@ StoreVoid update_ref_unlocked(const fs::path &root, std::string_view ref_name,
     return store_error(std::format(
         "failed to create temporary ref directory `{}`", temp_path.string()));
   }
-  const memix::scope_exit temp_dir_cleanup([temp_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(temp_path));
-  });
+  const memix::scope_exit temp_dir_cleanup(
+      [temp_path] { std::ignore = fs::remove_all(temp_path); });
   const fs::path temp_ref = temp_path / "ref";
   const memix::FsVoid written =
       fs::write_text_file(temp_ref, std::format("{}\n", new_generation));
@@ -1963,25 +1956,20 @@ requested_root_tree_id(const fs::path &root, memix::MemoryObjectType type,
   return latest_root_tree_id(root, type);
 }
 
-struct ContextFileResolveRequest {
-  std::reference_wrapper<const fs::path> root;
-  memix::MemoryObjectType type;
-  std::reference_wrapper<const fs::path> context_path;
-  std::string_view root_tree_id;
-};
-
 StoreResult<memix::StoredObject>
-resolve_context_file(ContextFileResolveRequest request) {
+resolve_context_file(const fs::path &root, memix::MemoryObjectType type,
+                     const fs::path &context_path,
+                     std::string_view root_tree_id) {
   const StoreResult<LogicalPathComponents> components =
-      context_path_components(request.type, request.context_path.get());
+      context_path_components(type, context_path);
   if (!components) {
     return std::unexpected(components.error());
   }
-  std::string tree_id = std::string(request.root_tree_id);
+  std::string tree_id = std::string(root_tree_id);
   for (auto component = components->begin(); component != components->end();
        ++component) {
     StoreResult<memix::ContextTree> current_tree =
-        read_context_tree_object(request.root.get(), request.type, tree_id);
+        read_context_tree_object(root, type, tree_id);
     if (!current_tree) {
       return std::unexpected(current_tree.error());
     }
@@ -1992,8 +1980,7 @@ resolve_context_file(ContextFileResolveRequest request) {
       return store_error(
           memix::ErrorKind::ContextPathNotFound,
           std::format("{} path does not exist `{}`",
-                      context_label(request.type),
-                      request.context_path.get().generic_string()));
+                      context_label(type), context_path.generic_string()));
     }
     const bool is_last = std::next(component) == components->end();
     if (is_last) {
@@ -2001,21 +1988,20 @@ resolve_context_file(ContextFileResolveRequest request) {
         return store_error(
             memix::ErrorKind::InvalidArgument,
             std::format("{} path is not a file `{}`",
-                        context_label(request.type),
-                        request.context_path.get().generic_string()));
+                        context_label(type), context_path.generic_string()));
       }
-      return read_blob_object(request.root.get(), request.type, entry->id);
+      return read_blob_object(root, type, entry->id);
     }
     if (entry->kind != memix::ContextTreeEntryKind::Tree) {
       return store_error(memix::ErrorKind::InvalidArgument,
                          std::format("{} path component `{}` is not a tree",
-                                     context_label(request.type), name));
+                                     context_label(type), name));
     }
     tree_id = entry->id;
   }
   return store_error(
       memix::ErrorKind::ContextPathNotFound,
-      std::format("{} path resolution failed", context_label(request.type)));
+      std::format("{} path resolution failed", context_label(type)));
 }
 
 struct ContextFileVisit {
@@ -2149,19 +2135,7 @@ StoreResult<IngestResult> Store::ingest(MemoryObjectType type,
 
 StoreResult<IngestResult>
 Store::ingest_blob(MemoryObjectType type, const fs::path &source_path) const {
-  const fs::path type_dir = blobs_dir_for(root_, type);
-
-  const StoreVoid directories_created =
-      ensure_store_directories(root_, type_dir);
-  if (!directories_created) {
-    return std::unexpected(directories_created.error());
-  }
-
-  return publish_new_object(PublishRequest{
-      .type = type,
-      .source_path = source_path,
-      .type_dir = type_dir,
-  });
+  return publish_new_object(root_, type, source_path);
 }
 
 StoreResult<FileIngestResult>
@@ -2186,9 +2160,8 @@ Store::ingest_file(const FileIngestRequest &request) const {
   if (!update_lock) {
     return std::unexpected(update_lock.error());
   }
-  const memix::scope_exit update_lock_cleanup([update_lock_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(update_lock_path));
-  });
+  const memix::scope_exit update_lock_cleanup(
+      [update_lock_path] { std::ignore = fs::remove_all(update_lock_path); });
 
   const std::string latest_ref = latest_ref_name(request.type);
   StoreResult<std::optional<std::string>> previous_generation =
@@ -2290,12 +2263,7 @@ Store::read_file(MemoryObjectType type, const fs::path &context_path,
   if (!root_tree_id) {
     return std::unexpected(root_tree_id.error());
   }
-  return resolve_context_file({
-      .root = root_,
-      .type = type,
-      .context_path = context_path,
-      .root_tree_id = *root_tree_id,
-  });
+  return resolve_context_file(root_, type, context_path, *root_tree_id);
 }
 
 StoreResult<std::vector<StoreFile>>
@@ -2319,31 +2287,30 @@ StoreVoid Store::update_ref(std::string_view ref_name,
                             std::optional<std::string_view> expected_old,
                             std::string_view new_generation) const {
   const StoreResult<MemoryObjectType> type = type_for_ref_name(ref_name);
-  if (!type) {
+  if (!type)
     return std::unexpected(type.error());
-  }
+
   const fs::path update_lock_path =
       locks_dir_for(root_) / update_lock_name(*type);
   const StoreVoid update_lock = acquire_directory_lock(
       update_lock_path, std::format("{} update", memix::to_string(*type)));
-  if (!update_lock) {
+  if (!update_lock)
     return std::unexpected(update_lock.error());
-  }
-  const memix::scope_exit update_lock_cleanup([update_lock_path] {
-    memix::detail::consume_cleanup_result(fs::remove_all(update_lock_path));
-  });
+
+  const memix::scope_exit update_lock_cleanup(
+      [update_lock_path] { std::ignore = fs::remove_all(update_lock_path); });
   return update_ref_unlocked(root_, ref_name, expected_old, new_generation);
 }
 
 StoreResult<std::vector<StoredObject>>
 Store::list(std::optional<MemoryObjectType> type) const {
   const memix::FsResult<bool> root_exists = fs::exists(root_);
-  if (!root_exists) {
+  if (!root_exists)
     return store_error(root_exists.error());
-  }
-  if (!*root_exists) {
+
+  if (!*root_exists)
     return std::vector<StoredObject>{};
-  }
+
   return read_objects_for_existing_root(root_, type);
 }
 
