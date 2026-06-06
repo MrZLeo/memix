@@ -121,10 +121,9 @@ store_error(memix::detail::CommonError error) {
 template <typename Value>
 StoreResult<Value>
 store_json_result(memix::detail::CommonResult<Value> result) {
-  if (!result) {
-    return store_error(std::move(result.error()));
-  }
-  return StoreResult<Value>{std::in_place, std::move(*result)};
+  return std::move(result).or_else([](auto error) -> StoreResult<Value> {
+    return store_error(std::move(error));
+  });
 }
 
 StoreVoid
