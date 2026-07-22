@@ -5,6 +5,11 @@
 option(${PROJECT_NAME}_BUILD_EXECUTABLE "Build executable entrypoints from the `bin` directory." ON)
 option(${PROJECT_NAME}_BUILD_HEADERS_ONLY "Build the project as a header-only library." OFF)
 option(${PROJECT_NAME}_USE_ALT_NAMES "Use alternative names for the project, such as naming the include directory all lowercase." ON)
+option(
+  ${PROJECT_NAME}_STATIC_LINK
+  "Build self-contained executables (fully static on Linux, static CRT on Windows, and only system dylibs on macOS)."
+  ON
+)
 
 #
 # Compiler options

@@ -26,8 +26,26 @@ jobs:
         path: ${{ env.CPM_SOURCE_CACHE }}
         key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
 
+    - name: set up MSVC environment
+      shell: pwsh
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+        $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if (-not $installation) {
+          throw "Visual Studio with the x64 C++ toolchain was not found"
+        }
+
+        $devcmd = Join-Path $installation "Common7/Tools/VsDevCmd.bat"
+        $command = "`"$devcmd`" -no_logo -arch=x64 -host_arch=x64 && set"
+        $environment = & $env:COMSPEC /s /c $command
+        foreach ($line in $environment) {
+          if ($line -match '^([^=]+)=(.*)$') {
+            "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+        }
+
     - name: configure
-      run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/$env:INSTALL_LOCATION" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE"
+      run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" -DCMAKE_INSTALL_PREFIX="$HOME/$env:INSTALL_LOCATION" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE"
       
     - name: build
       run: cmake --build build --config "$env:BUILD_TYPE" -j4

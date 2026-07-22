@@ -5,14 +5,13 @@
 * `include/` and `src/` contain the `memix` library
 * `src/bin/*.cpp` are auto-discovered and built as executables
 
-The sample CLI uses [CLI11](https://github.com/CLIUtils/CLI11) for argument
-parsing.
+The CLIs use [argum](https://github.com/gershnik/argum) for argument parsing.
 
 ## Dependencies
 
 The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 
-* [CLI11 2.5.0](https://github.com/CLIUtils/CLI11/releases/tag/v2.5.0) for CLI parsing
+* [argum 2.8](https://github.com/gershnik/argum/releases/tag/v2.8) for CLI parsing
 * [simdjson 4.6.2](https://github.com/simdjson/simdjson/releases/tag/v4.6.2) for metadata JSON parsing and writing
 * [spdlog 1.17.0](https://github.com/gabime/spdlog/releases/tag/v1.17.0) for executable logging
 * [Catch2 3.11.0](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) for tests
@@ -21,6 +20,7 @@ The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 
 ```bash
 cmake -G Ninja -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
   -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
 
 cmake --build build
@@ -28,16 +28,44 @@ cmake --build build
 
 The default build always produces the `memix` library and also builds every `src/bin/*.cpp` entrypoint as an executable.
 
+## Self-contained binaries
+
+`memix_STATIC_LINK=ON` is the default. Each generated CLI is self-contained
+with respect to memix and its third-party dependencies:
+
+* Linux executables are fully static and have no ELF interpreter or shared
+  library dependency.
+* Windows executables use the static MSVC runtime (`/MT`).
+* macOS executables statically include memix and its third-party dependencies.
+  Apple does not support fully static user executables, so `libc++` and
+  `libSystem` remain system-provided dynamic libraries.
+
+To restore platform-default dynamic runtime linking, configure with
+`-Dmemix_STATIC_LINK=OFF`.
+
+Tag builds publish the standalone CLIs directly as GitHub release assets:
+
+* `memix-store-linux-x86_64` and `memix-view-linux-x86_64`
+* `memix-store-macos-arm64` and `memix-view-macos-arm64`
+* `memix-store-windows-x86_64.exe` and `memix-view-windows-x86_64.exe`
+
+On Linux or macOS, mark a downloaded asset executable before first use:
+
+```bash
+chmod +x memix-store-linux-x86_64
+./memix-store-linux-x86_64 --version
+```
+
 ## Run
 
 ```bash
-./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type agents --dest README.md README.md
-./build/bin/Debug/memix-store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
-./build/bin/Debug/memix-store --store-root /tmp/memix-store agents tree
-./build/bin/Debug/memix-store --store-root /tmp/memix-store list
-./build/bin/Debug/memix-store --store-root /tmp/memix-store list --json
-./build/bin/Debug/memix-store --version
-./build/bin/Debug/memix-store --help
+./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type agents --dest README.md README.md
+./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
+./build/bin/Release/memix-store --store-root /tmp/memix-store agents tree
+./build/bin/Release/memix-store --store-root /tmp/memix-store list
+./build/bin/Release/memix-store --store-root /tmp/memix-store list --json
+./build/bin/Release/memix-store --version
+./build/bin/Release/memix-store --help
 ```
 
 `memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
@@ -50,9 +78,9 @@ generation ref.
 For a manual smoke check against the real default store root, run:
 
 ```bash
-./build/bin/Debug/memix-store ingest --type agents --dest README.md README.md
-./build/bin/Debug/memix-store agents tree
-./build/bin/Debug/memix-store list --type agents
+./build/bin/Release/memix-store ingest --type agents --dest README.md README.md
+./build/bin/Release/memix-store agents tree
+./build/bin/Release/memix-store list --type agents
 ```
 
 All object types can ingest plain blobs. Passing `--dest` stores the blob at a
@@ -68,9 +96,9 @@ isolated test store.
 ## Tests
 
 ```bash
-cmake -G Ninja -S . -B build -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
+cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
 cmake --build build
-ctest --test-dir build -C Debug -VV
+ctest --test-dir build -C Release -VV
 ```
 
 ## Homebrew
@@ -83,6 +111,7 @@ needed to build and run the CLI. See `Formula/README.md` for publishing steps.
 
 * `memix_BUILD_EXECUTABLE=ON`
 * `memix_BUILD_HEADERS_ONLY=OFF`
+* `memix_STATIC_LINK=ON`
 * `memix_ENABLE_UNIT_TESTING=ON`
 * `memix_ENABLE_CLANG_TIDY=ON`
 * `memix_ENABLE_CPPCHECK=ON`

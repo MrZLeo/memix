@@ -6,7 +6,6 @@ on:
       - 'v*'
 
 env:
-  PROJECT_NAME: "memix"
   BUILD_TYPE: Release
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
 
@@ -14,187 +13,164 @@ jobs:
   build:
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         config:
-        - {
-            name: "Windows 2025 VS 2026 MSVC",
-            artifact_ext: '.zip',
-            os: windows-2025-vs2026,
-            cc: "cl",
-            cxx: "cl",
-            environment_script: "C:/Program Files (x86)/Microsoft Visual Studio/2019/Enterprise/VC/Auxiliary/Build/vcvars64.bat",
-          }
-        - {
-            name: "Ubuntu Latest GCC",
-            artifact_ext: '.tar.gz',
-            os: ubuntu-latest,
-            cc: "gcc",
-            cxx: "g++",
-          }
-        - {
-            name: "macOS 26 Clang",
-            artifact_ext: '.tar.gz',
-            os: macos-26,
-            cc: "/Library/Developer/CommandLineTools/usr/bin/clang",
-            cxx: "/Library/Developer/CommandLineTools/usr/bin/clang++",
-          }
+          - name: Linux x86_64 GCC
+            os: ubuntu-24.04
+            asset: linux-x86_64
+            cc: gcc-14
+            cxx: g++-14
+          - name: Windows x86_64 MSVC
+            os: windows-2025-vs2026
+            asset: windows-x86_64
+            cc: cl
+            cxx: cl
+          - name: macOS arm64 Clang
+            os: macos-26
+            asset: macos-arm64
+            cc: /Library/Developer/CommandLineTools/usr/bin/clang
+            cxx: /Library/Developer/CommandLineTools/usr/bin/clang++
 
     steps:
-    - name: set version name (Windows)
-      id: version_win
-      if: ${{ runner.os == 'Windows' }}
-      shell: pwsh
-      run: |
-        $TAG = (${env:GITHUB_REF} -replace 'refs/tags/', '')
-        echo "name=$TAG" >> ${env:GITHUB_OUTPUT}
-    
-    - name: set version name
-      id: version
-      if: ${{ runner.os != 'Windows' }}
-      run: |
-        TAG=${GITHUB_REF#refs/tags/}
-        echo "name=$TAG" >> "$GITHUB_OUTPUT"
+      - name: checkout
+        uses: actions/checkout@v6
 
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        submodules: recursive
+      - name: cache CPM downloads
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
 
-    - name: cache CPM downloads
-      uses: actions/cache@v5
-      with:
-        path: ${{ env.CPM_SOURCE_CACHE }}
-        key: ${{ runner.os }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
+      - name: select Xcode Command Line Tools
+        if: runner.os == 'macOS'
+        run: sudo xcode-select --switch /Library/Developer/CommandLineTools
 
-    - name: select Xcode Command Line Tools
-      if: ${{ runner.os == 'macOS' }}
-      run: sudo xcode-select --switch /Library/Developer/CommandLineTools
+      - name: set up MSVC environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) {
+            throw "Visual Studio with the x64 C++ toolchain was not found"
+          }
 
-    - name: show compiler
-      if: ${{ runner.os == 'macOS' }}
-      env:
-        CXX: ${{ matrix.config.cxx }}
-      run: |
-        xcode-select --print-path
-        "$CXX" --version
+          $devcmd = Join-Path $installation "Common7/Tools/VsDevCmd.bat"
+          $command = "`"$devcmd`" -no_logo -arch=x64 -host_arch=x64 && set"
+          $environment = & $env:COMSPEC /s /c $command
+          foreach ($line in $environment) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            }
+          }
 
-    - name: configure (Windows)
-      if: ${{ runner.os == 'Windows' }}
-      run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE"
+      - name: configure
+        env:
+          CC: ${{ matrix.config.cc }}
+          CXX: ${{ matrix.config.cxx }}
+        run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON
 
-    - name: configure (Linux)
-      if: ${{ runner.os == 'Linux' }}
-      env:
-        CC: gcc-14
-        CXX: g++-14
-      run: cmake -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE"
+      - name: build
+        run: cmake --build build --parallel 4
 
-    - name: configure
-      if: ${{ runner.os != 'Windows' && runner.os != 'Linux' }}
-      env:
-        CC: ${{ matrix.config.cc }}
-        CXX: ${{ matrix.config.cxx }}
-      run: cmake -G Ninja -Bbuild -DCMAKE_INSTALL_PREFIX="$HOME/.local" -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE"
-      
-    - name: build (Windows)
-      if: ${{ runner.os == 'Windows' }}
-      run: cmake --build build --config "$env:BUILD_TYPE" -j4
+      - name: run tests
+        run: ctest --test-dir build --output-on-failure
 
-    - name: build
-      if: ${{ runner.os != 'Windows' }}
-      run: cmake --build build --config "$BUILD_TYPE" -j4
+      - name: verify static Linux executables
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for binary in build/bin/Release/memix-store build/bin/Release/memix-view; do
+            file "$binary"
+            "$binary" --version
+            if readelf -l "$binary" | grep -q 'INTERP'; then
+              echo "error: $binary contains a dynamic ELF interpreter" >&2
+              exit 1
+            fi
+          done
 
-    - name: run tests (Windows)
-      if: ${{ runner.os == 'Windows' }}
-      run: |
-        cd build
-        ctest -C "$env:BUILD_TYPE" -VV
+      - name: verify self-contained macOS executables
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for binary in build/bin/Release/memix-store build/bin/Release/memix-view; do
+            file "$binary"
+            "$binary" --version
+            unexpected=$(otool -L "$binary" | tail -n +2 | awk '{print $1}' | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
+            if [[ -n "$unexpected" ]]; then
+              echo "error: $binary has non-system dynamic dependencies:" >&2
+              echo "$unexpected" >&2
+              exit 1
+            fi
+          done
 
-    - name: run tests
-      if: ${{ runner.os != 'Windows' }}
-      run: |
-        cd build
-        ctest -C "$BUILD_TYPE" -VV
+      - name: verify static Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binaries = @(
+            "build/bin/Release/memix-store.exe",
+            "build/bin/Release/memix-view.exe"
+          )
+          foreach ($binary in $binaries) {
+            & $binary --version
+            $dependencies = & dumpbin /dependents $binary
+            if ($LASTEXITCODE -ne 0) {
+              throw "dumpbin failed for $binary"
+            }
+            if ($dependencies -match '(?i)(vcruntime|msvcp|ucrtbase).*\.dll') {
+              throw "$binary depends on a dynamic MSVC runtime"
+            }
+          }
 
-    # for a release not containing directly the source code, replace the files archived
-    # with the actual files needed (i.e. *.lib/*.a and *.h(pp))
+      - name: stage Unix executables
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir dist
+          cp build/bin/Release/memix-store "dist/memix-store-${{ matrix.config.asset }}"
+          cp build/bin/Release/memix-view "dist/memix-view-${{ matrix.config.asset }}"
 
-    - name: generate archive (Windows)
-      if: ${{ runner.os == 'Windows' }}
-      run: |
-        rmdir -r -fo build
-        7z a -tzip $HOME/artifact.zip *
+      - name: stage Windows executables
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist
+          Copy-Item build/bin/Release/memix-store.exe "dist/memix-store-${{ matrix.config.asset }}.exe"
+          Copy-Item build/bin/Release/memix-view.exe "dist/memix-view-${{ matrix.config.asset }}.exe"
 
-
-    - name: generate archive
-      if: ${{ runner.os != 'Windows' }}
-      run: |
-        rm -rf build
-        tar -cvzf $HOME/artifact.tar.gz .
-
-    - name: upload artifacts
-      uses: actions/upload-artifact@v7
-      if: ${{ runner.os == 'Windows' }}
-      with:
-        name: ${{ runner.os }}-${{ steps.version_win.outputs.name }}
-        path: '~/artifact.*'
-
-    - name: upload artifacts
-      uses: actions/upload-artifact@v7
-      if: ${{ runner.os != 'Windows' }}
-      with:
-        name: ${{ runner.os }}-${{ steps.version.outputs.name }}
-        path: '~/artifact.*'
+      - name: upload executables
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.config.asset }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
 
   release:
-    if: contains(github.ref, 'tags/v')
-    runs-on: ubuntu-latest
+    name: Publish GitHub release
+    runs-on: ubuntu-24.04
     needs: build
     permissions:
       actions: read
       contents: write
 
     steps:
-    - name: set version name
-      id: version
-      run: echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "Release $GITHUB_REF_NAME" --verify-tag
 
-    - name: create release
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: gh release create "${{ steps.version.outputs.name }}" --title "Release ${{ steps.version.outputs.name }}" --verify-tag
+      - name: download executables
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
 
-    - name: download linux artifact
-      uses: actions/download-artifact@v7
-      with:
-        name: "Linux-${{ steps.version.outputs.name }}"
-        path: ./
-
-    - name: upload ubuntu release asset
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: gh release upload "${{ steps.version.outputs.name }}" "artifact.tar.gz#${{ env.PROJECT_NAME }}-Linux-${{ steps.version.outputs.name }}.tar.gz"
-
-    - name: download windows artifact
-      uses: actions/download-artifact@v7
-      with:
-        name: "Windows-${{ steps.version.outputs.name }}"
-        path: ./
-
-    - name: upload windows release asset
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: gh release upload "${{ steps.version.outputs.name }}" "artifact.zip#${{ env.PROJECT_NAME }}-Windows-${{ steps.version.outputs.name }}.zip"
-
-    - name: download macos artifact
-      uses: actions/download-artifact@v7
-      with:
-        name: "macOS-${{ steps.version.outputs.name }}"
-        path: ./
-
-    - name: upload macos release asset
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: gh release upload "${{ steps.version.outputs.name }}" "artifact.tar.gz#${{ env.PROJECT_NAME }}-macOS-${{ steps.version.outputs.name }}.tar.gz"
+      - name: upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/*

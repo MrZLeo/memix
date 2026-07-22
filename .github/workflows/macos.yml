@@ -37,7 +37,7 @@ jobs:
         "$CXX" --version
 
     - name: configure
-      run: cmake -G Ninja -Bbuild -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/$INSTALL_LOCATION -DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE
+      run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/$INSTALL_LOCATION -DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE
       
     - name: build
       run: cmake --build build --config $BUILD_TYPE -j4

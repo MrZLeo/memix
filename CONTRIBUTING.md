@@ -13,7 +13,7 @@ Thanks for helping improve `memix`.
 Build the project from the repository root:
 
 ```bash
-cmake -S . -B build -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
+cmake -G Ninja -S . -B build -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
 cmake --build build
 ```
 

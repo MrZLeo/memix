@@ -36,6 +36,30 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 message(STATUS "Started CMake for ${PROJECT_NAME} v${PROJECT_VERSION}...\n")
 
+# CMake uses this variable to initialize every target as it is created, so it
+# must be set before memix and its dependencies define their targets.
+if(MSVC)
+  if(${PROJECT_NAME}_STATIC_LINK)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+  endif()
+endif()
+
+if(${PROJECT_NAME}_STATIC_LINK)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(STATUS "Static linking enabled: Linux executables will have no dynamic runtime dependencies.")
+  elseif(MSVC)
+    message(STATUS "Static linking enabled: Windows executables will use the static MSVC runtime.")
+  elseif(MINGW)
+    message(STATUS "Static linking enabled: MinGW executables will have no dynamic runtime dependencies.")
+  elseif(APPLE)
+    message(STATUS "Static linking enabled for bundled code; macOS system libraries remain dynamic.")
+  else()
+    message(WARNING "${PROJECT_NAME}_STATIC_LINK is not implemented for ${CMAKE_SYSTEM_NAME}; using the platform default runtime linkage.")
+  endif()
+endif()
+
 if (UNIX)
     add_compile_options("$<$<CONFIG:DEBUG>:-D_DEBUG>")    #this will allow to use same _DEBUG macro available in both Linux as well as Windows - MSCV environment. Easy to put Debug specific code.
 endif (UNIX)
@@ -78,8 +102,13 @@ if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
     endforeach()
   endif()
 else()
+  set(memix_library_type)
+  if(${PROJECT_NAME}_STATIC_LINK)
+    set(memix_library_type STATIC)
+  endif()
   add_library(
     ${PROJECT_NAME}
+    ${memix_library_type}
     ${headers}
     ${private_headers}
     ${sources}
@@ -121,6 +150,18 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
       OUTPUT_NAME ${bin_name}
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
     )
+
+    if(${PROJECT_NAME}_STATIC_LINK)
+      if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR MINGW)
+        target_link_options(${bin_target} PRIVATE -static)
+        set_target_properties(
+          ${bin_target}
+          PROPERTIES
+          LINK_SEARCH_START_STATIC TRUE
+          LINK_SEARCH_END_STATIC TRUE
+        )
+      endif()
+    endif()
 
     list(APPEND bin_targets ${bin_target})
   endforeach()
@@ -234,6 +275,7 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
     GIT_TAG v1.17.0
     OPTIONS
       "SPDLOG_NO_EXCEPTIONS ON"
+      "SPDLOG_BUILD_SHARED OFF"
       "SPDLOG_BUILD_EXAMPLE OFF"
       "SPDLOG_BUILD_TESTS OFF"
       "SPDLOG_INSTALL OFF"
@@ -281,18 +323,6 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
     endif()
   endforeach()
 endif()
-
-# For Windows, it is necessary to link with the MultiThreaded library.
-# Depending on how the rest of the project's dependencies are linked, it might be necessary
-# to change the line to statically link with the library.
-#
-# This is done as follows:
-#
-# set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-#
-# On Linux and Mac this variable is ignored. If any issues rise from it, try commenting it out
-# and letting CMake decide how to link with it.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 verbose_message("Successfully added all dependencies and linked against them.")
 
