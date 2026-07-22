@@ -273,9 +273,12 @@ memix::cli_detail::VoidResult run_rollback(const ViewCliOptions &options) {
       return memix::cli_detail::unexpected_error(std::format(
           "rollback --to expects a generation number, got `{}`", value));
     }
-    const auto [end, error] =
-        std::from_chars(value.begin(), value.end(), number);
-    if (error != std::errc{} || end != value.end()) {
+    const char *const begin = value.data();
+    // std::from_chars requires a raw pointer range into this contiguous view.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    const char *const end = begin + value.size();
+    const auto [parsed_end, error] = std::from_chars(begin, end, number);
+    if (error != std::errc{} || parsed_end != end) {
       return memix::cli_detail::unexpected_error(std::format(
           "rollback --to expects a generation number, got `{}`", value));
     }
