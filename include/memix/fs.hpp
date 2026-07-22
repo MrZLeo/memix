@@ -100,10 +100,16 @@ FsResult<bool> create_directory(const path &path);
 FsResult<bool> copy_file(const path &source, const path &destination,
                          copy_options options = copy_options::none);
 FsVoid create_symlink(const path &target, const path &link);
+FsVoid create_directory_symlink(const path &target, const path &link);
 FsVoid create_hard_link(const path &target, const path &link);
 FsResult<path> read_symlink(const path &path);
 FsResult<path> relative(const path &target, const path &base);
+FsResult<path> weakly_canonical(const path &path);
 FsVoid rename(const path &source, const path &destination);
+// Installs a prepared directory symlink at `destination`. POSIX uses one
+// atomic rename; Windows uses a recoverable handoff because it cannot replace
+// an existing directory symlink with rename.
+FsVoid replace_directory_symlink(const path &source, const path &destination);
 FsResult<bool> remove(const path &path);
 FsResult<std::uintmax_t> remove_all(const path &path);
 FsVoid permissions(const path &path, perms permissions,

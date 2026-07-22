@@ -1,21 +1,47 @@
-# memix
+<div align="center">
 
-`memix` is a Nix-inspired, provenance-aware build system for agent context.
+# 🧠 memix
 
-## Mental model
+**A Nix-inspired, provenance-aware build system for agent context**
+
+Treat memory as immutable evidence plus reproducible views — not a mutable notes directory.
+
+[![Ubuntu](https://github.com/MrZLeo/memix/actions/workflows/ubuntu.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/ubuntu.yml)
+[![MacOS](https://github.com/MrZLeo/memix/actions/workflows/macos.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/macos.yml)
+[![Windows](https://github.com/MrZLeo/memix/actions/workflows/windows.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/windows.yml)
+[![Release](https://img.shields.io/github/v/release/MrZLeo/memix?include_prereleases&color=blue)](https://github.com/MrZLeo/memix/releases)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
+[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/w/cpp/23)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#-self-contained-binaries)
+
+[🚀 Build](#-build) •
+[🤖 Agent Install](#-install-with-an-agent) •
+[▶️ Usage](#️-run) •
+[📦 Releases](https://github.com/MrZLeo/memix/releases) •
+[🤝 Contributing](CONTRIBUTING.md)
+
+[![Stars](https://img.shields.io/github/stars/MrZLeo/memix?style=social)](https://github.com/MrZLeo/memix/stargazers)
+
+</div>
+
+---
+
+## 💡 Mental model
 
 Treat memory as immutable evidence plus reproducible views, not as a mutable notes directory. Agents should consume an explicitly selected, versioned, provenance-carrying view rather than an untracked collection of files.
 
-* Stored blobs are immutable and content-addressed. Changed content becomes a new object instead of overwriting history.
-* Logical trees, generations, and refs describe how memory evolves while allowing old states to coexist and remain replayable.
-* Views are derived artifacts, not new sources of truth. Identical inputs and operator versions reuse the same derivation.
-* Provenance is part of the result: a view retains its source generations, blob identities, derivation, artifacts, and environment closure.
-* Selection stays explicit. Memix does not invent hidden dependencies or silently activate additional memory.
-* A `file_tree` view packages selected files at stable paths; it does not merge Markdown, resolve directive precedence, summarize content, or settle semantic conflicts.
+* 📌 **Immutable blobs** — Stored blobs are immutable and content-addressed. Changed content becomes a new object instead of overwriting history.
+* 🌳 **Versioned trees** — Logical trees, generations, and refs describe how memory evolves while allowing old states to coexist and remain replayable.
+* 🔁 **Reproducible views** — Views are derived artifacts, not new sources of truth. Identical inputs and operator versions reuse the same derivation.
+* 🧾 **Provenance built-in** — A view retains its source generations, blob identities, derivation, artifacts, and environment closure.
+* 🎯 **Explicit selection** — Memix does not invent hidden dependencies or silently activate additional memory.
+* 🔗 **Profile-style activation** — Built views attach to a workspace through numbered profile generations and one switchable `current` pointer, the only mutable layer in the system.
+* 📂 **Honest packaging** — A `file_tree` view packages selected files at stable paths; it does not merge Markdown, resolve directive precedence, summarize content, or settle semantic conflicts.
 
-The current CLI implements immutable storage, versioned logical trees, and reproducible `file_tree` views. Directive resolution and context-pack generation are separate future layers.
+> [!NOTE]
+> The current CLI implements immutable storage, versioned logical trees, reproducible `file_tree` views, and profile-style activation with generations and rollback. Directive resolution and context-pack generation are separate future layers.
 
-## Project layout
+## 🗂️ Project layout
 
 `memix` is implemented as a CMake-based C++ project with a Rust-style split between library code and executable entrypoints:
 
@@ -24,16 +50,18 @@ The current CLI implements immutable storage, versioned logical trees, and repro
 
 The CLIs use [argum](https://github.com/gershnik/argum) for argument parsing.
 
-## Dependencies
+## 📦 Dependencies
 
 The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 
-* [argum 2.8](https://github.com/gershnik/argum/releases/tag/v2.8) for CLI parsing
-* [simdjson 4.6.2](https://github.com/simdjson/simdjson/releases/tag/v4.6.2) for metadata JSON parsing and writing
-* [spdlog 1.17.0](https://github.com/gabime/spdlog/releases/tag/v1.17.0) for executable logging
-* [Catch2 3.11.0](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) for tests
+| Dependency | Version | Purpose |
+| ---------- | ------- | ------- |
+| [argum](https://github.com/gershnik/argum/releases/tag/v2.8) | 2.8 | CLI parsing |
+| [simdjson](https://github.com/simdjson/simdjson/releases/tag/v4.6.2) | 4.6.2 | Metadata JSON parsing and writing |
+| [spdlog](https://github.com/gabime/spdlog/releases/tag/v1.17.0) | 1.17.0 | Executable logging |
+| [Catch2](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) | 3.11.0 | Tests |
 
-## Build
+## 🚀 Build
 
 ```bash
 cmake -G Ninja -S . -B build \
@@ -45,17 +73,14 @@ cmake --build build
 
 The default build always produces the `memix` library and also builds every `src/bin/*.cpp` entrypoint as an executable.
 
-## Self-contained binaries
+## 💿 Self-contained binaries
 
 `memix_STATIC_LINK=ON` is the default. Each generated CLI is self-contained
 with respect to memix and its third-party dependencies:
 
-* Linux executables are fully static and have no ELF interpreter or shared
-  library dependency.
-* Windows executables use the static MSVC runtime (`/MT`).
-* macOS executables statically include memix and its third-party dependencies.
-  Apple does not support fully static user executables, so `libc++` and
-  `libSystem` remain system-provided dynamic libraries.
+* 🐧 **Linux** — executables are fully static and have no ELF interpreter or shared library dependency.
+* 🪟 **Windows** — executables use the static MSVC runtime (`/MT`).
+* 🍎 **macOS** — executables statically include memix and its third-party dependencies. Apple does not support fully static user executables, so `libc++` and `libSystem` remain system-provided dynamic libraries.
 
 To restore platform-default dynamic runtime linking, configure with
 `-Dmemix_STATIC_LINK=OFF`.
@@ -63,10 +88,12 @@ To restore platform-default dynamic runtime linking, configure with
 Tag builds publish the standalone CLIs and Codex skill as GitHub release
 assets:
 
-* `memix-store-linux-x86_64` and `memix-view-linux-x86_64`
-* `memix-store-macos-arm64` and `memix-view-macos-arm64`
-* `memix-store-windows-x86_64.exe` and `memix-view-windows-x86_64.exe`
-* `memix-cli-skill.tar.gz` (platform-independent)
+| Platform | Assets |
+| -------- | ------ |
+| Linux x86_64 | `memix-store-linux-x86_64`, `memix-view-linux-x86_64` |
+| macOS arm64 | `memix-store-macos-arm64`, `memix-view-macos-arm64` |
+| Windows x86_64 | `memix-store-windows-x86_64.exe`, `memix-view-windows-x86_64.exe` |
+| Any | `memix-cli-skill.tar.gz` (platform-independent) |
 
 On Linux or macOS, mark a downloaded asset executable before first use:
 
@@ -75,7 +102,7 @@ chmod +x memix-store-linux-x86_64
 ./memix-store-linux-x86_64 --version
 ```
 
-## Install with an agent
+## 🤖 Install with an agent
 
 Copy this request into an agent:
 
@@ -86,7 +113,7 @@ Install memix by reading and following https://raw.githubusercontent.com/MrZLeo/
 The full bootstrap procedure is also available in
 [AGENT_INSTALL.md](AGENT_INSTALL.md).
 
-## Run
+## ▶️ Run
 
 ```bash
 ./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
@@ -98,6 +125,21 @@ The full bootstrap procedure is also available in
 ./build/bin/Release/memix-store --help
 ```
 
+Build a reproducible `file_tree` view and attach it to the current directory
+as `./.memory`, Nix-profile style. Activation records a numbered generation
+in a per-workspace store profile and switches its `current` pointer;
+read memory with ordinary file tools, roll back with `rollback`, and inspect
+the attachment with `status`:
+
+```bash
+ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store build --source rules/README.md | head -n1 | awk '{print $2}')
+./build/bin/Release/memix-view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
+cat ./.memory/rules/README.md
+./build/bin/Release/memix-view --store-root /tmp/memix-store generations --into ./.memory
+./build/bin/Release/memix-view --store-root /tmp/memix-store status --into ./.memory
+./build/bin/Release/memix-view --store-root /tmp/memix-store deactivate --into ./.memory
+```
+
 `memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
 then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,
 and `documents`. Stored bytes live as immutable SHA-256 blobs under each
@@ -105,7 +147,8 @@ type's `blobs/` directory; when ingest uses `--dest`, memix also records the
 blob in that type's canonical context tree and advances the type's latest
 generation ref.
 
-For a manual smoke check against the real default store root, run:
+<details>
+<summary><b>🔍 Manual smoke check</b> (against the real default store root)</summary>
 
 ```bash
 ./build/bin/Release/memix-store ingest --type rules --dest README.md README.md
@@ -123,7 +166,9 @@ generation ids; each generation then points at its immutable root tree.
 That writes outside the repository, so use `--store-root` when you want an
 isolated test store.
 
-## Tests
+</details>
+
+## ✅ Tests
 
 ```bash
 cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
@@ -131,21 +176,37 @@ cmake --build build
 ctest --test-dir build -C Release -VV
 ```
 
-## Homebrew
+## 🍺 Homebrew
 
 The repository includes a Homebrew formula under `Formula/memix.rb`. It is
 intended for a `MrZLeo/homebrew-memix` tap and declares the Homebrew dependencies
 needed to build and run the CLI. See `Formula/README.md` for publishing steps.
 
-## Common Options
+## ⚙️ Common Options
 
-* `memix_BUILD_EXECUTABLE=ON`
-* `memix_BUILD_HEADERS_ONLY=OFF`
-* `memix_STATIC_LINK=ON`
-* `memix_ENABLE_UNIT_TESTING=ON`
-* `memix_ENABLE_CLANG_TIDY=ON`
-* `memix_ENABLE_CPPCHECK=ON`
-* `memix_ENABLE_CODE_COVERAGE=ON`
-* `memix_ENABLE_DOXYGEN=ON`
-* `memix_ENABLE_LTO=ON`
-* `memix_ENABLE_ASAN=ON`
+| Option | Default | Description |
+| ------ | ------- | ----------- |
+| `memix_BUILD_EXECUTABLE` | `ON` | Build CLI executables |
+| `memix_BUILD_HEADERS_ONLY` | `OFF` | Use as header-only library |
+| `memix_STATIC_LINK` | `ON` | Self-contained static binaries |
+| `memix_ENABLE_UNIT_TESTING` | `ON` | Build unit tests |
+| `memix_ENABLE_CLANG_TIDY` | `OFF` | Run clang-tidy checks |
+| `memix_ENABLE_CPPCHECK` | `OFF` | Run cppcheck analysis |
+| `memix_ENABLE_CODE_COVERAGE` | `OFF` | Enable code coverage |
+| `memix_ENABLE_DOXYGEN` | `OFF` | Generate Doxygen docs |
+| `memix_ENABLE_LTO` | `OFF` | Enable link-time optimization |
+| `memix_ENABLE_ASAN` | `OFF` | Enable AddressSanitizer |
+
+## 📈 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=MrZLeo/memix&type=Date)](https://star-history.com/#MrZLeo/memix&Date)
+
+---
+
+<div align="center">
+
+**[📄 License](LICENSE)** · BSD 3-Clause © 2026 Jing Zhang &nbsp;|&nbsp; **[🤝 Contributing](CONTRIBUTING.md)** · **[🐛 Report a Bug](https://github.com/MrZLeo/memix/issues)**
+
+If memix helps your agents remember, consider giving it a ⭐!
+
+</div>

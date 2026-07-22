@@ -10,11 +10,17 @@
 #include "detail/scope_exit.hpp"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <ctime>
 #include <expected>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -42,6 +48,18 @@ constexpr std::string_view kTreeDir = "tree";
 constexpr std::string_view kJsonSuffix = ".json";
 constexpr std::string_view kLatestVersion = "latest";
 constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
+constexpr std::string_view kProfilesDir = "profiles";
+constexpr std::string_view kGenerationsDir = "generations";
+constexpr std::string_view kCurrentLinkName = "current";
+constexpr std::string_view kProfileLockName = "lock";
+constexpr std::string_view kGenerationSchema = "memix.view.activation.v1";
+constexpr std::string_view kMarkerSchema = "memix.view.activation.marker.v1";
+constexpr std::string_view kActivationMarkerFilename = ".memix-activation.json";
+constexpr std::string_view kWorkspaceLockPrefix = ".memix-activation-lock-";
+constexpr std::string_view kWorkspaceProfilePrefix = "ws-";
+constexpr std::size_t kWorkspaceProfileHashLength = 16;
+constexpr std::size_t kMaxProfileNameLength = 64;
+constexpr std::size_t kTimestampBufferBytes = 32;
 
 template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
@@ -693,7 +711,8 @@ ViewResult<std::vector<fs::path>> collect_directories(const fs::path &root) {
   std::vector<fs::path> directories{root};
   std::error_code iterator_error;
   const fs::recursive_directory_iterator end;
-  for (fs::recursive_directory_iterator iterator{root, iterator_error};
+  for (fs::recursive_directory_iterator iterator{
+           root, std::filesystem::directory_options::none, iterator_error};
        !iterator_error && iterator != end; iterator.increment(iterator_error)) {
     const fs::directory_entry &entry = *iterator;
     std::error_code entry_error;
@@ -729,6 +748,164 @@ ViewVoid apply_directory_tree_permissions(const fs::path &root, bool writable) {
       return view_error(applied.error());
     }
   }
+  return {};
+}
+
+ViewVoid apply_writable_permissions(const fs::path &path,
+                                    const fs::file_status &status) {
+  fs::perms permissions = fs::perms::owner_read | fs::perms::owner_write;
+  if (std::filesystem::is_directory(status)) {
+    permissions |= fs::perms::owner_exec;
+  }
+  const memix::FsVoid applied =
+      fs::permissions(path, permissions, fs::perm_options::add);
+  if (!applied) {
+    return view_error(applied.error());
+  }
+  return {};
+}
+
+template <typename Visitor>
+ViewVoid visit_tree_without_following_symlinks(const fs::path &root,
+                                               const Visitor &visitor) {
+  memix::FsResult<fs::file_status> root_status = fs::symlink_status(root);
+  if (!root_status) {
+    if (root_status.error().code == std::errc::no_such_file_or_directory) {
+      return {};
+    }
+    return view_error(root_status.error());
+  }
+  if (!std::filesystem::exists(*root_status)
+      || std::filesystem::is_symlink(*root_status)) {
+    return {};
+  }
+  const ViewVoid root_visited = visitor(root, *root_status);
+  if (!root_visited) {
+    return std::unexpected(root_visited.error());
+  }
+  if (!std::filesystem::is_directory(*root_status)) {
+    return {};
+  }
+
+  std::error_code iterator_error;
+  const fs::recursive_directory_iterator end;
+  for (fs::recursive_directory_iterator iterator{root, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    const fs::file_status status = entry.symlink_status(entry_error);
+    if (entry_error) {
+      return view_error(
+          fs::make_fs_error("failed to inspect", entry_error, entry.path()));
+    }
+    if (std::filesystem::is_symlink(status)) {
+      iterator.disable_recursion_pending();
+      continue;
+    }
+    const ViewVoid visited = visitor(entry.path(), status);
+    if (!visited) {
+      return std::unexpected(visited.error());
+    }
+  }
+  if (iterator_error) {
+    return view_error(
+        fs::make_fs_error("failed to list directory", iterator_error, root));
+  }
+  return {};
+}
+
+ViewVoid validate_removal_tree_hard_links(const fs::path &root) {
+  return visit_tree_without_following_symlinks(
+      root,
+      [](const fs::path &path, const fs::file_status &status) -> ViewVoid {
+        if (!std::filesystem::is_regular_file(status)) {
+          return {};
+        }
+        std::error_code error;
+        const std::uintmax_t count =
+            std::filesystem::hard_link_count(path, error);
+        if (error) {
+          return view_error(fs::make_fs_error(
+              "failed to inspect hard link count for", error, path));
+        }
+        if (count > 1) {
+          return view_error(
+              memix::ErrorKind::Conflict,
+              std::format("refusing to change permissions for multiply linked "
+                          "activation file `{}`",
+                          path.string()));
+        }
+        return {};
+      });
+}
+
+ViewVoid make_tree_writable_for_removal(const fs::path &root) {
+  const ViewVoid links_checked = validate_removal_tree_hard_links(root);
+  if (!links_checked) {
+    return std::unexpected(links_checked.error());
+  }
+  return visit_tree_without_following_symlinks(
+      root, [](const fs::path &path, const fs::file_status &status) {
+        return apply_writable_permissions(path, status);
+      });
+}
+
+void remove_tree_best_effort(const fs::path &path) {
+  std::ignore = make_tree_writable_for_removal(path);
+  std::ignore = fs::remove_all(path);
+}
+
+ViewResult<std::uintmax_t> remove_writable_tree(const fs::path &path) {
+  const ViewVoid writable = make_tree_writable_for_removal(path);
+  if (!writable) {
+    return std::unexpected(writable.error());
+  }
+  memix::FsResult<std::uintmax_t> removed = fs::remove_all(path);
+  if (!removed) {
+    return view_error(removed.error());
+  }
+  return *removed;
+}
+
+ViewVoid finalize_published_text_file(const fs::path &temp_dir,
+                                      const fs::path &temp_file,
+                                      const fs::path &published_file) {
+  const memix::FsVoid writable =
+      fs::permissions(temp_file, fs::perms::owner_read | fs::perms::owner_write,
+                      fs::perm_options::add);
+  if (!writable) {
+    // Publication is already complete and remains read-only. Leaving the
+    // temporary hard link is safer than changing the published file's mode.
+    return {};
+  }
+
+  const memix::FsResult<bool> temp_removed = fs::remove(temp_file);
+  if (!temp_removed || !*temp_removed) {
+    const memix::FsVoid frozen =
+        fs::apply_read_only_file_permissions(published_file);
+    if (!frozen) {
+      return view_error(frozen.error());
+    }
+    return {};
+  }
+
+  const memix::FsVoid frozen =
+      fs::apply_read_only_file_permissions(published_file);
+  if (!frozen) {
+    auto freeze_error =
+        memix::detail::translate_error<memix::ViewError>(frozen.error());
+    const memix::FsResult<bool> rolled_back = fs::remove(published_file);
+    if (!rolled_back || !*rolled_back) {
+      const std::string rollback_message =
+          rolled_back ? "published file was already missing"
+                      : rolled_back.error().message;
+      freeze_error.message = std::format(
+          "{}; additionally failed to roll back published file `{}`: {}",
+          freeze_error.message, published_file.string(), rollback_message);
+    }
+    return std::unexpected(std::move(freeze_error));
+  }
+  std::ignore = fs::remove(temp_dir);
   return {};
 }
 
@@ -859,6 +1036,12 @@ write_text_file_if_absent(const fs::path &path, std::string_view contents) {
       return false;
     }
     return view_error(linked.error());
+  }
+
+  const ViewVoid finalized =
+      finalize_published_text_file(temp_path, temp_file, path);
+  if (!finalized) {
+    return std::unexpected(finalized.error());
   }
 
   return true;
@@ -1701,6 +1884,1447 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
   return environment;
 }
 
+// ---------------------------------------------------------------------------
+// Activation (Nix-profile-style generations over built environments)
+// ---------------------------------------------------------------------------
+
+fs::path profiles_dir_for(const fs::path &root) {
+  return views_dir_for(root) / std::string(kProfilesDir);
+}
+
+fs::path profile_dir_for(const fs::path &root, std::string_view profile) {
+  return profiles_dir_for(root) / std::string(profile);
+}
+
+fs::path generations_dir_for(const fs::path &profile_dir) {
+  return profile_dir / std::string(kGenerationsDir);
+}
+
+fs::path current_link_for(const fs::path &profile_dir) {
+  return profile_dir / std::string(kCurrentLinkName);
+}
+
+fs::path
+generation_link_for(const fs::path &profile_dir, std::uint64_t number) {
+  return generations_dir_for(profile_dir) / std::format("{}", number);
+}
+
+fs::path
+generation_metadata_for(const fs::path &profile_dir, std::uint64_t number) {
+  return generations_dir_for(profile_dir) / std::format("{}.json", number);
+}
+
+ViewVoid check_profile_name(std::string_view profile) {
+  const auto allowed = [](char character, bool first) {
+    if (character >= 'a' && character <= 'z') {
+      return true;
+    }
+    if (character >= '0' && character <= '9') {
+      return true;
+    }
+    return !first && (character == '.' || character == '_' || character == '-');
+  };
+  bool valid = !profile.empty() && profile.size() <= kMaxProfileNameLength;
+  for (std::size_t index = 0; valid && index < profile.size(); ++index) {
+    valid = allowed(profile[index], index == 0);
+  }
+  if (!valid) {
+    return view_error(memix::ErrorKind::InvalidArgument,
+                      std::format("profile name `{}` must match "
+                                  "[a-z0-9][a-z0-9._-]*",
+                                  profile));
+  }
+  return {};
+}
+
+ViewResult<std::string> utc_timestamp() {
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t time = std::chrono::system_clock::to_time_t(now);
+  std::tm utc{};
+#ifdef _WIN32
+  if (gmtime_s(&utc, &time) != 0) {
+    return view_error("failed to compute UTC timestamp");
+  }
+#else
+  if (gmtime_r(&time, &utc) == nullptr) {
+    return view_error("failed to compute UTC timestamp");
+  }
+#endif
+  std::array<char, kTimestampBufferBytes> buffer{};
+  if (std::strftime(buffer.data(), buffer.size(), "%Y-%m-%dT%H:%M:%SZ", &utc)
+      == 0U) {
+    return view_error("failed to format timestamp");
+  }
+  return {buffer.data()};
+}
+
+ViewResult<std::optional<fs::file_status>> lstat(const fs::path &path) {
+  memix::FsResult<fs::file_status> status = fs::symlink_status(path);
+  if (!status) {
+    if (status.error().code == std::errc::no_such_file_or_directory) {
+      return std::optional<fs::file_status>{};
+    }
+    return view_error(std::move(status.error()));
+  }
+  return std::optional<fs::file_status>{*status};
+}
+
+struct GenerationMetadata {
+  std::string profile;
+  std::uint64_t number = 0;
+  std::string environment_id;
+  std::string derivation_id;
+  std::string activated_at;
+  memix::ActivationMode mode = memix::ActivationMode::Link;
+  std::string workspace;
+};
+
+bool same_activation_identity(const GenerationMetadata &left,
+                              const GenerationMetadata &right) {
+  return left.profile == right.profile
+      && left.number == right.number
+      && left.environment_id == right.environment_id
+      && left.derivation_id == right.derivation_id
+      && left.activated_at == right.activated_at
+      && left.mode == right.mode
+      && left.workspace == right.workspace;
+}
+
+ViewResult<fs::path> workspace_attach_path(const fs::path &workspace) {
+  fs::path parent = workspace.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  memix::FsResult<fs::path> canonical_parent = fs::weakly_canonical(parent);
+  if (!canonical_parent) {
+    return view_error(canonical_parent.error());
+  }
+  return (*canonical_parent / workspace.filename()).lexically_normal();
+}
+
+ViewResult<fs::path> acquire_workspace_lock(const fs::path &workspace) {
+  ViewResult<fs::path> attach_path = workspace_attach_path(workspace);
+  if (!attach_path) {
+    return std::unexpected(attach_path.error());
+  }
+  const fs::path parent = attach_path->parent_path();
+  const ViewVoid parent_created = ensure_directory(parent);
+  if (!parent_created) {
+    return std::unexpected(parent_created.error());
+  }
+  fs::path lock = parent
+                / std::format("{}{}", kWorkspaceLockPrefix,
+                              sha256_text(attach_path->generic_string()));
+  const memix::FsResult<bool> acquired = fs::create_directory(lock);
+  if (!acquired) {
+    return view_error(acquired.error());
+  }
+  if (!*acquired) {
+    return view_error(
+        memix::ErrorKind::Locked,
+        std::format("workspace `{}` is being modified by another memix "
+                    "process; remove `{}` if the lock is stale",
+                    workspace.string(), lock.string()));
+  }
+  return lock;
+}
+
+ViewVoid validate_copy_marker_location(const GenerationMetadata &metadata,
+                                       const fs::path &into) {
+  if (metadata.mode != memix::ActivationMode::Copy) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("activation marker at `{}` records mode `{}`",
+                                  into.string(),
+                                  memix::to_string(metadata.mode)));
+  }
+  ViewResult<fs::path> expected_workspace = workspace_attach_path(into);
+  if (!expected_workspace) {
+    return std::unexpected(expected_workspace.error());
+  }
+  const fs::path recorded_workspace{metadata.workspace};
+  if (!recorded_workspace.is_absolute()
+      || recorded_workspace != *expected_workspace) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("activation marker at `{}` records workspace `{}`",
+                    into.string(), metadata.workspace));
+  }
+  return {};
+}
+
+ViewResult<std::string>
+generation_metadata_json(const GenerationMetadata &metadata,
+                         std::string_view schema) {
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">(schema);
+  builder.append_comma();
+  builder.append_key_value<"profile">(metadata.profile);
+  builder.append_comma();
+  builder.append_key_value<"generation">(metadata.number);
+  builder.append_comma();
+  builder.append_key_value<"environment">(metadata.environment_id);
+  builder.append_comma();
+  builder.append_key_value<"derivation">(metadata.derivation_id);
+  builder.append_comma();
+  builder.append_key_value<"activated_at">(metadata.activated_at);
+  builder.append_comma();
+  builder.append_key_value<"mode">(memix::to_string(metadata.mode));
+  builder.append_comma();
+  builder.append_key_value<"workspace">(metadata.workspace);
+  builder.end_object();
+  return json_from_builder(builder);
+}
+
+ViewResult<std::uint64_t>
+read_uint64_field(const JsonObjectReader &fields, std::string_view key) {
+  memix::detail::CommonResult<std::uint64_t> value = fields.require_uint64(key);
+  if (!value) {
+    return view_error(std::move(value.error()), memix::ErrorKind::InvalidData);
+  }
+  return *value;
+}
+
+ViewResult<GenerationMetadata>
+generation_metadata_from_json(std::string_view text, const fs::path &path,
+                              std::string_view expected_schema) {
+  const std::string json_context =
+      std::format("invalid activation metadata `{}`", path.string());
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(text);
+  if (!document) {
+    return view_error(memix::detail::with_error_context(
+        std::move(document.error()), json_context,
+        memix::ErrorKind::InvalidData));
+  }
+  const JsonObjectReader fields = JsonObjectReader(document->root_object());
+  ViewResult<std::string> schema = read_string_field(fields, "schema");
+  if (!schema) {
+    return std::unexpected(schema.error());
+  }
+  if (*schema != expected_schema) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("unsupported activation metadata schema `{}`", *schema));
+  }
+  ViewResult<std::string> profile = read_string_field(fields, "profile");
+  ViewResult<std::uint64_t> number = read_uint64_field(fields, "generation");
+  ViewResult<std::string> environment =
+      read_string_field(fields, "environment");
+  ViewResult<std::string> derivation = read_string_field(fields, "derivation");
+  ViewResult<std::string> activated_at =
+      read_string_field(fields, "activated_at");
+  ViewResult<std::string> mode_name = read_string_field(fields, "mode");
+  if (!profile) {
+    return std::unexpected(profile.error());
+  }
+  const ViewVoid profile_checked = check_profile_name(*profile);
+  if (!profile_checked) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      std::format("invalid activation profile `{}`", *profile));
+  }
+  if (!number) {
+    return std::unexpected(number.error());
+  }
+  if (*number == 0) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      "activation generation must be greater than zero");
+  }
+  if (!environment) {
+    return std::unexpected(environment.error());
+  }
+  if (!derivation) {
+    return std::unexpected(derivation.error());
+  }
+  if (!activated_at) {
+    return std::unexpected(activated_at.error());
+  }
+  if (!mode_name) {
+    return std::unexpected(mode_name.error());
+  }
+  const std::optional<memix::ActivationMode> mode =
+      memix::parse_activation_mode(*mode_name);
+  if (!mode.has_value()) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("unsupported activation mode `{}`", *mode_name));
+  }
+  ViewResult<std::optional<std::string>> workspace =
+      optional_string(fields, "workspace");
+  if (!workspace) {
+    return std::unexpected(workspace.error());
+  }
+  return GenerationMetadata{
+      .profile = std::move(*profile),
+      .number = *number,
+      .environment_id = std::move(*environment),
+      .derivation_id = std::move(*derivation),
+      .activated_at = std::move(*activated_at),
+      .mode = *mode,
+      .workspace = workspace->value_or(""),
+  };
+}
+
+ViewResult<GenerationMetadata>
+read_generation_metadata(const fs::path &profile_dir, std::uint64_t number) {
+  const fs::path path = generation_metadata_for(profile_dir, number);
+  memix::FsResult<std::string> text =
+      fs::read_text_file(path, "activation generation");
+  if (!text) {
+    return view_error(text.error());
+  }
+  ViewResult<GenerationMetadata> metadata =
+      generation_metadata_from_json(*text, path, kGenerationSchema);
+  if (!metadata) {
+    return std::unexpected(metadata.error());
+  }
+  const std::string expected_profile = profile_dir.filename().string();
+  if (metadata->profile != expected_profile || metadata->number != number) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("activation generation metadata `{}` does not match "
+                    "profile `{}` generation {}",
+                    path.string(), expected_profile, number));
+  }
+  return metadata;
+}
+
+bool parse_generation_number(std::string_view name, std::uint64_t &number) {
+  constexpr std::size_t kMaxDigits = 20;
+  constexpr std::uint64_t kDecimalBase = 10;
+  if (name.empty() || name.size() > kMaxDigits) {
+    return false;
+  }
+  std::uint64_t value = 0;
+  for (const char character : name) {
+    if (character < '0' || character > '9') {
+      return false;
+    }
+    const auto digit = static_cast<std::uint64_t>(character - '0');
+    if (value
+        > (std::numeric_limits<std::uint64_t>::max() - digit) / kDecimalBase) {
+      return false;
+    }
+    value = (value * kDecimalBase) + digit;
+  }
+  if (value == 0) {
+    return false;
+  }
+  number = value;
+  return true;
+}
+
+ViewResult<std::vector<std::uint64_t>>
+scan_generations(const fs::path &profile_dir) {
+  const fs::path generations_dir = generations_dir_for(profile_dir);
+  const memix::FsResult<bool> exists = fs::exists(generations_dir);
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (!*exists) {
+    return std::vector<std::uint64_t>{};
+  }
+  std::vector<std::uint64_t> numbers;
+  std::error_code iterator_error;
+  const fs::directory_iterator end;
+  for (fs::directory_iterator iterator{generations_dir, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    if (!entry.is_symlink(entry_error)) {
+      if (entry_error) {
+        return view_error(
+            fs::make_fs_error("failed to inspect", entry_error, entry.path()));
+      }
+      continue;
+    }
+    std::uint64_t number = 0;
+    if (parse_generation_number(entry.path().filename().string(), number)) {
+      numbers.push_back(number);
+    }
+  }
+  if (iterator_error) {
+    return view_error(fs::make_fs_error("failed to list directory",
+                                        iterator_error, generations_dir));
+  }
+  std::ranges::sort(numbers);
+  return numbers;
+}
+
+ViewResult<std::optional<std::uint64_t>>
+read_current_generation(const fs::path &profile_dir) {
+  const fs::path current = current_link_for(profile_dir);
+  ViewResult<std::optional<fs::file_status>> status = lstat(current);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (!status->has_value()) {
+    return std::optional<std::uint64_t>{};
+  }
+  if (!std::filesystem::is_symlink(**status)) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("profile current is not a symlink `{}`", current.string()));
+  }
+  memix::FsResult<fs::path> target = fs::read_symlink(current);
+  if (!target) {
+    return view_error(target.error());
+  }
+  std::uint64_t number = 0;
+  if (target->is_absolute()
+      || !parse_generation_number(target->filename().string(), number)
+      || *target
+             != fs::path(std::string(kGenerationsDir))
+                    / std::format("{}", number)) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("profile current points at `{}`", target->string()));
+  }
+  return std::optional<std::uint64_t>{number};
+}
+
+ViewVoid acquire_profile_lock(const fs::path &profile_dir) {
+  const ViewVoid created = ensure_directory(profile_dir);
+  if (!created) {
+    return std::unexpected(created.error());
+  }
+  const fs::path lock = profile_dir / std::string(kProfileLockName);
+  const memix::FsResult<bool> acquired = fs::create_directory(lock);
+  if (!acquired) {
+    return view_error(acquired.error());
+  }
+  if (!*acquired) {
+    return view_error(
+        memix::ErrorKind::Locked,
+        std::format("profile `{}` is locked by another memix process; "
+                    "remove `{}` if the lock is stale",
+                    profile_dir.filename().string(), lock.string()));
+  }
+  return {};
+}
+
+ViewVoid acquire_existing_profile_lock(const fs::path &profile_dir) {
+  const fs::path lock = profile_dir / std::string(kProfileLockName);
+  const memix::FsResult<bool> acquired = fs::create_directory(lock);
+  if (!acquired) {
+    if (acquired.error().code == std::errc::no_such_file_or_directory) {
+      return view_error(memix::ErrorKind::NotFound,
+                        std::format("profile `{}` does not exist",
+                                    profile_dir.filename().string()));
+    }
+    return view_error(acquired.error());
+  }
+  if (!*acquired) {
+    return view_error(
+        memix::ErrorKind::Locked,
+        std::format("profile `{}` is locked by another memix process; "
+                    "remove `{}` if the lock is stale",
+                    profile_dir.filename().string(), lock.string()));
+  }
+  return {};
+}
+
+ViewVoid swap_current(const fs::path &profile_dir, std::uint64_t number) {
+  ViewResult<fs::path> temp =
+      unique_temp_dir(profile_dir, std::string(kCurrentLinkName));
+  if (!temp) {
+    return std::unexpected(temp.error());
+  }
+  const std::string target = std::format("{}/{}", kGenerationsDir, number);
+  const memix::FsVoid linked = fs::create_directory_symlink(target, *temp);
+  if (!linked) {
+    return view_error(linked.error());
+  }
+  const memix::FsVoid installed =
+      fs::replace_directory_symlink(*temp, current_link_for(profile_dir));
+  if (!installed) {
+    std::ignore = fs::remove(*temp);
+    return view_error(installed.error());
+  }
+  return {};
+}
+
+ViewVoid restore_current(const fs::path &profile_dir,
+                         std::optional<std::uint64_t> previous) {
+  if (previous.has_value()) {
+    return swap_current(profile_dir, *previous);
+  }
+  const memix::FsResult<bool> removed =
+      fs::remove(current_link_for(profile_dir));
+  if (!removed) {
+    return view_error(removed.error());
+  }
+  return {};
+}
+
+memix::ViewError
+restore_current_after_failure(const fs::path &profile_dir,
+                              std::optional<std::uint64_t> previous,
+                              memix::ViewError original_error) {
+  const ViewVoid restored = restore_current(profile_dir, previous);
+  if (!restored) {
+    original_error.message =
+        std::format("{}; additionally failed to restore profile current: {}",
+                    original_error.message, restored.error().message);
+  }
+  return original_error;
+}
+
+ViewVoid discard_generation(const fs::path &profile_dir, std::uint64_t number) {
+  std::optional<memix::ViewError> removal_error;
+  const memix::FsResult<bool> link_removed =
+      fs::remove(generation_link_for(profile_dir, number));
+  if (!link_removed) {
+    removal_error = view_error_from_fs(link_removed.error());
+  }
+  const fs::path metadata_path = generation_metadata_for(profile_dir, number);
+  const ViewVoid metadata_writable =
+      make_tree_writable_for_removal(metadata_path);
+  if (!metadata_writable) {
+    if (removal_error.has_value()) {
+      removal_error->message = std::format(
+          "{}; additionally failed to make generation metadata writable: {}",
+          removal_error->message, metadata_writable.error().message);
+    } else {
+      removal_error = metadata_writable.error();
+    }
+  }
+  const memix::FsResult<bool> metadata_removed = fs::remove(metadata_path);
+  if (!metadata_removed) {
+    memix::ViewError metadata_error =
+        view_error_from_fs(metadata_removed.error());
+    if (removal_error.has_value()) {
+      removal_error->message =
+          std::format("{}; additionally failed to remove generation metadata: "
+                      "{}",
+                      removal_error->message, metadata_error.message);
+    } else {
+      removal_error = std::move(metadata_error);
+    }
+  }
+  if (removal_error.has_value()) {
+    return std::unexpected(std::move(*removal_error));
+  }
+  return {};
+}
+
+memix::ViewError
+discard_generation_after_failure(const fs::path &profile_dir,
+                                 std::uint64_t number,
+                                 memix::ViewError original_error) {
+  const ViewVoid discarded = discard_generation(profile_dir, number);
+  if (!discarded) {
+    original_error.message =
+        std::format("{}; additionally failed to discard generation {}: {}",
+                    original_error.message, number, discarded.error().message);
+  }
+  return original_error;
+}
+
+memix::ViewError
+restore_activation_after_failure(const fs::path &profile_dir,
+                                 std::optional<std::uint64_t> previous,
+                                 std::uint64_t failed_generation,
+                                 memix::ViewError original_error) {
+  const ViewVoid restored = restore_current(profile_dir, previous);
+  if (!restored) {
+    original_error.message =
+        std::format("{}; additionally failed to restore profile current: {}",
+                    original_error.message, restored.error().message);
+    return original_error;
+  }
+  const ViewVoid discarded = discard_generation(profile_dir, failed_generation);
+  if (!discarded) {
+    original_error.message = std::format(
+        "{}; additionally failed to discard generation {}: {}",
+        original_error.message, failed_generation, discarded.error().message);
+  }
+  return original_error;
+}
+
+ViewVoid write_generation(const fs::path &profile_dir,
+                          const GenerationMetadata &metadata,
+                          const fs::path &tree_path) {
+  const fs::path generations_dir = generations_dir_for(profile_dir);
+  const ViewVoid created = ensure_directory(generations_dir);
+  if (!created) {
+    return std::unexpected(created.error());
+  }
+  memix::FsResult<fs::path> relative_target =
+      fs::relative(tree_path, generations_dir);
+  if (!relative_target) {
+    return view_error(relative_target.error());
+  }
+  const memix::FsVoid linked = fs::create_directory_symlink(
+      *relative_target, generation_link_for(profile_dir, metadata.number));
+  if (!linked) {
+    return view_error(linked.error());
+  }
+  ViewResult<std::string> json =
+      generation_metadata_json(metadata, kGenerationSchema);
+  if (!json) {
+    return std::unexpected(discard_generation_after_failure(
+        profile_dir, metadata.number, std::move(json.error())));
+  }
+  ViewResult<bool> written = write_text_file_if_absent(
+      generation_metadata_for(profile_dir, metadata.number), *json);
+  if (!written) {
+    return std::unexpected(discard_generation_after_failure(
+        profile_dir, metadata.number, std::move(written.error())));
+  }
+  ViewVoid swapped = swap_current(profile_dir, metadata.number);
+  if (!swapped) {
+    return std::unexpected(discard_generation_after_failure(
+        profile_dir, metadata.number, std::move(swapped.error())));
+  }
+  return {};
+}
+
+struct WorkspaceLinkRequest {
+  fs::path into;
+  fs::path target;
+  bool force = false;
+};
+
+ViewVoid preflight_workspace_link(const WorkspaceLinkRequest &request) {
+  ViewResult<std::optional<fs::file_status>> status = lstat(request.into);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (!status->has_value()) {
+    return {};
+  }
+  if (!std::filesystem::is_symlink(**status)) {
+    return view_error(
+        memix::ErrorKind::AlreadyExists,
+        std::format("workspace path `{}` already exists and is not a "
+                    "symlink; refusing to replace it",
+                    request.into.string()));
+  }
+  memix::FsResult<fs::path> existing = fs::read_symlink(request.into);
+  if (!existing) {
+    return view_error(existing.error());
+  }
+  if (*existing == request.target || request.force) {
+    return {};
+  }
+  return view_error(
+      memix::ErrorKind::AlreadyExists,
+      std::format("workspace path `{}` already links to `{}`; pass --force "
+                  "to replace it",
+                  request.into.string(), existing->string()));
+}
+
+ViewResult<bool> ensure_workspace_link(const WorkspaceLinkRequest &request) {
+  ViewResult<std::optional<fs::file_status>> status = lstat(request.into);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (status->has_value()) {
+    if (!std::filesystem::is_symlink(**status)) {
+      return view_error(
+          memix::ErrorKind::AlreadyExists,
+          std::format("workspace path `{}` already exists and is not a "
+                      "symlink; refusing to replace it",
+                      request.into.string()));
+    }
+    memix::FsResult<fs::path> existing = fs::read_symlink(request.into);
+    if (!existing) {
+      return view_error(existing.error());
+    }
+    if (*existing == request.target) {
+      return false;
+    }
+    if (!request.force) {
+      return view_error(
+          memix::ErrorKind::AlreadyExists,
+          std::format("workspace path `{}` already links to `{}`; pass "
+                      "--force to replace it",
+                      request.into.string(), existing->string()));
+    }
+  }
+  fs::path parent = request.into.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  const ViewVoid parent_created = ensure_directory(parent);
+  if (!parent_created) {
+    return std::unexpected(parent_created.error());
+  }
+  ViewResult<fs::path> temp =
+      unique_temp_dir(parent, request.into.filename().string());
+  if (!temp) {
+    return std::unexpected(temp.error());
+  }
+  const memix::FsVoid linked =
+      fs::create_directory_symlink(request.target, *temp);
+  if (!linked) {
+    return view_error(linked.error());
+  }
+  memix::scope_exit cleanup([temp = *temp] { std::ignore = fs::remove(temp); });
+  const memix::FsVoid installed =
+      fs::replace_directory_symlink(*temp, request.into);
+  if (!installed) {
+    return view_error(installed.error());
+  }
+  cleanup.release();
+  return true;
+}
+
+ViewVoid copy_tree_contents(const fs::path &source_dir,
+                            const fs::path &destination_dir) {
+  std::error_code iterator_error;
+  const fs::recursive_directory_iterator end;
+  for (fs::recursive_directory_iterator iterator{source_dir, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    const fs::path &source = entry.path();
+    const fs::path destination =
+        destination_dir / source.lexically_relative(source_dir);
+    std::error_code entry_error;
+    if (entry.is_symlink(entry_error) || entry.is_regular_file(entry_error)) {
+      if (entry_error) {
+        return view_error(
+            fs::make_fs_error("failed to inspect", entry_error, source));
+      }
+      const memix::FsResult<bool> copied = fs::copy_file(source, destination);
+      if (!copied) {
+        return view_error(copied.error());
+      }
+      const memix::FsVoid read_only =
+          fs::apply_read_only_file_permissions(destination);
+      if (!read_only) {
+        return view_error(read_only.error());
+      }
+      continue;
+    }
+    if (entry_error) {
+      return view_error(
+          fs::make_fs_error("failed to inspect", entry_error, source));
+    }
+    if (entry.is_directory(entry_error)) {
+      const ViewVoid created = ensure_directory(destination);
+      if (!created) {
+        return std::unexpected(created.error());
+      }
+    }
+  }
+  if (iterator_error) {
+    return view_error(fs::make_fs_error("failed to list directory",
+                                        iterator_error, source_dir));
+  }
+  return {};
+}
+
+ViewResult<std::optional<GenerationMetadata>>
+read_copy_marker(const fs::path &into) {
+  const fs::path marker = into / std::string(kActivationMarkerFilename);
+  ViewResult<std::optional<fs::file_status>> status = lstat(marker);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (!status->has_value()) {
+    return std::optional<GenerationMetadata>{};
+  }
+  memix::FsResult<std::string> text =
+      fs::read_text_file(marker, "activation marker");
+  if (!text) {
+    return view_error(text.error());
+  }
+  ViewResult<GenerationMetadata> metadata =
+      generation_metadata_from_json(*text, marker, kMarkerSchema);
+  if (!metadata) {
+    return std::unexpected(metadata.error());
+  }
+  return std::optional<GenerationMetadata>{std::move(*metadata)};
+}
+
+struct CopyMaterializationRequest {
+  memix::Store store;
+  fs::path into;
+  fs::path tree_path;
+  GenerationMetadata metadata;
+  bool force = false;
+};
+
+ViewResult<GenerationMetadata>
+validated_recorded_copy_marker(const memix::Store &store,
+                               const fs::path &into) {
+  ViewResult<std::optional<GenerationMetadata>> marker = read_copy_marker(into);
+  if (!marker) {
+    return std::unexpected(marker.error());
+  }
+  if (!marker->has_value()) {
+    return view_error(
+        memix::ErrorKind::AlreadyExists,
+        std::format("workspace path `{}` is a directory without a memix "
+                    "activation marker; refusing to replace it",
+                    into.string()));
+  }
+  const ViewVoid marker_checked = validate_copy_marker_location(**marker, into);
+  if (!marker_checked) {
+    return std::unexpected(marker_checked.error());
+  }
+  const fs::path profile_dir =
+      profile_dir_for(store.root(), (*marker)->profile);
+  const memix::FsResult<bool> profile_exists = fs::exists(profile_dir);
+  if (!profile_exists) {
+    return view_error(profile_exists.error());
+  }
+  if (!*profile_exists) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("copy activation at `{}` has no recorded profile `{}`",
+                    into.string(), (*marker)->profile));
+  }
+  ViewResult<GenerationMetadata> recorded =
+      read_generation_metadata(profile_dir, (*marker)->number);
+  if (!recorded) {
+    return std::unexpected(recorded.error());
+  }
+  if (!same_activation_identity(*recorded, **marker)) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("copy activation at `{}` does not match profile `{}` "
+                    "generation {}",
+                    into.string(), (*marker)->profile, (*marker)->number));
+  }
+  return std::move(**marker);
+}
+
+ViewVoid preflight_copy_workspace(const memix::Store &store,
+                                  const fs::path &into, bool force) {
+  ViewResult<std::optional<fs::file_status>> status = lstat(into);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (!status->has_value()) {
+    return {};
+  }
+  if (std::filesystem::is_symlink(**status)) {
+    if (force) {
+      return {};
+    }
+    return view_error(
+        memix::ErrorKind::AlreadyExists,
+        std::format("workspace path `{}` is a symlink; pass --force to "
+                    "replace it with a copied activation",
+                    into.string()));
+  }
+  if (std::filesystem::is_directory(**status)) {
+    ViewResult<GenerationMetadata> marker =
+        validated_recorded_copy_marker(store, into);
+    if (!marker) {
+      return std::unexpected(marker.error());
+    }
+    return {};
+  }
+  return view_error(
+      memix::ErrorKind::AlreadyExists,
+      std::format("workspace path `{}` already exists and is not a "
+                  "directory; refusing to replace it",
+                  into.string()));
+}
+
+ViewResult<fs::path>
+preflight_activation_workspace(const memix::Store &store,
+                               const memix::ActivationOptions &options) {
+  if (options.mode == memix::ActivationMode::Copy) {
+    const ViewVoid checked =
+        preflight_copy_workspace(store, options.into, options.force);
+    if (!checked) {
+      return std::unexpected(checked.error());
+    }
+    return fs::path{};
+  }
+  memix::FsResult<fs::path> canonical_root = fs::weakly_canonical(store.root());
+  if (!canonical_root) {
+    return view_error(canonical_root.error());
+  }
+  fs::path target =
+      current_link_for(profile_dir_for(*canonical_root, options.profile));
+  const ViewVoid checked = preflight_workspace_link({
+      .into = options.into,
+      .target = target,
+      .force = options.force,
+  });
+  if (!checked) {
+    return std::unexpected(checked.error());
+  }
+  return target;
+}
+
+ViewResult<bool>
+replace_existing_with_copy_tree(const fs::path &temp, const fs::path &into,
+                                bool existing_is_directory) {
+  if (existing_is_directory) {
+    const ViewVoid links_checked = validate_removal_tree_hard_links(into);
+    if (!links_checked) {
+      return std::unexpected(links_checked.error());
+    }
+  }
+  fs::path parent = into.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  ViewResult<fs::path> aside =
+      unique_temp_dir(parent, std::format("old-{}", into.filename().string()));
+  if (!aside) {
+    return std::unexpected(aside.error());
+  }
+  const memix::FsVoid moved_aside = fs::rename(into, *aside);
+  if (!moved_aside) {
+    return view_error(moved_aside.error());
+  }
+  const memix::FsVoid swapped = fs::rename(temp, into);
+  if (!swapped) {
+    memix::ViewError swap_error = view_error_from_fs(swapped.error());
+    const memix::FsVoid restored = fs::rename(*aside, into);
+    if (!restored) {
+      swap_error.message = std::format(
+          "{}; additionally failed to restore the previous workspace: {}; "
+          "recover it from `{}`",
+          swap_error.message, restored.error().message, aside->string());
+    }
+    return std::unexpected(std::move(swap_error));
+  }
+  if (existing_is_directory) {
+    remove_tree_best_effort(*aside);
+  } else {
+    std::ignore = fs::remove(*aside);
+  }
+  return true;
+}
+
+ViewResult<bool>
+install_copy_tree(const fs::path &temp, const fs::path &into,
+                  const std::optional<GenerationMetadata> &existing, bool force,
+                  const memix::Store &store) {
+  ViewResult<std::optional<fs::file_status>> status = lstat(into);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (status->has_value() && std::filesystem::is_symlink(**status)) {
+    if (!force) {
+      return view_error(
+          memix::ErrorKind::AlreadyExists,
+          std::format("workspace path `{}` is a symlink; pass --force to "
+                      "replace it with a copied activation",
+                      into.string()));
+    }
+    return replace_existing_with_copy_tree(temp, into, false);
+  }
+  if (status->has_value() && std::filesystem::is_directory(**status)) {
+    if (!existing.has_value()) {
+      return view_error(
+          memix::ErrorKind::AlreadyExists,
+          std::format("workspace path `{}` is a directory without a memix "
+                      "activation marker; refusing to replace it",
+                      into.string()));
+    }
+    ViewResult<GenerationMetadata> revalidated =
+        validated_recorded_copy_marker(store, into);
+    if (!revalidated) {
+      return std::unexpected(revalidated.error());
+    }
+    if (!same_activation_identity(*revalidated, *existing)) {
+      return view_error(
+          memix::ErrorKind::Conflict,
+          std::format("copy activation at `{}` changed before replacement",
+                      into.string()));
+    }
+    return replace_existing_with_copy_tree(temp, into, true);
+  }
+  if (status->has_value()) {
+    return view_error(
+        memix::ErrorKind::AlreadyExists,
+        std::format("workspace path `{}` already exists and is not a "
+                    "directory; refusing to replace it",
+                    into.string()));
+  }
+  const memix::FsVoid renamed = fs::rename(temp, into);
+  if (!renamed) {
+    return view_error(renamed.error());
+  }
+  return true;
+}
+
+ViewResult<bool>
+sync_copy_activation(const CopyMaterializationRequest &request) {
+  std::optional<GenerationMetadata> existing;
+  ViewResult<std::optional<fs::file_status>> status = lstat(request.into);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (status->has_value() && std::filesystem::is_directory(**status)) {
+    ViewResult<GenerationMetadata> marker =
+        validated_recorded_copy_marker(request.store, request.into);
+    if (!marker) {
+      return std::unexpected(marker.error());
+    }
+    existing = std::move(*marker);
+  }
+  fs::path parent = request.into.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  const ViewVoid parent_created = ensure_directory(parent);
+  if (!parent_created) {
+    return std::unexpected(parent_created.error());
+  }
+
+  ViewResult<fs::path> temp =
+      unique_temp_dir(parent, request.into.filename().string());
+  if (!temp) {
+    return std::unexpected(temp.error());
+  }
+  const memix::FsResult<bool> temp_created = fs::create_directory(*temp);
+  if (!temp_created) {
+    return view_error(temp_created.error());
+  }
+  memix::scope_exit cleanup([temp = *temp] { remove_tree_best_effort(temp); });
+  const ViewVoid copied = copy_tree_contents(request.tree_path, *temp);
+  if (!copied) {
+    return std::unexpected(copied.error());
+  }
+  ViewResult<std::string> marker_json =
+      generation_metadata_json(request.metadata, kMarkerSchema);
+  if (!marker_json) {
+    return std::unexpected(marker_json.error());
+  }
+  const memix::FsVoid marker_written = fs::write_text_file(
+      *temp / std::string(kActivationMarkerFilename), *marker_json);
+  if (!marker_written) {
+    return view_error(marker_written.error());
+  }
+
+  ViewResult<bool> installed = install_copy_tree(*temp, request.into, existing,
+                                                 request.force, request.store);
+  if (!installed) {
+    return std::unexpected(installed.error());
+  }
+  cleanup.release();
+  return *installed;
+}
+
+struct ResolvedWorkspaceActivation {
+  memix::ActivationMode mode = memix::ActivationMode::Link;
+  std::string profile;
+  std::uint64_t generation = 0;
+  GenerationMetadata metadata;
+  bool stale = false;
+};
+
+ViewResult<ResolvedWorkspaceActivation>
+resolve_link_activation(const memix::Store &store, const fs::path &into) {
+  memix::FsResult<fs::path> target = fs::read_symlink(into);
+  if (!target) {
+    return view_error(target.error());
+  }
+  const fs::path absolute_target =
+      target->is_absolute() ? *target : into.parent_path() / *target;
+  // Canonicalize the parent only: the final component (`current`) is the
+  // swap-point symlink and must not be resolved.
+  memix::FsResult<fs::path> canonical_parent =
+      fs::weakly_canonical(absolute_target.parent_path());
+  if (!canonical_parent) {
+    return view_error(canonical_parent.error());
+  }
+  const fs::path canonical_target =
+      *canonical_parent / absolute_target.filename();
+  memix::FsResult<fs::path> canonical_root = fs::weakly_canonical(store.root());
+  if (!canonical_root) {
+    return view_error(canonical_root.error());
+  }
+  const fs::path canonical_profiles = profiles_dir_for(*canonical_root);
+  if (canonical_target.filename() != kCurrentLinkName
+      || canonical_target.parent_path().parent_path() != canonical_profiles) {
+    return view_error(
+        memix::ErrorKind::NotFound,
+        std::format("workspace path `{}` is a symlink but not a memix "
+                    "activation",
+                    into.string()));
+  }
+  const std::string profile =
+      canonical_target.parent_path().filename().string();
+  const fs::path profile_dir = canonical_target.parent_path();
+  ViewResult<std::optional<std::uint64_t>> current =
+      read_current_generation(profile_dir);
+  if (!current) {
+    return std::unexpected(current.error());
+  }
+  if (!current->has_value()) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("profile `{}` has no current generation", profile));
+  }
+  ViewResult<GenerationMetadata> metadata =
+      read_generation_metadata(profile_dir, **current);
+  if (!metadata) {
+    return std::unexpected(metadata.error());
+  }
+  return ResolvedWorkspaceActivation{
+      .mode = memix::ActivationMode::Link,
+      .profile = profile,
+      .generation = **current,
+      .metadata = std::move(*metadata),
+      .stale = false,
+  };
+}
+
+ViewResult<ResolvedWorkspaceActivation>
+resolve_copy_activation(const memix::Store &store, const fs::path &into) {
+  ViewResult<std::optional<GenerationMetadata>> marker = read_copy_marker(into);
+  if (!marker) {
+    return std::unexpected(marker.error());
+  }
+  if (!marker->has_value()) {
+    return view_error(
+        memix::ErrorKind::NotFound,
+        std::format("workspace path `{}` is a directory without a memix "
+                    "activation marker",
+                    into.string()));
+  }
+  const ViewVoid marker_checked = validate_copy_marker_location(**marker, into);
+  if (!marker_checked) {
+    return std::unexpected(marker_checked.error());
+  }
+  const fs::path profile_dir =
+      profile_dir_for(store.root(), (*marker)->profile);
+  ViewResult<std::optional<std::uint64_t>> current =
+      read_current_generation(profile_dir);
+  if (!current) {
+    return std::unexpected(current.error());
+  }
+  bool stale = true;
+  if (current->has_value()) {
+    ViewResult<GenerationMetadata> current_metadata =
+        read_generation_metadata(profile_dir, **current);
+    if (!current_metadata) {
+      return std::unexpected(current_metadata.error());
+    }
+    stale = !same_activation_identity(**marker, *current_metadata);
+  }
+  return ResolvedWorkspaceActivation{
+      .mode = memix::ActivationMode::Copy,
+      .profile = (*marker)->profile,
+      .generation = (*marker)->number,
+      .metadata = std::move(**marker),
+      .stale = stale,
+  };
+}
+
+ViewResult<std::optional<ResolvedWorkspaceActivation>>
+resolve_workspace_activation(const memix::Store &store, const fs::path &into) {
+  ViewResult<std::optional<fs::file_status>> status = lstat(into);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (!status->has_value()) {
+    return std::optional<ResolvedWorkspaceActivation>{};
+  }
+  if (std::filesystem::is_symlink(**status)) {
+    ViewResult<ResolvedWorkspaceActivation> activation =
+        resolve_link_activation(store, into);
+    if (!activation) {
+      return std::unexpected(activation.error());
+    }
+    return std::optional<ResolvedWorkspaceActivation>{std::move(*activation)};
+  }
+  if (std::filesystem::is_directory(**status)) {
+    ViewResult<ResolvedWorkspaceActivation> activation =
+        resolve_copy_activation(store, into);
+    if (!activation) {
+      return std::unexpected(activation.error());
+    }
+    return std::optional<ResolvedWorkspaceActivation>{std::move(*activation)};
+  }
+  return view_error(memix::ErrorKind::NotFound,
+                    std::format("workspace path `{}` is not a memix activation",
+                                into.string()));
+}
+
+struct CurrentGeneration {
+  std::uint64_t number = 0;
+  GenerationMetadata metadata;
+  std::optional<std::uint64_t> previous;
+  bool switched = false;
+};
+
+ViewResult<CurrentGeneration>
+ensure_current_generation(const fs::path &profile_dir,
+                          const memix::ViewEnvironment &environment,
+                          memix::ActivationMode mode,
+                          const fs::path &workspace) {
+  ViewResult<fs::path> attach_path = workspace_attach_path(workspace);
+  if (!attach_path) {
+    return std::unexpected(attach_path.error());
+  }
+  const std::string workspace_identity = attach_path->generic_string();
+  ViewResult<std::optional<std::uint64_t>> current =
+      read_current_generation(profile_dir);
+  if (!current) {
+    return std::unexpected(current.error());
+  }
+  if (current->has_value()) {
+    ViewResult<GenerationMetadata> existing =
+        read_generation_metadata(profile_dir, **current);
+    if (!existing) {
+      return std::unexpected(existing.error());
+    }
+    // Link attachments follow the profile's `current` pointer, so the
+    // recorded workspace is informational and re-activating the same
+    // environment from another workspace must stay a no-op. Copy
+    // generations are workspace-specific: rollback re-materializes the
+    // recorded workspace, so a copy activated elsewhere needs its own
+    // generation.
+    const bool same_workspace = mode == memix::ActivationMode::Link
+                             || existing->workspace == workspace_identity;
+    if (existing->environment_id == environment.id
+        && existing->derivation_id == environment.derivation.id
+        && existing->mode == mode
+        && same_workspace) {
+      return CurrentGeneration{
+          .number = **current,
+          .metadata = std::move(*existing),
+          .previous = *current,
+          .switched = false,
+      };
+    }
+  }
+  ViewResult<std::vector<std::uint64_t>> existing_generations =
+      scan_generations(profile_dir);
+  if (!existing_generations) {
+    return std::unexpected(existing_generations.error());
+  }
+  if (!existing_generations->empty()
+      && existing_generations->back()
+             == std::numeric_limits<std::uint64_t>::max()) {
+    return view_error(
+        memix::ErrorKind::Conflict,
+        std::format("profile `{}` has exhausted generation numbers",
+                    profile_dir.filename().string()));
+  }
+  const std::uint64_t number =
+      existing_generations->empty() ? 1 : existing_generations->back() + 1;
+  ViewResult<std::string> activated_at = utc_timestamp();
+  if (!activated_at) {
+    return std::unexpected(activated_at.error());
+  }
+  const GenerationMetadata metadata{
+      .profile = profile_dir.filename().string(),
+      .number = number,
+      .environment_id = environment.id,
+      .derivation_id = environment.derivation.id,
+      .activated_at = std::move(*activated_at),
+      .mode = mode,
+      .workspace = workspace_identity,
+  };
+  const ViewVoid written =
+      write_generation(profile_dir, metadata, environment.derivation.tree_path);
+  if (!written) {
+    return std::unexpected(written.error());
+  }
+  return CurrentGeneration{
+      .number = number,
+      .metadata = metadata,
+      .previous = *current,
+      .switched = true,
+  };
+}
+
+ViewResult<std::uint64_t>
+select_rollback_target(const std::vector<std::uint64_t> &existing,
+                       std::uint64_t current,
+                       std::optional<std::uint64_t> generation,
+                       std::string_view profile) {
+  if (generation.has_value()) {
+    if (!std::ranges::contains(existing, *generation)) {
+      return view_error(
+          memix::ErrorKind::NotFound,
+          std::format("generation {} does not exist in profile `{}`",
+                      *generation, profile));
+    }
+    return *generation;
+  }
+  for (const std::uint64_t candidate : existing | std::views::reverse) {
+    if (candidate < current) {
+      return candidate;
+    }
+  }
+  return view_error(memix::ErrorKind::NotFound,
+                    std::format("profile `{}` has no generation older than {}",
+                                profile, current));
+}
+
+ViewResult<bool>
+rematerialize_copy_workspace(const memix::Store &store,
+                             const GenerationMetadata &metadata) {
+  if (metadata.mode != memix::ActivationMode::Copy
+      || metadata.workspace.empty()) {
+    return false;
+  }
+  ViewResult<std::optional<GenerationMetadata>> marker =
+      read_copy_marker(metadata.workspace);
+  if (!marker) {
+    return std::unexpected(marker.error());
+  }
+  if (!marker->has_value()) {
+    return false;
+  }
+  const ViewVoid marker_checked =
+      validate_copy_marker_location(**marker, metadata.workspace);
+  if (!marker_checked) {
+    return std::unexpected(marker_checked.error());
+  }
+  if ((*marker)->profile != metadata.profile) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("copy workspace `{}` belongs to profile `{}`, not `{}`",
+                    metadata.workspace, (*marker)->profile, metadata.profile));
+  }
+  const fs::path tree_path =
+      derivation_dir_for(store.root(), metadata.derivation_id)
+      / std::string(kTreeDir);
+  ViewResult<bool> synced = sync_copy_activation({
+      .store = store,
+      .into = fs::path(metadata.workspace),
+      .tree_path = tree_path,
+      .metadata = metadata,
+      .force = true,
+  });
+  if (!synced) {
+    return std::unexpected(synced.error());
+  }
+  return *synced;
+}
+
+ViewResult<ResolvedWorkspaceActivation> revalidate_workspace_activation(
+    const memix::Store &store, const fs::path &into,
+    const ResolvedWorkspaceActivation &expected_activation) {
+  ViewResult<std::optional<ResolvedWorkspaceActivation>> resolved =
+      resolve_workspace_activation(store, into);
+  if (!resolved) {
+    return std::unexpected(resolved.error());
+  }
+  if (!resolved->has_value()) {
+    return view_error(
+        memix::ErrorKind::Conflict,
+        std::format("activation at `{}` changed while waiting for a lock",
+                    into.string()));
+  }
+  ResolvedWorkspaceActivation activation = std::move(**resolved);
+  if (activation.mode != expected_activation.mode
+      || !same_activation_identity(activation.metadata,
+                                   expected_activation.metadata)) {
+    return view_error(
+        memix::ErrorKind::Conflict,
+        std::format("activation at `{}` changed while waiting for a lock",
+                    into.string()));
+  }
+  return activation;
+}
+
+struct ProfileDeactivationLockRequest {
+  std::reference_wrapper<const memix::Store> store;
+  std::reference_wrapper<const fs::path> into;
+  std::reference_wrapper<const fs::path> profile_dir;
+  std::reference_wrapper<const ResolvedWorkspaceActivation> expected_activation;
+  std::reference_wrapper<bool> lock_held;
+};
+
+ViewResult<ResolvedWorkspaceActivation>
+lock_profile_for_deactivation(const ProfileDeactivationLockRequest &request) {
+  const fs::path &profile_dir = request.profile_dir.get();
+  const fs::path &into = request.into.get();
+  const ResolvedWorkspaceActivation &expected_activation =
+      request.expected_activation.get();
+  const memix::FsResult<bool> profile_exists = fs::exists(profile_dir);
+  if (!profile_exists) {
+    return view_error(profile_exists.error());
+  }
+  if (!*profile_exists) {
+    return view_error(
+        memix::ErrorKind::NotFound,
+        std::format("activation at `{}` has no recorded profile `{}`",
+                    into.string(), expected_activation.profile));
+  }
+  const ViewVoid locked = acquire_existing_profile_lock(profile_dir);
+  if (!locked) {
+    return std::unexpected(locked.error());
+  }
+  request.lock_held.get() = true;
+
+  ViewResult<ResolvedWorkspaceActivation> activation =
+      revalidate_workspace_activation(request.store.get(), into,
+                                      expected_activation);
+  if (!activation) {
+    return std::unexpected(activation.error());
+  }
+  if (activation->mode != memix::ActivationMode::Copy) {
+    return activation;
+  }
+  ViewResult<GenerationMetadata> recorded =
+      read_generation_metadata(profile_dir, activation->metadata.number);
+  if (!recorded) {
+    return std::unexpected(recorded.error());
+  }
+  if (!same_activation_identity(*recorded, activation->metadata)) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("copy activation at `{}` does not match profile `{}` "
+                    "generation {}",
+                    into.string(), activation->profile,
+                    activation->metadata.number));
+  }
+  return activation;
+}
+
+ViewVoid
+remove_workspace_activation(const fs::path &into, memix::ActivationMode mode) {
+  if (mode == memix::ActivationMode::Link) {
+    const memix::FsResult<bool> removed = fs::remove(into);
+    if (!removed) {
+      return view_error(removed.error());
+    }
+    return {};
+  }
+  ViewResult<std::uintmax_t> removed = remove_writable_tree(into);
+  if (!removed) {
+    return std::unexpected(removed.error());
+  }
+  return {};
+}
+
+ViewVoid wipe_locked_profile(const fs::path &profile_dir, bool &lock_held) {
+  fs::path parent = profile_dir.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  ViewResult<fs::path> tombstone = unique_temp_dir(
+      parent, std::format("deleted-{}", profile_dir.filename().string()));
+  if (!tombstone) {
+    return std::unexpected(tombstone.error());
+  }
+  const memix::FsVoid moved = fs::rename(profile_dir, *tombstone);
+  if (!moved) {
+    return view_error(moved.error());
+  }
+
+  // The lock moved with the profile. Disarm cleanup before exposing the
+  // original profile path so it cannot remove a new owner's lock there.
+  lock_held = false;
+  ViewResult<std::uintmax_t> removed = remove_writable_tree(*tombstone);
+  if (!removed) {
+    memix::ViewError removal_error = removed.error();
+    removal_error.message =
+        std::format("{}; recover or remove the profile tombstone at `{}`",
+                    removal_error.message, tombstone->string());
+    return std::unexpected(std::move(removal_error));
+  }
+  return {};
+}
+
 } // namespace
 
 namespace memix {
@@ -1864,6 +3488,369 @@ ViewService::resolve_environment(std::string_view environment_prefix) const {
   }
   environment->derivation = std::move(*derivation);
   return environment;
+}
+
+ViewResult<ViewActivation>
+ViewService::activate(std::string_view environment_prefix,
+                      const ActivationOptions &options) const {
+  if (options.into.empty()) {
+    return view_error(ErrorKind::InvalidArgument,
+                      "activation target path must not be empty");
+  }
+  const ViewVoid profile_checked = check_profile_name(options.profile);
+  if (!profile_checked) {
+    return std::unexpected(profile_checked.error());
+  }
+  ViewResult<ViewEnvironment> environment =
+      resolve_environment(environment_prefix);
+  if (!environment) {
+    return std::unexpected(environment.error());
+  }
+  const fs::path profile_dir = profile_dir_for(store_.root(), options.profile);
+  const fs::path lock = profile_dir / std::string(kProfileLockName);
+  const ViewVoid locked = acquire_profile_lock(profile_dir);
+  if (!locked) {
+    return std::unexpected(locked.error());
+  }
+  const memix::scope_exit release_lock(
+      [lock] { std::ignore = fs::remove(lock); });
+  ViewResult<fs::path> workspace_lock = acquire_workspace_lock(options.into);
+  if (!workspace_lock) {
+    return std::unexpected(workspace_lock.error());
+  }
+  const memix::scope_exit release_workspace_lock(
+      [lock = *workspace_lock] { std::ignore = fs::remove(lock); });
+  ViewResult<fs::path> link_target =
+      preflight_activation_workspace(store_, options);
+  if (!link_target) {
+    return std::unexpected(link_target.error());
+  }
+
+  ViewResult<CurrentGeneration> generation = ensure_current_generation(
+      profile_dir, *environment, options.mode, options.into);
+  if (!generation) {
+    return std::unexpected(generation.error());
+  }
+  const auto fail_after_switch =
+      [&](ViewError error) -> ViewResult<ViewActivation> {
+    if (generation->switched) {
+      error = restore_activation_after_failure(
+          profile_dir, generation->previous, generation->number,
+          std::move(error));
+    }
+    return std::unexpected(std::move(error));
+  };
+
+  bool materialized = false;
+  if (options.mode == ActivationMode::Link) {
+    ViewResult<bool> linked = ensure_workspace_link({
+        .into = options.into,
+        .target = *link_target,
+        .force = options.force,
+    });
+    if (!linked) {
+      return fail_after_switch(std::move(linked.error()));
+    }
+    materialized = *linked;
+  } else {
+    ViewResult<bool> synced = sync_copy_activation({
+        .store = store_,
+        .into = options.into,
+        .tree_path = environment->derivation.tree_path,
+        .metadata = generation->metadata,
+        .force = options.force,
+    });
+    if (!synced) {
+      return fail_after_switch(std::move(synced.error()));
+    }
+    materialized = *synced;
+  }
+
+  return ViewActivation{
+      .profile = options.profile,
+      .generation = generation->number,
+      .environment_id = environment->id,
+      .derivation_id = environment->derivation.id,
+      .workspace_path = options.into,
+      .switched = generation->switched,
+      .materialized = materialized,
+  };
+}
+
+ViewResult<ViewActivation>
+ViewService::rollback(std::string_view profile,
+                      std::optional<std::uint64_t> generation) const {
+  const ViewVoid profile_checked = check_profile_name(profile);
+  if (!profile_checked) {
+    return std::unexpected(profile_checked.error());
+  }
+  const fs::path profile_dir = profile_dir_for(store_.root(), profile);
+  const fs::path lock = profile_dir / std::string(kProfileLockName);
+  const ViewVoid locked = acquire_existing_profile_lock(profile_dir);
+  if (!locked) {
+    return std::unexpected(locked.error());
+  }
+  const memix::scope_exit release_lock(
+      [lock] { std::ignore = fs::remove(lock); });
+
+  ViewResult<std::vector<std::uint64_t>> existing =
+      scan_generations(profile_dir);
+  if (!existing) {
+    return std::unexpected(existing.error());
+  }
+  if (existing->empty()) {
+    return view_error(ErrorKind::NotFound,
+                      std::format("profile `{}` has no generations", profile));
+  }
+  ViewResult<std::optional<std::uint64_t>> current =
+      read_current_generation(profile_dir);
+  if (!current) {
+    return std::unexpected(current.error());
+  }
+  if (!current->has_value()) {
+    return view_error(
+        ErrorKind::InvalidData,
+        std::format("profile `{}` has no current generation", profile));
+  }
+
+  ViewResult<std::uint64_t> target =
+      select_rollback_target(*existing, **current, generation, profile);
+  if (!target) {
+    return std::unexpected(target.error());
+  }
+
+  ViewResult<GenerationMetadata> metadata =
+      read_generation_metadata(profile_dir, *target);
+  if (!metadata) {
+    return std::unexpected(metadata.error());
+  }
+  if (*target == **current) {
+    return ViewActivation{
+        .profile = std::string(profile),
+        .generation = *target,
+        .environment_id = metadata->environment_id,
+        .derivation_id = metadata->derivation_id,
+        .workspace_path = fs::path(metadata->workspace),
+        .switched = false,
+        .materialized = false,
+    };
+  }
+  std::optional<fs::path> workspace_lock;
+  if (metadata->mode == ActivationMode::Copy && !metadata->workspace.empty()) {
+    ViewResult<fs::path> acquired = acquire_workspace_lock(metadata->workspace);
+    if (!acquired) {
+      return std::unexpected(acquired.error());
+    }
+    workspace_lock = std::move(*acquired);
+  }
+  const memix::scope_exit release_workspace_lock([&workspace_lock] {
+    if (workspace_lock.has_value()) {
+      std::ignore = fs::remove(*workspace_lock);
+    }
+  });
+  const ViewVoid swapped = swap_current(profile_dir, *target);
+  if (!swapped) {
+    return std::unexpected(swapped.error());
+  }
+
+  ViewResult<bool> rematerialized =
+      rematerialize_copy_workspace(store_, *metadata);
+  if (!rematerialized) {
+    return std::unexpected(restore_current_after_failure(
+        profile_dir, *current, std::move(rematerialized.error())));
+  }
+  return ViewActivation{
+      .profile = std::string(profile),
+      .generation = *target,
+      .environment_id = metadata->environment_id,
+      .derivation_id = metadata->derivation_id,
+      .workspace_path = fs::path(metadata->workspace),
+      .switched = true,
+      .materialized = *rematerialized,
+  };
+}
+
+ViewResult<std::vector<ViewGenerationInfo>>
+ViewService::generations(std::string_view profile) const {
+  const ViewVoid profile_checked = check_profile_name(profile);
+  if (!profile_checked) {
+    return std::unexpected(profile_checked.error());
+  }
+  const fs::path profile_dir = profile_dir_for(store_.root(), profile);
+  const memix::FsResult<bool> profile_exists = fs::exists(profile_dir);
+  if (!profile_exists) {
+    return view_error(profile_exists.error());
+  }
+  if (!*profile_exists) {
+    return view_error(ErrorKind::NotFound,
+                      std::format("profile `{}` does not exist", profile));
+  }
+  const fs::path lock = profile_dir / std::string(kProfileLockName);
+  const ViewVoid locked = acquire_existing_profile_lock(profile_dir);
+  if (!locked) {
+    return std::unexpected(locked.error());
+  }
+  const memix::scope_exit release_lock(
+      [lock] { std::ignore = fs::remove(lock); });
+  ViewResult<std::vector<std::uint64_t>> existing =
+      scan_generations(profile_dir);
+  if (!existing) {
+    return std::unexpected(existing.error());
+  }
+  ViewResult<std::optional<std::uint64_t>> current =
+      read_current_generation(profile_dir);
+  if (!current) {
+    return std::unexpected(current.error());
+  }
+  if (!existing->empty() && !current->has_value()) {
+    return view_error(
+        ErrorKind::InvalidData,
+        std::format("profile `{}` has generations but no current generation",
+                    profile));
+  }
+  if (current->has_value() && !std::ranges::contains(*existing, **current)) {
+    return view_error(
+        ErrorKind::InvalidData,
+        std::format("profile `{}` current generation {} does not exist",
+                    profile, **current));
+  }
+  std::vector<ViewGenerationInfo> infos;
+  infos.reserve(existing->size());
+  for (const std::uint64_t number : *existing) {
+    ViewResult<GenerationMetadata> metadata =
+        read_generation_metadata(profile_dir, number);
+    if (!metadata) {
+      return std::unexpected(metadata.error());
+    }
+    infos.push_back(ViewGenerationInfo{
+        .number = number,
+        .environment_id = metadata->environment_id,
+        .derivation_id = metadata->derivation_id,
+        .activated_at = metadata->activated_at,
+        .mode = metadata->mode,
+        .current = current->has_value() && **current == number,
+    });
+  }
+  return infos;
+}
+
+ViewResult<ViewActivationStatus>
+ViewService::activation_status(const fs::path &into) const {
+  ViewResult<std::optional<ResolvedWorkspaceActivation>> resolved =
+      resolve_workspace_activation(store_, into);
+  if (!resolved) {
+    return std::unexpected(resolved.error());
+  }
+  if (!resolved->has_value()) {
+    return ViewActivationStatus{
+        .active = false,
+        .mode = ActivationMode::Link,
+        .profile = {},
+        .generation = 0,
+        .environment_id = {},
+        .derivation_id = {},
+        .stale = false,
+        .workspace_path = into,
+    };
+  }
+  const ResolvedWorkspaceActivation &activation = **resolved;
+  return ViewActivationStatus{
+      .active = true,
+      .mode = activation.mode,
+      .profile = activation.profile,
+      .generation = activation.generation,
+      .environment_id = activation.metadata.environment_id,
+      .derivation_id = activation.metadata.derivation_id,
+      .stale = activation.stale,
+      .workspace_path = into,
+  };
+}
+
+ViewResult<ViewDeactivation>
+ViewService::deactivate(const fs::path &into, bool wipe_profile) const {
+  ViewResult<std::optional<ResolvedWorkspaceActivation>> resolved =
+      resolve_workspace_activation(store_, into);
+  if (!resolved) {
+    return std::unexpected(resolved.error());
+  }
+  if (!resolved->has_value()) {
+    return view_error(
+        ErrorKind::NotFound,
+        std::format("no memix activation at `{}`", into.string()));
+  }
+  ResolvedWorkspaceActivation activation = std::move(**resolved);
+  const std::string profile = activation.profile;
+  const fs::path profile_dir = profile_dir_for(store_.root(), profile);
+  const fs::path lock = profile_dir / std::string(kProfileLockName);
+  bool lock_held = false;
+  const memix::scope_exit release_lock([&lock_held, lock] {
+    if (lock_held) {
+      std::ignore = fs::remove(lock);
+    }
+  });
+  ViewResult<ResolvedWorkspaceActivation> locked_activation =
+      lock_profile_for_deactivation({
+          .store = std::cref(store_),
+          .into = std::cref(into),
+          .profile_dir = std::cref(profile_dir),
+          .expected_activation = std::cref(activation),
+          .lock_held = std::ref(lock_held),
+      });
+  if (!locked_activation) {
+    return std::unexpected(locked_activation.error());
+  }
+  activation = std::move(*locked_activation);
+  ViewResult<fs::path> workspace_lock = acquire_workspace_lock(into);
+  if (!workspace_lock) {
+    return std::unexpected(workspace_lock.error());
+  }
+  const memix::scope_exit release_workspace_lock(
+      [lock = *workspace_lock] { std::ignore = fs::remove(lock); });
+  ViewResult<ResolvedWorkspaceActivation> workspace_activation =
+      revalidate_workspace_activation(store_, into, activation);
+  if (!workspace_activation) {
+    return std::unexpected(workspace_activation.error());
+  }
+  activation = std::move(*workspace_activation);
+  const ViewVoid workspace_removed =
+      remove_workspace_activation(into, activation.mode);
+  if (!workspace_removed) {
+    return std::unexpected(workspace_removed.error());
+  }
+  bool wiped = false;
+  if (wipe_profile) {
+    const ViewVoid profile_wiped = wipe_locked_profile(profile_dir, lock_held);
+    if (!profile_wiped) {
+      return std::unexpected(profile_wiped.error());
+    }
+    wiped = true;
+  }
+  return ViewDeactivation{
+      .profile = profile,
+      .workspace_path = into,
+      .wiped_profile = wiped,
+  };
+}
+
+std::string default_profile_name(const fs::path &workspace_dir) {
+  const std::string hash = sha256_text(workspace_dir.generic_string());
+  return std::format(
+      "{}{}", kWorkspaceProfilePrefix,
+      std::string_view(hash).substr(0, kWorkspaceProfileHashLength));
+}
+
+ViewResult<std::string> validated_profile_name(std::string_view profile) {
+  const ViewVoid basic_checked = check_profile_name(profile);
+  if (!basic_checked) {
+    return std::unexpected(basic_checked.error());
+  }
+  if (profile.starts_with(kWorkspaceProfilePrefix)) {
+    return view_error(
+        ErrorKind::InvalidArgument,
+        std::format("profile name `{}` uses the reserved `{}` prefix", profile,
+                    kWorkspaceProfilePrefix));
+  }
+  return std::string(profile);
 }
 
 ViewResult<std::string> view_ir_json(const ViewIr &ir) {

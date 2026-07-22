@@ -12,6 +12,10 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#ifdef _WIN32
+#include <tuple>
+#include <utility>
+#endif
 
 namespace std_fs = std::filesystem;
 
@@ -108,6 +112,12 @@ FsVoid create_symlink(const path &target, const path &link) {
   return fs_void(error, "failed to create symlink", target, link);
 }
 
+FsVoid create_directory_symlink(const path &target, const path &link) {
+  std::error_code error;
+  std_fs::create_directory_symlink(target, link, error);
+  return fs_void(error, "failed to create directory symlink", target, link);
+}
+
 FsVoid create_hard_link(const path &target, const path &link) {
   std::error_code error;
   std_fs::create_hard_link(target, link, error);
@@ -127,10 +137,68 @@ FsResult<path> relative(const path &target, const path &base) {
                    base);
 }
 
+FsResult<path> weakly_canonical(const path &path) {
+  std::error_code error;
+  const auto value = std_fs::weakly_canonical(path, error);
+  return fs_result(value, error, "failed to canonicalize", path);
+}
+
 FsVoid rename(const path &source, const path &destination) {
   std::error_code error;
   std_fs::rename(source, destination, error);
   return fs_void(error, "failed to rename", source, destination);
+}
+
+FsVoid replace_directory_symlink(const path &source, const path &destination) {
+#ifndef _WIN32
+  return memix::fs::rename(source, destination);
+#else
+  std::error_code status_error;
+  const file_status destination_status =
+      std_fs::symlink_status(destination, status_error);
+  if (status_error && status_error != std::errc::no_such_file_or_directory) {
+    return fs_void(status_error, "failed to inspect symlink", destination);
+  }
+  if (status_error || !std_fs::exists(destination_status)) {
+    return memix::fs::rename(source, destination);
+  }
+  if (!std_fs::is_symlink(destination_status)) {
+    return fs_error("cannot replace non-symlink destination",
+                    std::make_error_code(std::errc::file_exists), destination);
+  }
+
+  path parent = destination.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  FsResult<path> backup = unique_temp_dir(
+      parent,
+      TempDirOptions{
+          .prefix = destination.filename().string(),
+          .failure_message = "failed to allocate a temporary symlink backup",
+      });
+  if (!backup) {
+    return std::unexpected(backup.error());
+  }
+  const FsVoid backed_up = memix::fs::rename(destination, *backup);
+  if (!backed_up) {
+    return std::unexpected(backed_up.error());
+  }
+  const FsVoid installed = memix::fs::rename(source, destination);
+  if (!installed) {
+    FsError install_error = installed.error();
+    const FsVoid restored = memix::fs::rename(*backup, destination);
+    if (!restored) {
+      install_error.message = std::format(
+          "{}; additionally failed to restore the prior directory symlink: "
+          "{}; recover it from `{}`",
+          install_error.message, restored.error().message, backup->string());
+    }
+    return std::unexpected(std::move(install_error));
+  }
+  std::ignore = memix::fs::remove(*backup);
+  return {};
+#endif
 }
 
 FsResult<bool> remove(const path &path) {
