@@ -9,11 +9,11 @@ description: "Use when the agent needs to operate the memix CLI tool group for u
 
 Treat Memix as a Nix-inspired, provenance-aware build system for agent context, not as a mutable notes directory.
 
-- Treat stored blobs as immutable evidence. Ingest changed content as a new object and generation; never edit files inside the store directly.
-- Treat logical trees and refs as version selectors over immutable history. Use `latest` intentionally, and pin a generation when replay, auditability, or reproducibility matters.
+- Treat stored blobs as immutable evidence. Raw ingest without `--dest` creates blob objects only; ingest with `--dest` also creates a new logical-tree generation. Ingest changed content again instead of editing files inside the store directly.
+- Treat logical trees and generation objects as immutable history, and refs such as `latest` as movable version selectors. Use `latest` intentionally, and pin a generation when replay, auditability, or reproducibility matters.
 - Treat views as reproducible derived artifacts, not as new sources of truth. Reuse an identical derivation instead of copying or modifying its output.
-- Treat activation as the only mutable layer. Profiles record numbered generations and switch a single `current` pointer; workspaces attach through a symlink (or a disposable copy) and never edit memory in place.
-- Preserve provenance without inventing visibility. The environment ID is the durable reference to a view: retain it from build output for later `activate`, `show`, or `rollback`. Environment JSON exposes binding and closure IDs, but not source locators, resolved generations, or locator-to-blob mappings; do not claim otherwise. Full resolved-input provenance lives in the derivation manifest, whose filesystem path is not currently reported by `build` or `show`.
+- Treat movable refs and profile `current` pointers as the small mutable control layer. Profiles record numbered generations and switch one `current` pointer; workspaces attach through a symlink (or a disposable copy) and never edit memory in place.
+- Preserve provenance without inventing visibility. The environment ID is the durable reference to a view: retain it from build output for later `activate` or `show`. Retain profile generation numbers from `activate` or `generations` for `rollback`, which does not accept an environment ID. Environment JSON exposes binding and closure IDs, but not source locators, resolved generations, or locator-to-blob mappings; do not claim otherwise. Full resolved-input provenance lives in the derivation manifest, whose filesystem path is not currently reported by `build` or `show`.
 - Keep selection explicit. Do not invent hidden dependencies, silently add sources, or imply that a suggestion activated memory.
 - Treat `file_tree` as packaging: it assembles selected files at stable paths but does not merge Markdown, apply directive precedence, summarize content, or resolve semantic conflicts.
 - Respect current capability boundaries. The CLI does not yet provide directive resolution, context-pack generation, search/indexing, garbage collection, or remote synchronization.
@@ -54,8 +54,11 @@ memix-store --store-root "<store-root>" ingest --type rules --dest repo/AGENTS.m
 Remember these constraints:
 
 - `--type` is required for `ingest`; use exactly `rules`, `chat`, or `documents`.
+- Without `--dest`, `ingest` creates raw blob objects only. They appear in `list` but cannot be selected by `cat`, `tree`, or `memix-view build` because they have no logical path or context generation.
 - `--dest` accepts one source file only and advances that type's latest generation.
+- To place multiple files in a logical tree or view, run `ingest` once per file with a distinct `--dest`; each new generation carries forward the preceding logical tree.
 - `--message` is valid only with `--dest`.
+- A successful `--dest` ingest logs the full generation ID. Retain it when a later view must pin the exact input rather than use a numbered ref.
 - Logical paths are relative paths inside the chosen type, such as `repo/AGENTS.md`, `sessions/root.json`, or `notes/design.md`.
 
 ## Inspect Store Contents
@@ -111,6 +114,7 @@ Source locator syntax:
 - `<type>/<logical-directory>/` selects all files under a logical directory.
 - Append `@latest`, `@generation/000001`, `@ref/name`, or `@<full-generation-sha>` to pin or select a version.
 - Examples: `rules/repo/AGENTS.md@latest`, `chat/task/2026-05-20/@latest`, `documents/notes/design.md@generation/000001`.
+- `@ref/name` selects an existing custom ref. The current CLI can read such a ref but does not create or manage custom refs.
 
 ## Activate Views
 
@@ -126,8 +130,8 @@ After activation, read memory through the attach path with ordinary file tools (
 Profile selection:
 
 - Without `--profile`, the profile name is `ws-<hash>` derived from the canonical workspace directory, so parallel workspaces never switch each other's memory.
-- Use `--profile NAME` (`[a-z0-9][a-z0-9._-]*`, no `ws-` prefix) only when several workspaces should intentionally share one switchable memory.
-- Sharing a profile behaves differently per mode: link workspaces all follow the profile's one current generation, while a copy activation records one workspace per generation. A copied workspace goes stale when another workspace activates the same profile; re-run `activate` there to refresh it.
+- Use `--profile NAME` (`[a-z0-9][a-z0-9._-]*`, at most 64 characters, no `ws-` prefix) only when several workspaces should intentionally share one switchable memory.
+- Sharing a profile behaves differently per mode: link workspaces all follow the profile's one current generation, while a copy activation records one workspace per generation. A copied workspace goes stale when another workspace activates the same profile; refresh it by activating the profile's current environment with the same profile selection, the same `--into` path, and `--mode copy`.
 
 Re-activating the environment that is already current through an already-correct link attachment is a no-op. Copy activation always rebuilds the disposable workspace copy, even when its environment is already current, so rerun `activate` to repair deleted or modified copied files. Activating a different environment creates the next generation and switches `current`; old generations stay readable under the profile's `generations/` directory.
 
@@ -142,7 +146,9 @@ memix-view --store-root "<store-root>" deactivate --into ./.memory
 memix-view --store-root "<store-root>" deactivate --into ./.memory --wipe-profile
 ```
 
-`generations` and `rollback` take the same `--profile` / `--into` pair as `activate` to resolve which profile to operate on. `status` reports the profile, generation, environment, and staleness of the workspace attachment (`stale: true` means a copied activation is behind the profile's current generation). `deactivate` only removes the workspace attachment unless `--wipe-profile` is given; `--wipe-profile` removes the profile's generations, and other workspaces sharing that profile will dangle.
+`generations` and `rollback` take the same `--profile` / `--into` pair as `activate` to resolve which profile to operate on. For `rollback`, `--into` only helps derive the default profile when `--profile` is omitted; it does not select the workspace to rebuild. Rolling back to a copy generation rematerializes the workspace recorded in that generation's metadata, which may differ from the `--into` path used to select the profile. `status` reports the profile, generation, environment, and staleness of the workspace attachment (`stale: true` means a copied activation is behind the profile's current generation).
+
+`deactivate` only removes the workspace attachment unless `--wipe-profile` is given. Treat `--wipe-profile` as destructive and use it only when the user intends to remove the profile history and the effect on every sharing workspace has been checked. Wiping a shared profile leaves link attachments dangling; copied files remain, but their activation markers reference a missing profile and can no longer be validated or managed as active attachments.
 
 By default, activation never replaces foreign paths: if the `--into` path holds a real file, a real directory without a memix activation marker, or a symlink created for another purpose, the command fails instead of clobbering it. `--force` permits replacing an existing symlink, including a foreign symlink, but never a real file or an unmarked directory.
 
@@ -172,7 +178,7 @@ Common fixes:
 - If `cat`, `tree`, or `memix-view build` says a latest ref is missing, first ingest a file with `--dest` for that type.
 - If a view source is missing, check the logical tree with `memix-store tree --type <type>`.
 - If a locator fails, verify the type is supported, the path is relative, and directory locators end with `/`.
-- If an operation reports a stale lock after a previous memix process crashed, remove the reported lock path: profile locks are `lock` directories under `views/profiles/`, while workspace locks are sibling directories named `.memix-activation-lock-<hash>` beside the attachment path.
-- If `status` reports `stale: true`, re-run `activate` with the current environment to refresh a copied activation.
+- If an operation reports a lock after a previous memix process crashed, first confirm that no memix process is still operating on that exact profile or workspace and obtain approval before deleting anything. Remove only the exact reported lock directory, never a glob or a parent directory: profile locks are `lock` directories under `views/profiles/`, while workspace locks are sibling directories named `.memix-activation-lock-<hash>` beside the attachment path.
+- If `status` reports `stale: true`, re-run `activate` with the profile's current environment, the same profile selection, the same `--into` path, and `--mode copy`. Omitting `--mode copy` selects the default link mode instead of refreshing the copied attachment.
 - If `activate` refuses to replace the `--into` path, use `--force` only when the path is a symlink you intend to replace. Move a real file or unmarked directory aside yourself; memix never clobbers those paths.
 - If output should be isolated from the user's real store, create a new per-task temporary directory and rerun with its path as `--store-root`.
