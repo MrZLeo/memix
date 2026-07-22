@@ -196,17 +196,3 @@ needed to build and run the CLI. See `Formula/README.md` for publishing steps.
 | `memix_ENABLE_DOXYGEN` | `OFF` | Generate Doxygen docs |
 | `memix_ENABLE_LTO` | `OFF` | Enable link-time optimization |
 | `memix_ENABLE_ASAN` | `OFF` | Enable AddressSanitizer |
-
-## 📈 Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=MrZLeo/memix&type=Date)](https://star-history.com/#MrZLeo/memix&Date)
-
----
-
-<div align="center">
-
-**[📄 License](LICENSE)** · BSD 3-Clause © 2026 Jing Zhang &nbsp;|&nbsp; **[🤝 Contributing](CONTRIBUTING.md)** · **[🐛 Report a Bug](https://github.com/MrZLeo/memix/issues)**
-
-If memix helps your agents remember, consider giving it a ⭐!
-
-</div>
