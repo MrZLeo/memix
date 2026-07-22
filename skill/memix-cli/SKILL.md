@@ -1,6 +1,6 @@
 ---
 name: memix-cli
-description: "Use when Codex needs to operate the memix CLI tool group for user-level memory storage and viewing tasks: storing files with memix-store, listing stored objects, reading logical context paths, inspecting agents/chat/documents trees, selecting generations, building memix-view file-tree environments, or showing existing view environments. Focus only on using memix-store, memix-view, and related CLI behavior."
+description: "Use when the agent needs to operate the memix CLI tool group for user-level memory storage and viewing tasks: storing files with memix-store, listing stored objects, reading logical context paths, inspecting agents/chat/documents trees, selecting generations, building memix-view file-tree environments, or showing existing view environments. Focus only on using memix-store, memix-view, and related CLI behavior."
 ---
 
 # Memix CLI
@@ -9,13 +9,15 @@ description: "Use when Codex needs to operate the memix CLI tool group for user-
 
 Use the installed or user-provided `memix-store` and `memix-view` commands. If a binary path is given, preserve it in examples. If the commands are not available, ask for the command path or installation context.
 
-Prefer explicit `--store-root <path>` for experiments, examples, and isolated work. If the user wants the real default store, omit `--store-root`; memix resolves the store root from `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`, then `$HOME/.memix`.
+For experiments, examples, and isolated work, create a fresh temporary directory for each task and pass its absolute path with `--store-root`. Never reuse a fixed shared temporary store. In the examples below, replace `"<store-root>"` with that path and adapt quoting to the active shell; do not use the placeholder literally.
+
+If the user wants the real default store, omit `--store-root`; memix resolves the store root from `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`, then `$HOME/.memix`.
 
 Keep common options before the subcommand:
 
-```bash
-memix-store --store-root /tmp/memix-store list
-memix-view --store-root /tmp/memix-store build --source agents/repo/AGENTS.md
+```text
+memix-store --store-root "<store-root>" list
+memix-view --store-root "<store-root>" build --source agents/repo/AGENTS.md
 ```
 
 Supported object types are `agents`, `chat`, and `documents`.
@@ -26,18 +28,14 @@ Use `memix-store ingest` to place files in the immutable store.
 
 Store one or more raw blobs without adding a logical context path:
 
-```bash
-memix-store --store-root /tmp/memix-store ingest --type documents notes.md transcript.json
+```text
+memix-store --store-root "<store-root>" ingest --type documents notes.md transcript.json
 ```
 
 Store a single file at a logical path inside a type's context tree:
 
-```bash
-memix-store --store-root /tmp/memix-store ingest \
-  --type agents \
-  --dest repo/AGENTS.md \
-  --message "add repo agents" \
-  AGENTS.md
+```text
+memix-store --store-root "<store-root>" ingest --type agents --dest repo/AGENTS.md --message "add repo agents" AGENTS.md
 ```
 
 Remember these constraints:
@@ -51,29 +49,29 @@ Remember these constraints:
 
 List all stored blobs:
 
-```bash
-memix-store --store-root /tmp/memix-store list
+```text
+memix-store --store-root "<store-root>" list
 ```
 
 Filter by type or emit machine-readable metadata:
 
-```bash
-memix-store --store-root /tmp/memix-store list --type agents
-memix-store --store-root /tmp/memix-store list --json
+```text
+memix-store --store-root "<store-root>" list --type agents
+memix-store --store-root "<store-root>" list --json
 ```
 
 Show the latest logical tree for a type:
 
-```bash
-memix-store --store-root /tmp/memix-store tree --type documents
-memix-store --store-root /tmp/memix-store agents tree
+```text
+memix-store --store-root "<store-root>" tree --type documents
+memix-store --store-root "<store-root>" agents tree
 ```
 
 Read a logical file from the latest tree:
 
-```bash
-memix-store --store-root /tmp/memix-store cat --type documents notes/design.md
-memix-store --store-root /tmp/memix-store agents cat repo/AGENTS.md
+```text
+memix-store --store-root "<store-root>" cat --type documents notes/design.md
+memix-store --store-root "<store-root>" agents cat repo/AGENTS.md
 ```
 
 Use `--generation <generation-id>` with `cat`, `tree`, `agents cat`, or `agents tree` to inspect an older immutable generation. The numbered refs under `refs/<type>/generations/000001` point to generation ids; the CLI option expects the generation id itself.
@@ -82,18 +80,14 @@ Use `--generation <generation-id>` with `cat`, `tree`, `agents cat`, or `agents 
 
 Use `memix-view build` to create a file-tree view environment from logical store sources. The only supported target is `file_tree`, and it is the default.
 
-```bash
-memix-view --store-root /tmp/memix-store build \
-  --source agents/repo/AGENTS.md \
-  --source chat/task/2026-05-20/
+```text
+memix-view --store-root "<store-root>" build --source agents/repo/AGENTS.md --source chat/task/2026-05-20/
 ```
 
-Use `--json` when the caller needs the environment manifest instead of the summary:
+Use plain output when the caller needs a human-readable summary or the environment manifest's filesystem path. Use `--json` for a machine-readable environment manifest containing the full environment ID, bindings, and closure IDs. The JSON does not contain filesystem paths.
 
-```bash
-memix-view --store-root /tmp/memix-store build \
-  --source agents/repo/AGENTS.md \
-  --json
+```text
+memix-view --store-root "<store-root>" build --source agents/repo/AGENTS.md --json
 ```
 
 Source locator syntax:
@@ -107,18 +101,18 @@ Source locator syntax:
 
 Use `memix-view show` to inspect an existing environment by full id or unique prefix:
 
-```bash
-memix-view --store-root /tmp/memix-store show 7f3a2c9b1d0e
-memix-view --store-root /tmp/memix-store show 7f3a2c9b1d0e --json
+```text
+memix-view --store-root "<store-root>" show 7f3a2c9b1d0e
+memix-view --store-root "<store-root>" show 7f3a2c9b1d0e --json
 ```
 
-Use the JSON output when another command or answer needs exact manifest paths, bindings, closure ids, derivations, artifacts, or raw object ids.
+The same output distinction applies to `show`: plain output includes the environment manifest's filesystem path, while JSON includes the full environment and binding derivation IDs plus the closure's derivation, artifact, and raw object IDs, but no filesystem paths. Neither mode currently reports the materialized derivation tree's filesystem path.
 
 ## Troubleshooting
 
 Use `--help` on the root command or a subcommand when option details are uncertain:
 
-```bash
+```text
 memix-store --help
 memix-store ingest --help
 memix-view build --help
@@ -129,4 +123,4 @@ Common fixes:
 - If `cat`, `tree`, or `memix-view build` says a latest ref is missing, first ingest a file with `--dest` for that type.
 - If a view source is missing, check the logical tree with `memix-store tree --type <type>`.
 - If a locator fails, verify the type is supported, the path is relative, and directory locators end with `/`.
-- If output should be isolated from the user's real store, rerun with an explicit temporary `--store-root`.
+- If output should be isolated from the user's real store, create a new per-task temporary directory and rerun with its path as `--store-root`.

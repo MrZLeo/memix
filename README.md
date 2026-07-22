@@ -43,11 +43,13 @@ with respect to memix and its third-party dependencies:
 To restore platform-default dynamic runtime linking, configure with
 `-Dmemix_STATIC_LINK=OFF`.
 
-Tag builds publish the standalone CLIs directly as GitHub release assets:
+Tag builds publish the standalone CLIs and Codex skill as GitHub release
+assets:
 
 * `memix-store-linux-x86_64` and `memix-view-linux-x86_64`
 * `memix-store-macos-arm64` and `memix-view-macos-arm64`
 * `memix-store-windows-x86_64.exe` and `memix-view-windows-x86_64.exe`
+* `memix-cli-skill.tar.gz` (platform-independent)
 
 On Linux or macOS, mark a downloaded asset executable before first use:
 
@@ -55,6 +57,17 @@ On Linux or macOS, mark a downloaded asset executable before first use:
 chmod +x memix-store-linux-x86_64
 ./memix-store-linux-x86_64 --version
 ```
+
+## Install with an agent
+
+Copy this request into an agent:
+
+```text
+Install memix by reading and following https://raw.githubusercontent.com/MrZLeo/memix/master/AGENT_INSTALL.md. If your harness supports Agent Skills packages (for example Codex, pi, or Claude Code), install the complete version-matched memix CLI skill package before using either command.
+```
+
+The full bootstrap procedure is also available in
+[AGENT_INSTALL.md](AGENT_INSTALL.md).
 
 ## Run
 

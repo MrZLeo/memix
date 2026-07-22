@@ -160,6 +160,9 @@ jobs:
       contents: write
 
     steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
       - name: create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -170,7 +173,10 @@ jobs:
         with:
           path: artifacts
 
+      - name: package Codex skill
+        run: tar -czf memix-cli-skill.tar.gz -C skill memix-cli
+
       - name: upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/*
+        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz
