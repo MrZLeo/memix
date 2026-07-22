@@ -1,9 +1,21 @@
 ---
 name: memix-cli
-description: "Use when the agent needs to operate the memix CLI tool group for user-level memory storage and viewing tasks: storing files with memix-store, listing stored objects, reading logical context paths, inspecting agents/chat/documents trees, selecting generations, building memix-view file-tree environments, or showing existing view environments. Focus only on using memix-store, memix-view, and related CLI behavior."
+description: "Use when the agent needs to operate the memix CLI tool group for user-level memory storage and viewing tasks: storing files with memix-store, listing stored objects, reading logical context paths, inspecting agents/chat/documents trees, selecting generations, building memix-view file-tree environments, or showing existing view environments. Follow Memix's immutable, versioned, provenance-aware model while using memix-store, memix-view, and related CLI behavior."
 ---
 
 # Memix CLI
+
+## Mental Model
+
+Treat Memix as a Nix-inspired, provenance-aware build system for agent context, not as a mutable notes directory.
+
+- Treat stored blobs as immutable evidence. Ingest changed content as a new object and generation; never edit files inside the store directly.
+- Treat logical trees and refs as version selectors over immutable history. Use `latest` intentionally, and pin a generation when replay, auditability, or reproducibility matters.
+- Treat views as reproducible derived artifacts, not as new sources of truth. Reuse an identical derivation instead of copying or modifying its output.
+- Preserve provenance without inventing visibility. Retain the environment ID and the environment manifest path from plain output when handing off a view. Environment JSON exposes binding and closure IDs, but not source locators, resolved generations, or locator-to-blob mappings; do not claim otherwise. Full resolved-input provenance lives in the derivation manifest, whose filesystem path is not currently reported by `build` or `show`.
+- Keep selection explicit. Do not invent hidden dependencies, silently add sources, or imply that a suggestion activated memory.
+- Treat `file_tree` as packaging: it assembles selected files at stable paths but does not merge Markdown, apply directive precedence, summarize content, or resolve semantic conflicts.
+- Respect current capability boundaries. The CLI does not yet provide directive resolution, context-pack generation, search/indexing, activation/rollback commands, garbage collection, or remote synchronization.
 
 ## Core Rules
 
@@ -89,6 +101,8 @@ Use plain output when the caller needs a human-readable summary or the environme
 ```text
 memix-view --store-root "<store-root>" build --source agents/repo/AGENTS.md --json
 ```
+
+An unqualified locator or `@latest` is resolved when the build runs. The resulting derivation remains immutable, but rerunning the same expression after `latest` moves can produce a different derivation. When the command itself must replay the same input, use a numbered generation ref such as `@generation/000001` or a full generation ID already known from ingest or prior bookkeeping. Current `build --json` and `show --json` output does not reveal each source's resolved generation, so do not promise that `latest` can be converted to a pinned locator from that output alone.
 
 Source locator syntax:
 
