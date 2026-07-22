@@ -5,8 +5,8 @@ import MemixInspectorBridge
 extension MMXObjectType {
     var title: String {
         switch self {
-        case .agents:
-            return "Agents"
+        case .rules:
+            return "Rules"
         case .chat:
             return "Chat"
         case .documents:
@@ -18,8 +18,8 @@ extension MMXObjectType {
 
     var locatorToken: String {
         switch self {
-        case .agents:
-            return "agents"
+        case .rules:
+            return "rules"
         case .chat:
             return "chat"
         case .documents:
@@ -31,8 +31,8 @@ extension MMXObjectType {
 
     var systemImage: String {
         switch self {
-        case .agents:
-            return "person.2"
+        case .rules:
+            return "checklist"
         case .chat:
             return "bubble.left.and.bubble.right"
         case .documents:
@@ -188,7 +188,7 @@ private final class MutableFileTreeNode {
 
 @MainActor
 final class InspectorModel: ObservableObject {
-    @Published var selectedType: MMXObjectType = .agents {
+    @Published var selectedType: MMXObjectType = .rules {
         didSet {
             guard oldValue != selectedType else {
                 return

@@ -64,7 +64,7 @@ struct ContentView: View {
             }
 
             Section("Objects") {
-                ForEach([MMXObjectType.agents, .chat, .documents], id: \.rawValue) { type in
+                ForEach([MMXObjectType.rules, .chat, .documents], id: \.rawValue) { type in
                     Button {
                         model.selectObjectType(type)
                     } label: {

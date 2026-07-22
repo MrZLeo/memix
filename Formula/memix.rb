@@ -57,10 +57,10 @@ class Memix < Formula
     (testpath/"input.txt").write "hello from homebrew\n"
     store_root = testpath/"store"
     system bin/"memix-store", "--store-root", store_root, "ingest",
-           "--type", "agents", "--dest", "input.txt", testpath/"input.txt"
+           "--type", "rules", "--dest", "input.txt", testpath/"input.txt"
 
-    output = shell_output("#{bin}/memix-store --store-root #{store_root} list --type agents")
-    assert_match "agents", output
+    output = shell_output("#{bin}/memix-store --store-root #{store_root} list --type rules")
+    assert_match "rules", output
     assert_match "input.txt", output
     assert_match "memix #{version}", shell_output("#{bin}/memix-view --version")
   end

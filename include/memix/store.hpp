@@ -15,7 +15,7 @@
 
 namespace memix {
 
-enum class MemoryObjectType : std::uint8_t { Agents, Chat, Documents };
+enum class MemoryObjectType : std::uint8_t { Rules, Chat, Documents };
 enum class ContextTreeEntryKind : std::uint8_t { Blob, Tree };
 
 namespace detail {
@@ -54,8 +54,8 @@ struct ContextTreeEntryKindToken {
 
 inline constexpr std::array kMemoryObjectTypeTokens{
     MemoryObjectTypeToken{
-        .value = MemoryObjectType::Agents,
-        .token = "agents",
+        .value = MemoryObjectType::Rules,
+        .token = "rules",
     },
     MemoryObjectTypeToken{
         .value = MemoryObjectType::Chat,
@@ -120,7 +120,7 @@ StoreResult<fs::path> default_store_root();
 struct StoredObject {
   int schema_version = 1;
   int object_version = 1;
-  MemoryObjectType type = MemoryObjectType::Agents;
+  MemoryObjectType type = MemoryObjectType::Rules;
   std::string id;
   std::string hash_algorithm = "sha256";
   std::string hash;
@@ -149,7 +149,7 @@ struct ContextTreeEntry {
 struct ContextTree {
   int schema_version = 1;
   int object_version = 1;
-  MemoryObjectType type = MemoryObjectType::Agents;
+  MemoryObjectType type = MemoryObjectType::Rules;
   std::string id;
   std::vector<ContextTreeEntry> entries;
   fs::path object_path;
@@ -158,7 +158,7 @@ struct ContextTree {
 struct ContextGeneration {
   int schema_version = 1;
   int object_version = 1;
-  MemoryObjectType type = MemoryObjectType::Agents;
+  MemoryObjectType type = MemoryObjectType::Rules;
   std::string id;
   std::string root_tree;
   std::optional<std::string> parent;

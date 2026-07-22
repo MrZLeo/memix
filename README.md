@@ -72,9 +72,9 @@ The full bootstrap procedure is also available in
 ## Run
 
 ```bash
-./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type agents --dest README.md README.md
+./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
 ./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
-./build/bin/Release/memix-store --store-root /tmp/memix-store agents tree
+./build/bin/Release/memix-store --store-root /tmp/memix-store rules tree
 ./build/bin/Release/memix-store --store-root /tmp/memix-store list
 ./build/bin/Release/memix-store --store-root /tmp/memix-store list --json
 ./build/bin/Release/memix-store --version
@@ -82,7 +82,7 @@ The full bootstrap procedure is also available in
 ```
 
 `memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
-then `$HOME/.memix`. The supported immutable object types are `agents`, `chat`,
+then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,
 and `documents`. Stored bytes live as immutable SHA-256 blobs under each
 type's `blobs/` directory; when ingest uses `--dest`, memix also records the
 blob in that type's canonical context tree and advances the type's latest
@@ -91,16 +91,16 @@ generation ref.
 For a manual smoke check against the real default store root, run:
 
 ```bash
-./build/bin/Release/memix-store ingest --type agents --dest README.md README.md
-./build/bin/Release/memix-store agents tree
-./build/bin/Release/memix-store list --type agents
+./build/bin/Release/memix-store ingest --type rules --dest README.md README.md
+./build/bin/Release/memix-store rules tree
+./build/bin/Release/memix-store list --type rules
 ```
 
 All object types can ingest plain blobs. Passing `--dest` stores the blob at a
 logical path inside that type's canonical context tree and advances its latest
-generation ref. Commands under `agents` operate on the agents logical tree. Refs
-such as `refs/agents/latest`, `refs/documents/latest`, and
-`refs/agents/generations/000001` are small mutable files containing immutable
+generation ref. Commands under `rules` operate on the rules logical tree. Refs
+such as `refs/rules/latest`, `refs/documents/latest`, and
+`refs/rules/generations/000001` are small mutable files containing immutable
 generation ids; each generation then points at its immutable root tree.
 
 That writes outside the repository, so use `--store-root` when you want an

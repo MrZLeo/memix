@@ -15,7 +15,7 @@
 
 namespace fs = memix::fs;
 
-static_assert(memix::to_string(memix::MemoryObjectType::Agents) == "agents");
+static_assert(memix::to_string(memix::MemoryObjectType::Rules) == "rules");
 static_assert(memix::parse_memory_object_type("documents")
               == memix::MemoryObjectType::Documents);
 static_assert(memix::memory_object_type_values()[1]
@@ -136,23 +136,24 @@ void make_object_mutable_for_corruption(const fs::path &object_dir) {
 
 TEST_CASE("memory object type helpers accept only supported v1 types",
           "[store]") {
-  REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Agents))
-          == "agents");
+  REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Rules))
+          == "rules");
   REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Chat))
           == "chat");
   REQUIRE(std::string(memix::to_string(memix::MemoryObjectType::Documents))
           == "documents");
-  REQUIRE(memix::parse_memory_object_type("agents")
-          == memix::MemoryObjectType::Agents);
+  REQUIRE(memix::parse_memory_object_type("rules")
+          == memix::MemoryObjectType::Rules);
   REQUIRE(memix::parse_memory_object_type("chat")
           == memix::MemoryObjectType::Chat);
   REQUIRE(memix::parse_memory_object_type("documents")
           == memix::MemoryObjectType::Documents);
   REQUIRE_FALSE(memix::parse_memory_object_type("pdf").has_value());
-  REQUIRE_FALSE(memix::parse_memory_object_type("Agents").has_value());
+  REQUIRE_FALSE(memix::parse_memory_object_type("agents").has_value());
+  REQUIRE_FALSE(memix::parse_memory_object_type("Rules").has_value());
 
   const std::vector expected_types{
-      memix::MemoryObjectType::Agents,
+      memix::MemoryObjectType::Rules,
       memix::MemoryObjectType::Chat,
       memix::MemoryObjectType::Documents,
   };
@@ -236,18 +237,18 @@ TEST_CASE("ingest stores a regular file as immutable metadata and content",
   REQUIRE(metadata.find(source.string()) == std::string::npos);
 }
 
-TEST_CASE("generic ingest stores agent blobs without a logical destination",
+TEST_CASE("generic ingest stores rule blobs without a logical destination",
           "[store]") {
-  TemporaryDirectory directory("agents-generic-blob-ingest");
+  TemporaryDirectory directory("rules-generic-blob-ingest");
   const fs::path source = directory.path() / "AGENTS.md";
   write_file(source, "rules");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Agents, source);
+  const auto result = store.ingest(memix::MemoryObjectType::Rules, source);
   REQUIRE(result.has_value());
 
   REQUIRE(result->inserted);
-  REQUIRE(result->object.type == memix::MemoryObjectType::Agents);
+  REQUIRE(result->object.type == memix::MemoryObjectType::Rules);
   REQUIRE(read_file(result->object.object_dir / result->object.content_path)
           == "rules");
 }
@@ -292,15 +293,15 @@ TEST_CASE("duplicate ingest in the same type returns the existing object",
   REQUIRE(chat_objects->size() == 1);
 }
 
-TEST_CASE("agent blob ingest stores duplicate content once", "[store]") {
-  TemporaryDirectory directory("agent-blob-duplicate");
+TEST_CASE("rule blob ingest stores duplicate content once", "[store]") {
+  TemporaryDirectory directory("rule-blob-duplicate");
   const fs::path source = directory.path() / "AGENTS.md";
   write_file(source, "python rules");
 
   const memix::Store store(directory.path() / "store");
-  const auto first = store.ingest_blob(memix::MemoryObjectType::Agents, source);
+  const auto first = store.ingest_blob(memix::MemoryObjectType::Rules, source);
   const auto second = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = source,
       .context_path = "lang/python/AGENTS.md",
       .message = "add python",
@@ -312,22 +313,22 @@ TEST_CASE("agent blob ingest stores duplicate content once", "[store]") {
   REQUIRE_FALSE(second->blob.inserted);
   REQUIRE(first->object.id == second->blob.object.id);
   REQUIRE(path_is_regular_file(
-      object_dir_for(store, memix::MemoryObjectType::Agents, first->object.id)
+      object_dir_for(store, memix::MemoryObjectType::Rules, first->object.id)
       / "object"));
 
-  const auto agents = store.list(memix::MemoryObjectType::Agents);
-  REQUIRE(agents.has_value());
-  REQUIRE(agents->size() == 1);
+  const auto rules = store.list(memix::MemoryObjectType::Rules);
+  REQUIRE(rules.has_value());
+  REQUIRE(rules->size() == 1);
 }
 
-TEST_CASE("agent ingest creates a generation and latest ref", "[store]") {
-  TemporaryDirectory directory("agent-ingest-first");
+TEST_CASE("rule ingest creates a generation and latest ref", "[store]") {
+  TemporaryDirectory directory("rule-ingest-first");
   const fs::path source = directory.path() / "AGENTS.md";
   write_file(source, "prefer uv\n");
 
   const memix::Store store(directory.path() / "store");
   const auto ingest = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = source,
       .context_path = "lang/python/AGENTS.md",
       .message = "add python",
@@ -337,46 +338,46 @@ TEST_CASE("agent ingest creates a generation and latest ref", "[store]") {
   REQUIRE(ingest->context_path == fs::path("lang/python/AGENTS.md"));
   REQUIRE_FALSE(ingest->previous_generation.has_value());
   REQUIRE(path_is_regular_file(
-      store.root() / "agents" / "blobs" / ingest->blob.object.id / "object"));
+      store.root() / "rules" / "blobs" / ingest->blob.object.id / "object"));
   REQUIRE(path_is_regular_file(
       store.root()
-      / "agents"
+      / "rules"
       / "trees"
       / std::format("{}.json", ingest->generation.root_tree)));
   REQUIRE(
       path_is_regular_file(store.root()
-                           / "agents"
+                           / "rules"
                            / "generations"
                            / std::format("{}.json", ingest->generation.id)));
 
-  const auto latest = store.read_ref("agents/latest");
+  const auto latest = store.read_ref("rules/latest");
   REQUIRE(latest.has_value());
   REQUIRE(latest->has_value());
   REQUIRE(**latest == ingest->generation.id);
-  REQUIRE(path_is_regular_file(store.root() / "refs" / "agents" / "latest"));
-  REQUIRE(read_file(store.root() / "refs" / "agents" / "latest")
+  REQUIRE(path_is_regular_file(store.root() / "refs" / "rules" / "latest"));
+  REQUIRE(read_file(store.root() / "refs" / "rules" / "latest")
           == std::format("{}\n", ingest->generation.id));
-  const auto first_generation_ref = store.read_ref("agents/generations/000001");
+  const auto first_generation_ref = store.read_ref("rules/generations/000001");
   REQUIRE(first_generation_ref.has_value());
   REQUIRE(first_generation_ref->has_value());
   REQUIRE(**first_generation_ref == ingest->generation.id);
   REQUIRE(path_is_regular_file(
-      store.root() / "refs" / "agents" / "generations" / "000001"));
+      store.root() / "refs" / "rules" / "generations" / "000001"));
 
   const auto file =
-      store.read_file(memix::MemoryObjectType::Agents, "lang/python/AGENTS.md");
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md");
   REQUIRE(file.has_value());
   REQUIRE(read_file(file->object_dir / file->content_path) == "prefer uv\n");
 
-  const auto files = store.list_files(memix::MemoryObjectType::Agents);
+  const auto files = store.list_files(memix::MemoryObjectType::Rules);
   REQUIRE(files.has_value());
   REQUIRE(files->size() == 1);
   REQUIRE((*files)[0].context_path == fs::path("lang/python/AGENTS.md"));
 }
 
-TEST_CASE("agent generations preserve old trees after later ingests",
+TEST_CASE("rule generations preserve old trees after later ingests",
           "[store]") {
-  TemporaryDirectory directory("agent-ingest-generations");
+  TemporaryDirectory directory("rule-ingest-generations");
   const fs::path python_source = directory.path() / "python.md";
   const fs::path vllm_source = directory.path() / "vllm.md";
   write_file(python_source, "python base\n");
@@ -384,7 +385,7 @@ TEST_CASE("agent generations preserve old trees after later ingests",
 
   const memix::Store store(directory.path() / "store");
   const auto first = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = python_source,
       .context_path = "lang/python/AGENTS.md",
       .message = "add python",
@@ -393,7 +394,7 @@ TEST_CASE("agent generations preserve old trees after later ingests",
   const std::string first_generation = first->generation.id;
 
   const auto second = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = vllm_source,
       .context_path = "lang/python/vllm/AGENTS.md",
       .message = "add vllm",
@@ -401,26 +402,25 @@ TEST_CASE("agent generations preserve old trees after later ingests",
   REQUIRE(second.has_value());
   REQUIRE(second->previous_generation == first_generation);
   REQUIRE(second->generation.parent == first_generation);
-  const auto second_generation_ref =
-      store.read_ref("agents/generations/000002");
+  const auto second_generation_ref = store.read_ref("rules/generations/000002");
   REQUIRE(second_generation_ref.has_value());
   REQUIRE(second_generation_ref->has_value());
   REQUIRE(**second_generation_ref == second->generation.id);
 
   const auto old_python =
-      store.read_file(memix::MemoryObjectType::Agents, "lang/python/AGENTS.md",
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md",
                       std::optional<std::string_view>{first_generation});
   REQUIRE(old_python.has_value());
   REQUIRE(read_file(old_python->object_dir / old_python->content_path)
           == "python base\n");
   const auto missing_old_vllm = store.read_file(
-      memix::MemoryObjectType::Agents, "lang/python/vllm/AGENTS.md",
+      memix::MemoryObjectType::Rules, "lang/python/vllm/AGENTS.md",
       std::optional<std::string_view>{first_generation});
   REQUIRE_FALSE(missing_old_vllm.has_value());
   REQUIRE(missing_old_vllm.error().kind
           == memix::ErrorKind::ContextPathNotFound);
 
-  const auto latest_files = store.list_files(memix::MemoryObjectType::Agents);
+  const auto latest_files = store.list_files(memix::MemoryObjectType::Rules);
   REQUIRE(latest_files.has_value());
   REQUIRE(latest_files->size() == 2);
   REQUIRE((*latest_files)[0].context_path == fs::path("lang/python/AGENTS.md"));
@@ -428,8 +428,8 @@ TEST_CASE("agent generations preserve old trees after later ingests",
           == fs::path("lang/python/vllm/AGENTS.md"));
 }
 
-TEST_CASE("replacing an agent file leaves prior tree readable", "[store]") {
-  TemporaryDirectory directory("agent-replace");
+TEST_CASE("replacing a rule file leaves prior tree readable", "[store]") {
+  TemporaryDirectory directory("rule-replace");
   const fs::path first_source = directory.path() / "first.md";
   const fs::path second_source = directory.path() / "second.md";
   write_file(first_source, "pip workflow\n");
@@ -437,14 +437,14 @@ TEST_CASE("replacing an agent file leaves prior tree readable", "[store]") {
 
   const memix::Store store(directory.path() / "store");
   const auto first = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = first_source,
       .context_path = "lang/python/AGENTS.md",
       .message = "add python",
   });
   REQUIRE(first.has_value());
   const auto second = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = second_source,
       .context_path = "lang/python/AGENTS.md",
       .message = "replace python",
@@ -452,17 +452,17 @@ TEST_CASE("replacing an agent file leaves prior tree readable", "[store]") {
   REQUIRE(second.has_value());
 
   const auto old_file =
-      store.read_file(memix::MemoryObjectType::Agents, "lang/python/AGENTS.md",
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md",
                       std::optional<std::string_view>{first->generation.id});
   const auto latest_file =
-      store.read_file(memix::MemoryObjectType::Agents, "lang/python/AGENTS.md");
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md");
   REQUIRE(old_file.has_value());
   REQUIRE(latest_file.has_value());
   REQUIRE(read_file(old_file->object_dir / old_file->content_path)
           == "pip workflow\n");
   REQUIRE(read_file(latest_file->object_dir / latest_file->content_path)
           == "uv workflow\n");
-  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Agents,
+  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Rules,
                                      first->blob.object.id)));
 }
 
@@ -580,9 +580,9 @@ TEST_CASE("chat context trees use independent refs and logical paths",
   REQUIRE(chat_latest.has_value());
   REQUIRE(chat_latest->has_value());
   REQUIRE(**chat_latest == ingest->generation.id);
-  const auto agents_latest = store.read_ref("agents/latest");
-  REQUIRE(agents_latest.has_value());
-  REQUIRE_FALSE(agents_latest->has_value());
+  const auto rules_latest = store.read_ref("rules/latest");
+  REQUIRE(rules_latest.has_value());
+  REQUIRE_FALSE(rules_latest->has_value());
 
   const auto files = store.list_files(memix::MemoryObjectType::Chat);
   REQUIRE(files.has_value());
@@ -590,8 +590,8 @@ TEST_CASE("chat context trees use independent refs and logical paths",
   REQUIRE((*files)[0].context_path == fs::path("sessions/root.json"));
 }
 
-TEST_CASE("agent ingest rejects replacing a tree with a file", "[store]") {
-  TemporaryDirectory directory("agent-tree-file-conflict");
+TEST_CASE("rule ingest rejects replacing a tree with a file", "[store]") {
+  TemporaryDirectory directory("rule-tree-file-conflict");
   const fs::path nested_source = directory.path() / "nested.md";
   const fs::path root_source = directory.path() / "root.md";
   write_file(nested_source, "nested rules\n");
@@ -599,7 +599,7 @@ TEST_CASE("agent ingest rejects replacing a tree with a file", "[store]") {
 
   const memix::Store store(directory.path() / "store");
   const auto first = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = nested_source,
       .context_path = "a/b.md",
       .message = "add nested",
@@ -607,43 +607,42 @@ TEST_CASE("agent ingest rejects replacing a tree with a file", "[store]") {
   REQUIRE(first.has_value());
 
   const auto replacement = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = root_source,
       .context_path = "a",
       .message = "replace tree",
   });
   REQUIRE_FALSE(replacement.has_value());
 
-  const auto latest = store.read_ref("agents/latest");
+  const auto latest = store.read_ref("rules/latest");
   REQUIRE(latest.has_value());
   REQUIRE(latest->has_value());
   REQUIRE(**latest == first->generation.id);
-  const auto second_generation_ref =
-      store.read_ref("agents/generations/000002");
+  const auto second_generation_ref = store.read_ref("rules/generations/000002");
   REQUIRE(second_generation_ref.has_value());
   REQUIRE_FALSE(second_generation_ref->has_value());
 
   const auto nested_file =
-      store.read_file(memix::MemoryObjectType::Agents, "a/b.md");
+      store.read_file(memix::MemoryObjectType::Rules, "a/b.md");
   REQUIRE(nested_file.has_value());
   REQUIRE(read_file(nested_file->object_dir / nested_file->content_path)
           == "nested rules\n");
   REQUIRE_FALSE(
-      store.read_file(memix::MemoryObjectType::Agents, "a").has_value());
-  const auto files = store.list_files(memix::MemoryObjectType::Agents);
+      store.read_file(memix::MemoryObjectType::Rules, "a").has_value());
+  const auto files = store.list_files(memix::MemoryObjectType::Rules);
   REQUIRE(files.has_value());
   REQUIRE(files->size() == 1);
   REQUIRE((*files)[0].context_path == fs::path("a/b.md"));
 }
 
-TEST_CASE("agent paths reject unsafe components", "[store]") {
-  TemporaryDirectory directory("agent-invalid-paths");
+TEST_CASE("rule paths reject unsafe components", "[store]") {
+  TemporaryDirectory directory("rule-invalid-paths");
   const fs::path source = directory.path() / "AGENTS.md";
   write_file(source, "rules");
   const memix::Store store(directory.path() / "store");
 
   const auto empty_path = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = source,
       .context_path = "",
       .message = "bad",
@@ -652,7 +651,7 @@ TEST_CASE("agent paths reject unsafe components", "[store]") {
   REQUIRE(empty_path.error().kind == memix::ErrorKind::InvalidArgument);
   REQUIRE_FALSE(store
                     .ingest_file({
-                        .type = memix::MemoryObjectType::Agents,
+                        .type = memix::MemoryObjectType::Rules,
                         .source_path = source,
                         .context_path = "/abs/AGENTS.md",
                         .message = "bad",
@@ -660,7 +659,7 @@ TEST_CASE("agent paths reject unsafe components", "[store]") {
                     .has_value());
   REQUIRE_FALSE(store
                     .ingest_file({
-                        .type = memix::MemoryObjectType::Agents,
+                        .type = memix::MemoryObjectType::Rules,
                         .source_path = source,
                         .context_path = "lang/../python/AGENTS.md",
                         .message = "bad",
@@ -668,7 +667,7 @@ TEST_CASE("agent paths reject unsafe components", "[store]") {
                     .has_value());
   REQUIRE_FALSE(store
                     .ingest_file({
-                        .type = memix::MemoryObjectType::Agents,
+                        .type = memix::MemoryObjectType::Rules,
                         .source_path = source,
                         .context_path = "lang/python/",
                         .message = "bad",
@@ -676,7 +675,7 @@ TEST_CASE("agent paths reject unsafe components", "[store]") {
                     .has_value());
   REQUIRE_FALSE(store
                     .ingest_file({
-                        .type = memix::MemoryObjectType::Agents,
+                        .type = memix::MemoryObjectType::Rules,
                         .source_path = source,
                         .context_path = "lang\\python\\AGENTS.md",
                         .message = "bad",
@@ -685,7 +684,7 @@ TEST_CASE("agent paths reject unsafe components", "[store]") {
 }
 
 TEST_CASE("ref updates fail on expected old mismatches", "[store]") {
-  TemporaryDirectory directory("agent-ref-mismatch");
+  TemporaryDirectory directory("rule-ref-mismatch");
   const fs::path first_source = directory.path() / "first.md";
   const fs::path second_source = directory.path() / "second.md";
   write_file(first_source, "first");
@@ -693,13 +692,13 @@ TEST_CASE("ref updates fail on expected old mismatches", "[store]") {
 
   const memix::Store store(directory.path() / "store");
   const auto first = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = first_source,
       .context_path = "one.md",
       .message = "one",
   });
   const auto second = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = second_source,
       .context_path = "two.md",
       .message = "two",
@@ -708,17 +707,17 @@ TEST_CASE("ref updates fail on expected old mismatches", "[store]") {
   REQUIRE(second.has_value());
 
   const memix::StoreVoid result = store.update_ref(
-      "agents/latest", std::optional<std::string_view>{first->generation.id},
+      "rules/latest", std::optional<std::string_view>{first->generation.id},
       second->generation.id);
   REQUIRE_FALSE(result.has_value());
 
-  REQUIRE(fs::create_directory(store.root() / "refs" / "agents" / "latest.lock")
+  REQUIRE(fs::create_directory(store.root() / "refs" / "rules" / "latest.lock")
               .value_or(false));
   const memix::StoreVoid locked_result = store.update_ref(
-      "agents/latest", std::optional<std::string_view>{second->generation.id},
+      "rules/latest", std::optional<std::string_view>{second->generation.id},
       first->generation.id);
   REQUIRE_FALSE(locked_result.has_value());
-  const auto latest = store.read_ref("agents/latest");
+  const auto latest = store.read_ref("rules/latest");
   REQUIRE(latest.has_value());
   REQUIRE(latest->has_value());
   REQUIRE(**latest == second->generation.id);
@@ -726,7 +725,7 @@ TEST_CASE("ref updates fail on expected old mismatches", "[store]") {
 
 TEST_CASE("failed latest update rolls back numbered generation ref",
           "[store]") {
-  TemporaryDirectory directory("agent-generation-ref-rollback");
+  TemporaryDirectory directory("rule-generation-ref-rollback");
   const fs::path first_source = directory.path() / "first.md";
   const fs::path second_source = directory.path() / "second.md";
   write_file(first_source, "first");
@@ -734,30 +733,29 @@ TEST_CASE("failed latest update rolls back numbered generation ref",
 
   const memix::Store store(directory.path() / "store");
   const auto first = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = first_source,
       .context_path = "rules.md",
       .message = "first",
   });
   REQUIRE(first.has_value());
 
-  REQUIRE(fs::create_directory(store.root() / "refs" / "agents" / "latest.lock")
+  REQUIRE(fs::create_directory(store.root() / "refs" / "rules" / "latest.lock")
               .value_or(false));
   const auto second = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+      .type = memix::MemoryObjectType::Rules,
       .source_path = second_source,
       .context_path = "rules.md",
       .message = "second",
   });
   REQUIRE_FALSE(second.has_value());
 
-  const auto latest = store.read_ref("agents/latest");
+  const auto latest = store.read_ref("rules/latest");
   REQUIRE(latest.has_value());
   REQUIRE(latest->has_value());
   REQUIRE(**latest == first->generation.id);
 
-  const auto second_generation_ref =
-      store.read_ref("agents/generations/000002");
+  const auto second_generation_ref = store.read_ref("rules/generations/000002");
   REQUIRE(second_generation_ref.has_value());
   REQUIRE_FALSE(second_generation_ref->has_value());
 }
@@ -769,22 +767,22 @@ TEST_CASE("the same content can exist independently across object types",
   write_file(source, "shared bytes");
 
   const memix::Store store(directory.path() / "store");
-  const auto agents = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
+  const auto rules = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
       .source_path = source,
       .context_path = "memory.txt",
       .message = "add memory",
   });
   const auto documents =
       store.ingest(memix::MemoryObjectType::Documents, source);
-  REQUIRE(agents.has_value());
+  REQUIRE(rules.has_value());
   REQUIRE(documents.has_value());
 
-  REQUIRE(agents->blob.inserted);
+  REQUIRE(rules->blob.inserted);
   REQUIRE(documents->inserted);
-  REQUIRE(agents->blob.object.id == documents->object.id);
-  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Agents,
-                                     agents->blob.object.id)));
+  REQUIRE(rules->blob.object.id == documents->object.id);
+  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Rules,
+                                     rules->blob.object.id)));
   REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Documents,
                                      documents->object.id)));
   const auto objects = store.list();
@@ -794,29 +792,29 @@ TEST_CASE("the same content can exist independently across object types",
 
 TEST_CASE("list supports deterministic ordering and type filters", "[store]") {
   TemporaryDirectory directory("list");
-  const fs::path agents_source = directory.path() / "agents.md";
+  const fs::path rules_source = directory.path() / "rules.md";
   const fs::path chat_source = directory.path() / "chat.json";
-  write_file(agents_source, "agents");
+  write_file(rules_source, "rules");
   write_file(chat_source, "chat");
 
   const memix::Store store(directory.path() / "store");
   const auto chat = store.ingest(memix::MemoryObjectType::Chat, chat_source);
-  const auto agents = store.ingest_file({
-      .type = memix::MemoryObjectType::Agents,
-      .source_path = agents_source,
-      .context_path = "agents.md",
-      .message = "add agents",
+  const auto rules = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = rules_source,
+      .context_path = "rules.md",
+      .message = "add rules",
   });
   REQUIRE(chat.has_value());
-  REQUIRE(agents.has_value());
+  REQUIRE(rules.has_value());
 
   const auto all = store.list();
   REQUIRE(all.has_value());
   REQUIRE(all->size() == 2);
-  REQUIRE((*all)[0].type == memix::MemoryObjectType::Agents);
-  REQUIRE((*all)[0].id == agents->blob.object.id);
-  REQUIRE((*all)[1].type == memix::MemoryObjectType::Chat);
-  REQUIRE((*all)[1].id == chat->object.id);
+  REQUIRE((*all)[0].type == memix::MemoryObjectType::Chat);
+  REQUIRE((*all)[0].id == chat->object.id);
+  REQUIRE((*all)[1].type == memix::MemoryObjectType::Rules);
+  REQUIRE((*all)[1].id == rules->blob.object.id);
 
   const auto chat_only = store.list(memix::MemoryObjectType::Chat);
   REQUIRE(chat_only.has_value());

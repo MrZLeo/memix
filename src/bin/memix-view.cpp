@@ -144,7 +144,7 @@ memix::cli_detail::VoidResult run_show(const ViewCliOptions &options) {
 void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
   parser.add(Argum::Option("--source")
                  .argName("TEXT")
-                 .help("View locator, for example agents/repo/AGENTS.md or "
+                 .help("View locator, for example rules/repo/AGENTS.md or "
                        "chat/task/2026-05-20/@latest.")
                  .handler([&options](std::string_view value) {
                    options.sources.emplace_back(value);

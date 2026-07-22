@@ -3,7 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, MMXObjectType) {
-  MMXObjectTypeAgents = 0,
+  MMXObjectTypeRules = 0,
   MMXObjectTypeChat = 1,
   MMXObjectTypeDocuments = 2,
 };

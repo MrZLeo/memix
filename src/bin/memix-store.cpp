@@ -44,9 +44,9 @@ enum class StoreCommand : std::uint8_t {
   Ingest,
   Cat,
   Tree,
-  Agents,
-  AgentsCat,
-  AgentsTree,
+  Rules,
+  RulesCat,
+  RulesTree,
 };
 
 struct StoreCliOptions {
@@ -464,46 +464,46 @@ void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
                         "latest ref.");
 }
 
-void add_agents_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
+void add_rules_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
   options.cat_type_name =
-      std::string(memix::to_string(memix::MemoryObjectType::Agents));
-  parser.add(Argum::Positional("agent-path")
-                 .help("Logical path inside the agents tree.")
+      std::string(memix::to_string(memix::MemoryObjectType::Rules));
+  parser.add(Argum::Positional("rule-path")
+                 .help("Logical path inside the rules tree.")
                  .occurs(Argum::neverOrOnce)
                  .handler([&options](std::string_view value) {
                    options.cat_path = fs::path(value);
                  }));
   add_generation_option(parser, options.cat_generation,
-                        "Generation id. Defaults to agents/latest.");
+                        "Generation id. Defaults to rules/latest.");
 }
 
-void add_agents_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
+void add_rules_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
   options.tree_type_name =
-      std::string(memix::to_string(memix::MemoryObjectType::Agents));
+      std::string(memix::to_string(memix::MemoryObjectType::Rules));
   add_generation_option(parser, options.tree_generation,
-                        "Generation id. Defaults to agents/latest.");
+                        "Generation id. Defaults to rules/latest.");
 }
 
-void add_agents_commands(Argum::Parser &parser, StoreCliOptions &options) {
-  options.command = StoreCommand::Agents;
+void add_rules_commands(Argum::Parser &parser, StoreCliOptions &options) {
+  options.command = StoreCommand::Rules;
   parser.addSubCommand(
-      Argum::Positional("agents-command")
+      Argum::Positional("rules-command")
           .occurs(Argum::neverOrOnce)
-          .help("Agents command: cat or tree.")
+          .help("Rules command: cat or tree.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "cat") {
-              options.command = StoreCommand::AgentsCat;
-              add_agents_cat_command(parser, options);
+              options.command = StoreCommand::RulesCat;
+              add_rules_cat_command(parser, options);
               return {};
             }
             if (value == "tree") {
-              options.command = StoreCommand::AgentsTree;
-              add_agents_tree_command(parser, options);
+              options.command = StoreCommand::RulesTree;
+              add_rules_tree_command(parser, options);
               return {};
             }
             return memix::cli_detail::argum_validation_error(std::format(
-                "unsupported agents command `{}`; expected cat|tree", value));
+                "unsupported rules command `{}`; expected cat|tree", value));
           }));
 }
 
@@ -511,7 +511,7 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: list, ingest, cat, tree, or agents.")
+          .help("Subcommand: list, ingest, cat, tree, or rules.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "list") {
@@ -534,13 +534,13 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
               add_tree_command(parser, options);
               return {};
             }
-            if (value == "agents") {
-              add_agents_commands(parser, options);
+            if (value == "rules") {
+              add_rules_commands(parser, options);
               return {};
             }
             return memix::cli_detail::argum_validation_error(
                 std::format("unsupported command `{}`; expected "
-                            "list|ingest|cat|tree|agents",
+                            "list|ingest|cat|tree|rules",
                             value));
           }));
 }
@@ -585,28 +585,28 @@ void print_tree_help() {
   std::print("{}", parser.formatHelp("memix-store tree"));
 }
 
-void print_agents_help() {
+void print_rules_help() {
   Argum::Parser parser;
   StoreCliOptions options;
   memix::cli_detail::add_common_options(parser, options.common);
-  add_agents_commands(parser, options);
-  std::print("{}", parser.formatHelp("memix-store agents"));
+  add_rules_commands(parser, options);
+  std::print("{}", parser.formatHelp("memix-store rules"));
 }
 
-void print_agents_cat_help() {
+void print_rules_cat_help() {
   Argum::Parser parser;
   StoreCliOptions options;
   memix::cli_detail::add_common_options(parser, options.common);
-  add_agents_cat_command(parser, options);
-  std::print("{}", parser.formatHelp("memix-store agents cat"));
+  add_rules_cat_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-store rules cat"));
 }
 
-void print_agents_tree_help() {
+void print_rules_tree_help() {
   Argum::Parser parser;
   StoreCliOptions options;
   memix::cli_detail::add_common_options(parser, options.common);
-  add_agents_tree_command(parser, options);
-  std::print("{}", parser.formatHelp("memix-store agents tree"));
+  add_rules_tree_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-store rules tree"));
 }
 
 void print_selected_help(StoreCommand command) {
@@ -623,14 +623,14 @@ void print_selected_help(StoreCommand command) {
   case StoreCommand::Tree:
     print_tree_help();
     return;
-  case StoreCommand::Agents:
-    print_agents_help();
+  case StoreCommand::Rules:
+    print_rules_help();
     return;
-  case StoreCommand::AgentsCat:
-    print_agents_cat_help();
+  case StoreCommand::RulesCat:
+    print_rules_cat_help();
     return;
-  case StoreCommand::AgentsTree:
-    print_agents_tree_help();
+  case StoreCommand::RulesTree:
+    print_rules_tree_help();
     return;
   case StoreCommand::None:
     print_root_help();
@@ -647,14 +647,14 @@ dispatch(const StoreCliOptions &options,
   case StoreCommand::Ingest:
     return run_ingest(options, logger);
   case StoreCommand::Cat:
-  case StoreCommand::AgentsCat:
+  case StoreCommand::RulesCat:
     return run_cat(options);
   case StoreCommand::Tree:
-  case StoreCommand::AgentsTree:
+  case StoreCommand::RulesTree:
     return run_tree(options);
-  case StoreCommand::Agents:
+  case StoreCommand::Rules:
     return memix::cli_detail::unexpected_error(
-        "agents requires a subcommand: cat|tree");
+        "rules requires a subcommand: cat|tree");
   case StoreCommand::None:
     return memix::cli_detail::unexpected_error("a subcommand is required");
   }

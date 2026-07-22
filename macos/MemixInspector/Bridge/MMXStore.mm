@@ -122,8 +122,8 @@ fs::path MMXPath(NSURL *url) { return {MMXStdString(url.path)}; }
 
 MMXObjectType MMXObjectTypeFromMemory(memix::MemoryObjectType type) {
   switch (type) {
-  case memix::MemoryObjectType::Agents:
-    return MMXObjectTypeAgents;
+  case memix::MemoryObjectType::Rules:
+    return MMXObjectTypeRules;
   case memix::MemoryObjectType::Chat:
     return MMXObjectTypeChat;
   case memix::MemoryObjectType::Documents:
@@ -133,8 +133,8 @@ MMXObjectType MMXObjectTypeFromMemory(memix::MemoryObjectType type) {
 
 std::optional<memix::MemoryObjectType> MMXMemoryObjectType(MMXObjectType type) {
   switch (type) {
-  case MMXObjectTypeAgents:
-    return memix::MemoryObjectType::Agents;
+  case MMXObjectTypeRules:
+    return memix::MemoryObjectType::Rules;
   case MMXObjectTypeChat:
     return memix::MemoryObjectType::Chat;
   case MMXObjectTypeDocuments:
@@ -622,7 +622,7 @@ MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
 
 - (NSArray<MMXStoredObject *> *)listObjectsWithType:(MMXObjectType)type
                                               error:(NSError **)error {
-  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
+  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Rules;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }
@@ -645,7 +645,7 @@ MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
 - (NSArray<MMXStoreFile *> *)listFilesWithType:(MMXObjectType)type
                                     generation:(NSString *)generation
                                          error:(NSError **)error {
-  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
+  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Rules;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }
@@ -671,7 +671,7 @@ MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
                      contextPath:(NSString *)contextPath
                       generation:(NSString *)generation
                            error:(NSError **)error {
-  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
+  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Rules;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }
@@ -726,7 +726,7 @@ MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
                          contextPath:(NSString *)contextPath
                              message:(NSString *)message
                                error:(NSError **)error {
-  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Agents;
+  memix::MemoryObjectType memix_type = memix::MemoryObjectType::Rules;
   if (!MMXRequireType(type, &memix_type, error)) {
     return nil;
   }

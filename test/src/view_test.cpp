@@ -122,7 +122,7 @@ TEST_CASE("view expression lowering parses path locators with defaults",
   const memix::ViewService views{memix::Store(directory.path() / "store")};
 
   const memix::ViewResult<memix::AuthoredViewExpression> expression =
-      views.parse_expression("{\"sources\":[\"agents/repo/AGENTS.md\","
+      views.parse_expression("{\"sources\":[\"rules/repo/AGENTS.md\","
                              "\"chat/task/2026-05-20/@latest\"]}");
   REQUIRE(expression.has_value());
   REQUIRE(expression->schema == "memix.view.expr.v1");
@@ -133,8 +133,8 @@ TEST_CASE("view expression lowering parses path locators with defaults",
   REQUIRE(ir->schema == "memix.view.ir.v1");
   REQUIRE(ir->inputs.size() == 2);
 
-  REQUIRE(ir->inputs[0].locator == "agents/repo/AGENTS.md@latest");
-  REQUIRE(ir->inputs[0].type == memix::MemoryObjectType::Agents);
+  REQUIRE(ir->inputs[0].locator == "rules/repo/AGENTS.md@latest");
+  REQUIRE(ir->inputs[0].type == memix::MemoryObjectType::Rules);
   REQUIRE(ir->inputs[0].path == fs::path("repo/AGENTS.md"));
   REQUIRE(ir->inputs[0].version.kind == memix::ViewVersionKind::Ref);
   REQUIRE(ir->inputs[0].version.value == "latest");
@@ -149,7 +149,7 @@ TEST_CASE("view expression lowering parses path locators with defaults",
   REQUIRE(ir_json.has_value());
   REQUIRE(ir_json->find("\"schema\":\"memix.view.ir.v1\"")
           != std::string::npos);
-  REQUIRE(ir_json->find("\"locator\":\"agents/repo/AGENTS.md@latest\"")
+  REQUIRE(ir_json->find("\"locator\":\"rules/repo/AGENTS.md@latest\"")
           != std::string::npos);
 }
 
@@ -163,12 +163,12 @@ TEST_CASE("view expression lowering rejects invalid locators", "[view]") {
   REQUIRE(unknown_type.error().kind == memix::ErrorKind::InvalidArgument);
 
   const auto parent_path = views.lower_to_ir(
-      *views.expression_from_sources({"agents/repo/../AGENTS.md"}));
+      *views.expression_from_sources({"rules/repo/../AGENTS.md"}));
   REQUIRE_FALSE(parent_path.has_value());
   REQUIRE(parent_path.error().kind == memix::ErrorKind::InvalidArgument);
 
   const auto empty_path =
-      views.lower_to_ir(*views.expression_from_sources({"agents/@latest"}));
+      views.lower_to_ir(*views.expression_from_sources({"rules/@latest"}));
   REQUIRE_FALSE(empty_path.has_value());
   REQUIRE(empty_path.error().kind == memix::ErrorKind::InvalidArgument);
 }
@@ -180,12 +180,12 @@ TEST_CASE("view directory locators do not select an exact file path",
   write_file(source, "not a directory\n");
 
   const memix::Store store(directory.path() / "store");
-  ingest_context_file(store, memix::MemoryObjectType::Agents, source, "repo",
+  ingest_context_file(store, memix::MemoryObjectType::Rules, source, "repo",
                       "add file");
 
   const memix::ViewService views(store);
   const memix::ViewResult<memix::AuthoredViewExpression> expression =
-      views.expression_from_sources({"agents/repo/"});
+      views.expression_from_sources({"rules/repo/"});
   REQUIRE(expression.has_value());
 
   const memix::ViewResult<memix::ViewEnvironment> environment =
@@ -201,14 +201,14 @@ TEST_CASE("view optional file inputs skip missing paths", "[view]") {
 
   const memix::Store store(directory.path() / "store");
   const memix::FileIngestResult ingest =
-      ingest_context_file(store, memix::MemoryObjectType::Agents, source,
+      ingest_context_file(store, memix::MemoryObjectType::Rules, source,
                           "repo/AGENTS.md", "present");
 
   memix::ViewIr ir;
   ir.inputs = {
       memix::ViewIrInput{
-          .locator = "agents/repo/AGENTS.md@generation/000001",
-          .type = memix::MemoryObjectType::Agents,
+          .locator = "rules/repo/AGENTS.md@generation/000001",
+          .type = memix::MemoryObjectType::Rules,
           .path = "repo/AGENTS.md",
           .version =
               memix::ViewVersionSelector{
@@ -217,8 +217,8 @@ TEST_CASE("view optional file inputs skip missing paths", "[view]") {
               },
       },
       memix::ViewIrInput{
-          .locator = "agents/repo/MISSING.md@generation/000001",
-          .type = memix::MemoryObjectType::Agents,
+          .locator = "rules/repo/MISSING.md@generation/000001",
+          .type = memix::MemoryObjectType::Rules,
           .path = "repo/MISSING.md",
           .version =
               memix::ViewVersionSelector{
@@ -235,10 +235,10 @@ TEST_CASE("view optional file inputs skip missing paths", "[view]") {
   REQUIRE(derivation->resolved_files.size() == 1);
   REQUIRE(derivation->resolved_files[0].source_path
           == fs::path("repo/AGENTS.md"));
-  REQUIRE(read_file(derivation->tree_path / "agents" / "repo" / "AGENTS.md")
+  REQUIRE(read_file(derivation->tree_path / "rules" / "repo" / "AGENTS.md")
           == "present rules\n");
   REQUIRE_FALSE(
-      path_exists(derivation->tree_path / "agents" / "repo" / "MISSING.md"));
+      path_exists(derivation->tree_path / "rules" / "repo" / "MISSING.md"));
 }
 
 TEST_CASE("view file tree environment records file and directory closure",
@@ -254,7 +254,7 @@ TEST_CASE("view file tree environment records file and directory closure",
   write_file(other_source, "other\n");
 
   const memix::Store store(directory.path() / "store");
-  ingest_context_file(store, memix::MemoryObjectType::Agents, repo_source,
+  ingest_context_file(store, memix::MemoryObjectType::Rules, repo_source,
                       "repo/AGENTS.md", "repo");
   ingest_context_file(store, memix::MemoryObjectType::Chat, chat_a_source,
                       "task/2026-05-20/a.md", "chat a");
@@ -266,7 +266,7 @@ TEST_CASE("view file tree environment records file and directory closure",
   const memix::ViewService views(store);
   const memix::ViewResult<memix::AuthoredViewExpression> expression =
       views.expression_from_sources({
-          "agents/repo/AGENTS.md",
+          "rules/repo/AGENTS.md",
           "chat/task/2026-05-20/",
       });
   REQUIRE(expression.has_value());
@@ -283,7 +283,7 @@ TEST_CASE("view file tree environment records file and directory closure",
   REQUIRE(first->derivation.resolved_files.size() == 3);
 
   REQUIRE(
-      read_file(first->derivation.tree_path / "agents" / "repo" / "AGENTS.md")
+      read_file(first->derivation.tree_path / "rules" / "repo" / "AGENTS.md")
       == "repo rules\n");
   REQUIRE(
       read_file(
@@ -307,7 +307,7 @@ TEST_CASE("view file tree environment records file and directory closure",
   REQUIRE_FALSE(owner_can_write(first->derivation.manifest_path));
   REQUIRE_FALSE(owner_can_write(first->derivation.tree_path.parent_path()));
   REQUIRE_FALSE(owner_can_write(first->derivation.tree_path));
-  REQUIRE_FALSE(owner_can_write(first->derivation.tree_path / "agents"));
+  REQUIRE_FALSE(owner_can_write(first->derivation.tree_path / "rules"));
   REQUIRE_FALSE(owner_can_write(
       first->derivation.tree_path / "chat" / "task" / "2026-05-20"));
 
@@ -331,9 +331,9 @@ TEST_CASE("view file tree environment records file and directory closure",
   REQUIRE(resolved->derivation.id == first->derivation.id);
   REQUIRE(resolved->derivation.outputs.size() == 2);
   REQUIRE(resolved->derivation.resolved_files.size() == 3);
-  REQUIRE(read_file(
-              resolved->derivation.tree_path / "agents" / "repo" / "AGENTS.md")
-          == "repo rules\n");
+  REQUIRE(
+      read_file(resolved->derivation.tree_path / "rules" / "repo" / "AGENTS.md")
+      == "repo rules\n");
 
   const std::string copied_environment_id(64, 'f');
   const fs::path copied_environment_path =
@@ -356,12 +356,12 @@ TEST_CASE("concurrent view builds report one insertion and clean temps",
   write_file(source, "repo rules\n");
 
   const memix::Store store(directory.path() / "store");
-  ingest_context_file(store, memix::MemoryObjectType::Agents, source,
+  ingest_context_file(store, memix::MemoryObjectType::Rules, source,
                       "repo/AGENTS.md", "repo");
 
   const memix::ViewService views(store);
   const memix::ViewResult<memix::AuthoredViewExpression> expression =
-      views.expression_from_sources({"agents/repo/AGENTS.md"});
+      views.expression_from_sources({"rules/repo/AGENTS.md"});
   REQUIRE(expression.has_value());
 
   std::atomic<int> ready = 0;
@@ -424,18 +424,18 @@ TEST_CASE("view latest source changes produce a new derivation", "[view]") {
 
   const memix::Store store(directory.path() / "store");
   const memix::FileIngestResult legacy =
-      ingest_context_file(store, memix::MemoryObjectType::Agents, legacy_source,
+      ingest_context_file(store, memix::MemoryObjectType::Rules, legacy_source,
                           "repo/AGENTS.md", "legacy");
 
   const memix::ViewService views(store);
   const memix::ViewResult<memix::AuthoredViewExpression> latest_expression =
-      views.expression_from_sources({"agents/repo/AGENTS.md@latest"});
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
   REQUIRE(latest_expression.has_value());
   const memix::ViewResult<memix::ViewEnvironment> first =
       views.build(*latest_expression);
   REQUIRE(first.has_value());
 
-  ingest_context_file(store, memix::MemoryObjectType::Agents, modern_source,
+  ingest_context_file(store, memix::MemoryObjectType::Rules, modern_source,
                       "repo/AGENTS.md", "modern");
   const memix::ViewResult<memix::ViewEnvironment> second =
       views.build(*latest_expression);
@@ -443,21 +443,20 @@ TEST_CASE("view latest source changes produce a new derivation", "[view]") {
   REQUIRE(second->id != first->id);
   REQUIRE(second->derivation.id != first->derivation.id);
   REQUIRE(
-      read_file(first->derivation.tree_path / "agents" / "repo" / "AGENTS.md")
+      read_file(first->derivation.tree_path / "rules" / "repo" / "AGENTS.md")
       == "pip workflow\n");
   REQUIRE(
-      read_file(second->derivation.tree_path / "agents" / "repo" / "AGENTS.md")
+      read_file(second->derivation.tree_path / "rules" / "repo" / "AGENTS.md")
       == "uv workflow\n");
 
   const memix::ViewResult<memix::AuthoredViewExpression> pinned_expression =
-      views.expression_from_sources(
-          {"agents/repo/AGENTS.md@generation/000001"});
+      views.expression_from_sources({"rules/repo/AGENTS.md@generation/000001"});
   REQUIRE(pinned_expression.has_value());
   const memix::ViewResult<memix::ViewEnvironment> pinned =
       views.build(*pinned_expression);
   REQUIRE(pinned.has_value());
   REQUIRE(
-      read_file(pinned->derivation.tree_path / "agents" / "repo" / "AGENTS.md")
+      read_file(pinned->derivation.tree_path / "rules" / "repo" / "AGENTS.md")
       == "pip workflow\n");
   REQUIRE(pinned->derivation.resolved_files[0].source_generation
           == legacy.generation.id);

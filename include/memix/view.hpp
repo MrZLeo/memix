@@ -83,7 +83,7 @@ struct ViewVersionSelector {
 
 struct ViewIrInput {
   std::string locator;
-  MemoryObjectType type = MemoryObjectType::Agents;
+  MemoryObjectType type = MemoryObjectType::Rules;
   fs::path path;
   ViewVersionSelector version;
   bool recursive = false;
@@ -103,7 +103,7 @@ struct ViewIr {
 
 struct ResolvedViewFile {
   std::string locator;
-  MemoryObjectType type = MemoryObjectType::Agents;
+  MemoryObjectType type = MemoryObjectType::Rules;
   fs::path source_path;
   std::string source_generation;
   fs::path output_path;

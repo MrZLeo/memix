@@ -45,8 +45,6 @@ constexpr std::string_view kLocksDir = ".locks";
 constexpr std::string_view kLatestRef = "latest";
 constexpr std::string_view kContextTreeKind = "context_tree";
 constexpr std::string_view kContextGenerationKind = "context_generation";
-constexpr std::string_view kLegacyContextTreeKind = "agent_tree";
-constexpr std::string_view kLegacyContextGenerationKind = "agent_generation";
 constexpr std::string_view kJsonSuffix = ".json";
 constexpr std::size_t kTimestampBufferBytes = 21;
 constexpr std::uint64_t kDecimalRadix = 10;
@@ -1258,9 +1256,7 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
   if (!kind) {
     return std::unexpected(kind.error());
   }
-  if (*kind != kContextTreeKind
-      && (type != memix::MemoryObjectType::Agents
-          || *kind != kLegacyContextTreeKind)) {
+  if (*kind != kContextTreeKind) {
     return store_error(
         std::format("context tree has unsupported kind `{}`", *kind));
   }
@@ -1381,9 +1377,7 @@ read_context_generation_object(const fs::path &root,
   if (!kind) {
     return std::unexpected(kind.error());
   }
-  if (*kind != kContextGenerationKind
-      && (type != memix::MemoryObjectType::Agents
-          || *kind != kLegacyContextGenerationKind)) {
+  if (*kind != kContextGenerationKind) {
     return store_error(
         std::format("context generation has unsupported kind `{}`", *kind));
   }
