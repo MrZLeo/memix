@@ -1,6 +1,23 @@
 # memix
 
-`memix` is a small CMake-based C++ project with a Rust-style split between library code and executable entrypoints:
+`memix` is a Nix-inspired, provenance-aware build system for agent context.
+
+## Mental model
+
+Treat memory as immutable evidence plus reproducible views, not as a mutable notes directory. Agents should consume an explicitly selected, versioned, provenance-carrying view rather than an untracked collection of files.
+
+* Stored blobs are immutable and content-addressed. Changed content becomes a new object instead of overwriting history.
+* Logical trees, generations, and refs describe how memory evolves while allowing old states to coexist and remain replayable.
+* Views are derived artifacts, not new sources of truth. Identical inputs and operator versions reuse the same derivation.
+* Provenance is part of the result: a view retains its source generations, blob identities, derivation, artifacts, and environment closure.
+* Selection stays explicit. Memix does not invent hidden dependencies or silently activate additional memory.
+* A `file_tree` view packages selected files at stable paths; it does not merge Markdown, resolve directive precedence, summarize content, or settle semantic conflicts.
+
+The current CLI implements immutable storage, versioned logical trees, and reproducible `file_tree` views. Directive resolution and context-pack generation are separate future layers.
+
+## Project layout
+
+`memix` is implemented as a CMake-based C++ project with a Rust-style split between library code and executable entrypoints:
 
 * `include/` and `src/` contain the `memix` library
 * `src/bin/*.cpp` are auto-discovered and built as executables
