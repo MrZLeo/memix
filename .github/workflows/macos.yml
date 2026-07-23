@@ -41,9 +41,12 @@ jobs:
       shell: bash
       run: |
         clang_tidy="$(brew --prefix llvm@20)/bin/clang-tidy"
+        clang_tidy_cxx_include="$(xcrun --sdk macosx --show-sdk-path)/usr/include/c++/v1"
         test -x "$clang_tidy"
+        test -d "$clang_tidy_cxx_include"
         "$clang_tidy" --version
         echo "CLANGTIDY=$clang_tidy" >> "$GITHUB_ENV"
+        echo "CLANGTIDY_CXX_INCLUDE=$clang_tidy_cxx_include" >> "$GITHUB_ENV"
 
     - name: configure
       run: |
@@ -54,6 +57,7 @@ jobs:
           -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
           -DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE" \
           -DCLANGTIDY:FILEPATH="$CLANGTIDY" \
+          -DCLANGTIDY_EXTRA_ARGS:STRING="-extra-arg-before=-nostdinc++;-extra-arg-before=-isystem;-extra-arg-before=$CLANGTIDY_CXX_INCLUDE" \
           -Dmemix_ENABLE_CLANG_TIDY=ON \
           -Dmemix_WARNINGS_AS_ERRORS=ON
       

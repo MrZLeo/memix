@@ -1,9 +1,12 @@
 if(${PROJECT_NAME}_ENABLE_CLANG_TIDY)
+  set(CLANGTIDY_EXTRA_ARGS "" CACHE STRING
+      "Additional arguments passed to clang-tidy.")
   find_program(CLANGTIDY clang-tidy)
   if(CLANGTIDY)
     set(PROJECT_CLANG_TIDY_COMMAND
         ${CLANGTIDY}
         -extra-arg=-Wno-unknown-warning-option
+        ${CLANGTIDY_EXTRA_ARGS}
     )
     message("Clang-Tidy finished setting up.")
   else()

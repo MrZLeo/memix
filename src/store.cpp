@@ -467,7 +467,7 @@ object_from_metadata_path(const fs::path &object_dir,
         std::move(document.error()),
         std::format("invalid metadata JSON `{}`", metadata_path.string())));
   }
-  JsonObjectReader fields(document->root_object());
+  const JsonObjectReader fields(document->root_object());
 
   auto object = metadata_object_from_fields(fields, object_dir, metadata_path);
   if (!object)
