@@ -301,6 +301,13 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
           ${argum_SOURCE_DIR}/inc
       )
     endif()
+    if(DEFINED spdlog_SOURCE_DIR)
+      target_include_directories(
+        ${bin_target}
+        SYSTEM PRIVATE
+          ${spdlog_SOURCE_DIR}/include
+      )
+    endif()
     target_include_directories(
       ${bin_target}
       SYSTEM PRIVATE
