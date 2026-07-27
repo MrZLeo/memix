@@ -21,10 +21,10 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]')"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       
     - name: cache CPM downloads
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ${{ env.CPM_SOURCE_CACHE }}
         key: macos-26-arm64-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
@@ -111,7 +111,7 @@ jobs:
 
     steps:
     - name: download macOS 14 compatibility tests
-      uses: actions/download-artifact@v7
+      uses: actions/download-artifact@v8
       with:
         name: macos-arm64-compatibility
         path: compatibility

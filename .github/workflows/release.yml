@@ -38,10 +38,10 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: cache CPM downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
           key: ${{ matrix.config.os }}-${{ matrix.config.asset }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
@@ -74,7 +74,7 @@ jobs:
         env:
           CC: ${{ matrix.config.cc }}
           CXX: ${{ matrix.config.cxx }}
-        run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON
+        run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON -Dmemix_ENABLE_LTO=ON
 
       - name: configure macOS 14-compatible binaries
         if: runner.os == 'macOS'
@@ -86,7 +86,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
-            -Dmemix_STATIC_LINK=ON
+            -Dmemix_STATIC_LINK=ON \
+            -Dmemix_ENABLE_LTO=ON
 
       - name: build
         run: cmake --build build --parallel 4
@@ -165,6 +166,8 @@ jobs:
           mkdir dist
           cp build/bin/Release/memix-store "dist/memix-store-${{ matrix.config.asset }}"
           cp build/bin/Release/memix-view "dist/memix-view-${{ matrix.config.asset }}"
+          strip "dist/memix-store-${{ matrix.config.asset }}" "dist/memix-view-${{ matrix.config.asset }}"
+          ls -lh dist
 
       - name: stage Windows executables
         if: runner.os == 'Windows'
@@ -192,7 +195,7 @@ jobs:
 
     steps:
       - name: download macOS arm64 executables
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: macos-arm64
           path: dist
@@ -262,7 +265,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: create release
         env:
@@ -270,7 +273,7 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" --title "Release $GITHUB_REF_NAME" --verify-tag
 
       - name: download executables
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
