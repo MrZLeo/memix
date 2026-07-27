@@ -54,9 +54,9 @@ inline std::unexpected<memix::FsError> fs_error(std::string message) {
 }
 
 template <typename... Paths>
-std::string filesystem_error_message(std::string_view operation,
-                                     const std::error_code &error,
-                                     const Paths &...paths) {
+std::string
+filesystem_error_message(std::string_view operation,
+                         const std::error_code &error, const Paths &...paths) {
   static_assert(sizeof...(Paths) > 0,
                 "filesystem errors must include at least one path");
 
@@ -82,9 +82,9 @@ FsError make_fs_error(std::string_view operation, const std::error_code &error,
 }
 
 template <typename... Paths>
-std::unexpected<FsError> fs_error(std::string_view operation,
-                                  const std::error_code &error,
-                                  const Paths &...paths) {
+std::unexpected<FsError>
+fs_error(std::string_view operation, const std::error_code &error,
+         const Paths &...paths) {
   return fs_error(make_fs_error(operation, error, paths...));
 }
 
@@ -117,8 +117,8 @@ FsVoid permissions(const path &path, perms permissions,
 FsResult<path> temp_directory_path();
 
 FsResult<std::string> read_text_file(const path &path);
-FsResult<std::string> read_text_file(const path &path,
-                                     std::string_view subject);
+FsResult<std::string>
+read_text_file(const path &path, std::string_view subject);
 FsVoid write_text_file(const path &path, std::string_view contents);
 
 struct TempDirOptions {
