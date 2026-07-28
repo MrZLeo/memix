@@ -1,6 +1,6 @@
 ---
 name: memix-cli
-description: "Use when the agent needs to operate the memix CLI tool group for user-level memory storage and viewing tasks: storing files with memix-store, listing stored objects, reading logical context paths, inspecting rules/chat/documents trees, selecting generations, building memix-view file-tree environments, activating them into the workspace, or managing profile generations, rollbacks, and workspace attachments. Follow Memix's immutable, versioned, provenance-aware model while using memix-store, memix-view, and related CLI behavior."
+description: "Recall, load, inspect, compose, or save durable user and project memory with Memix. Use when users ask to remember something; recover or use prior decisions, notes, chats, rules, documents, or context without necessarily naming Memix; ask what was stored previously; or need memix-store, memix-view, view discovery/composition, activation, generations, rollbacks, profiles, or workspace attachments. Do not use for RAM, memory leaks, allocators, programming-language memory models, or information already available in the current conversation unless the user wants it persisted."
 ---
 
 # Memix CLI
@@ -11,12 +11,36 @@ Treat Memix as a Nix-inspired, provenance-aware build system for agent context, 
 
 - Treat stored blobs as immutable evidence. Raw ingest without `--dest` creates blob objects only; ingest with `--dest` also creates a new logical-tree generation. Ingest changed content again instead of editing files inside the store directly.
 - Treat logical trees and generation objects as immutable history, and refs such as `latest` as movable version selectors. Use `latest` intentionally, and pin a generation when replay, auditability, or reproducibility matters.
-- Treat views as reproducible derived artifacts, not as new sources of truth. Reuse an identical derivation instead of copying or modifying its output.
+- Treat views as first-class reproducible derived objects, not as new sources of truth or store object types. A view environment may be inspected, referenced by another view, mounted below a path, and composed transitively. Reuse an existing environment instead of copying or modifying its output.
 - Treat movable refs and profile `current` pointers as the small mutable control layer. Profiles record numbered generations and switch one `current` pointer; workspaces attach through a symlink (or a disposable copy) and never edit memory in place.
-- Preserve provenance without inventing visibility. The environment ID is the durable reference to a view: retain it from build output for later `activate` or `show`. Retain profile generation numbers from `activate` or `generations` for `rollback`, which does not accept an environment ID. Environment JSON exposes binding and closure IDs, but not source locators, resolved generations, or locator-to-blob mappings; do not claim otherwise. Full resolved-input provenance lives in the derivation manifest, whose filesystem path is not currently reported by `build` or `show`.
-- Keep selection explicit. Do not invent hidden dependencies, silently add sources, or imply that a suggestion activated memory.
+- Preserve provenance without inventing visibility. The environment ID is the durable reference to a view: retain it from `build` or `list` for later composition, `activate`, or inspection. Retain profile generation numbers from `activate` or `generations` for `rollback`, which does not accept an environment ID. Environment JSON exposes binding and transitive closure IDs; `tree` and `cat` expose the derived file surface. Full locator-to-generation provenance remains in the derivation manifest.
+- Keep selection explainable and attributable. Infer sources only from the user's request, the active attachment or profile, or an inspected logical tree with an unambiguous match. Do not invent hidden dependencies or silently add unrelated sources. Distinguish a suggested view from one that was successfully activated.
 - Treat `file_tree` as packaging: it assembles selected files at stable paths but does not merge Markdown, apply directive precedence, summarize content, or resolve semantic conflicts.
-- Respect current capability boundaries. The CLI does not yet provide directive resolution, context-pack generation, search/indexing, garbage collection, or remote synchronization.
+- Respect current capability boundaries. Inventory is path-oriented exploration, not semantic ranking. The CLI does not yet provide directive resolution, context-pack generation, full-text/vector indexing, garbage collection, or remote synchronization.
+
+## Implicit Memory Workflow
+
+Treat a clear request to recall, load, use, inspect, or save durable memory as sufficient reason to use Memix. Do not require the user to mention `$memix-cli`, request `build` or `activate`, or supply an environment ID. Match the user's intent, not the presence of the word "memory"; do not trigger this workflow for RAM, memory leaks, allocators, or programming-language memory models.
+
+For recall or load requests, follow this discovery ladder:
+
+1. Check the expected attachment with `memix-view status --into ./.memory`. If it is active and contains the requested context, read through `./.memory`.
+2. Discover reusable views with `memix-view list --json`. Inspect promising ones with `memix-view tree <environment> --depth 2 --json`, then use `memix-view cat <environment> <path>` for the few files whose logical paths match the request.
+3. If no existing view covers the request, explore the store broadly once with `memix-store tree --all --depth 2 --json`. Narrow only promising areas with `--type`, `--path`, and `--depth`; use store `cat` only after a candidate path is identified.
+4. Prefer an existing environment when it already covers the request. If it is close, compose it with `build --view`; add `--source` only for missing context. Build directly from sources only when no reusable view fits.
+5. Activate only when the task benefits from a workspace attachment, repeated multi-file reads, or tools that need a directory. For one or two reads, use view `tree`/`cat` without changing the active profile.
+6. Ask one focused clarification only when materially different selections remain plausible after exploration. Do not ask the user to manually enumerate sources that the inventories can resolve.
+
+Use an exploration budget unless the user asks for an exhaustive audit:
+
+- Inspect at most three candidate views, initially at depth 2.
+- Perform one broad store inventory and at most two narrower subtree inventories before deciding.
+- Read candidate file contents only when their type and logical path plausibly match the request.
+- If more than three materially different candidates remain or choosing one would change the meaning of the task, summarize the alternatives and ask.
+
+For save requests, do not require the user to name `ingest`. Infer the type and logical destination only when the request or an established workspace convention makes them clear; otherwise ask for the missing choice before storing.
+
+After automatic composition or activation, briefly report reused environment IDs, added source locators, the resulting environment ID, and—if activated—the profile generation and attachment path. Never say memory was loaded or activated until the relevant command succeeds.
 
 ## Core Rules
 
@@ -76,12 +100,24 @@ memix-store --store-root "<store-root>" list --type rules
 memix-store --store-root "<store-root>" list --json
 ```
 
-Show the latest logical tree for a type:
+Explore every logical tree with bounded depth:
+
+```text
+memix-store --store-root "<store-root>" tree --all --depth 2
+memix-store --store-root "<store-root>" tree --all --depth 2 --json
+```
+
+Catalog output includes object type, logical path, entry kind, recursive file count, total bytes, latest timestamp, and blob ID for files. Use it as the broad path-oriented discovery surface.
+
+Show the latest logical tree for a type, or narrow one subtree:
 
 ```text
 memix-store --store-root "<store-root>" tree --type documents
+memix-store --store-root "<store-root>" tree --type documents --path notes/project --depth 2 --json
 memix-store --store-root "<store-root>" rules tree
 ```
+
+The original `tree --type <type>` form retains its compact path/blob output. Supplying `--all`, `--path`, `--depth`, or `--json` selects catalog output with directory aggregates.
 
 Read a logical file from the latest tree:
 
@@ -99,6 +135,22 @@ Use `memix-view build` to create a file-tree view environment from logical store
 ```text
 memix-view --store-root "<store-root>" build --source rules/repo/AGENTS.md --source chat/task/2026-05-20/
 ```
+
+Compose existing view environments directly:
+
+```text
+memix-view --store-root "<store-root>" build --view 7f3a2c9b1d0e
+memix-view --store-root "<store-root>" build --view 7f3a2c9b1d0e=prior --source documents/notes/design.md
+```
+
+`--view ENVIRONMENT[=MOUNT]` accepts a full environment ID or unique prefix and may be repeated. With no mount, the upstream paths remain unchanged. With `=MOUNT`, every upstream path is prefixed by that safe relative mount. `--source` remains backward compatible and can be mixed with `--view`; builds containing a view input use the typed v2 manifests, while pure `--source` builds retain v1 hashes and manifest bytes.
+
+Composition follows these rules:
+
+- Environment inputs are pinned to the resolved full environment ID; they do not follow a mutable profile.
+- Same output path plus the same blob deduplicates. Same output path plus different blobs fails with a conflict; use distinct mounts to resolve it.
+- The new environment closure includes direct and transitive upstream environment, derivation, artifact, and raw object IDs.
+- A view is a derived input, not a `rules`, `chat`, or `documents` store type. Do not ingest a view back into the store merely to reference it.
 
 Plain output prints the environment ID (the input `activate` needs) and the environment manifest's filesystem path. Use `--json` for a machine-readable environment manifest containing the full environment ID, bindings, and closure IDs, but no filesystem paths.
 
@@ -154,14 +206,31 @@ By default, activation never replaces foreign paths: if the `--into` path holds 
 
 ## Inspect View Environments
 
-Use `memix-view show` to inspect an existing environment by full id or unique prefix, mainly for debugging and audit:
+List reusable environments with full IDs, derivation IDs, file/byte counts, and transitive upstream counts:
+
+```text
+memix-view --store-root "<store-root>" list
+memix-view --store-root "<store-root>" list --json
+```
+
+Explore or read a view without activating it:
+
+```text
+memix-view --store-root "<store-root>" tree 7f3a2c9b1d0e --depth 2 --json
+memix-view --store-root "<store-root>" tree 7f3a2c9b1d0e --path documents/notes --depth 2
+memix-view --store-root "<store-root>" cat 7f3a2c9b1d0e documents/notes/design.md
+```
+
+Use `tree` to choose files by their stable derived paths and `cat` for a targeted read. Prefer these commands over activation when no workspace attachment is needed.
+
+Use `memix-view show` to inspect an existing environment manifest by full ID or unique prefix, mainly for provenance debugging and audit:
 
 ```text
 memix-view --store-root "<store-root>" show 7f3a2c9b1d0e
 memix-view --store-root "<store-root>" show 7f3a2c9b1d0e --json
 ```
 
-Plain output includes the environment manifest's filesystem path; `--json` prints the manifest with the full environment and binding derivation IDs plus the closure's derivation, artifact, and raw object IDs, but no filesystem paths. Neither mode reports the materialized derivation tree's filesystem path. For anything an agent needs to read, prefer activation over parsing `show` output.
+Plain output includes the environment manifest's filesystem path; `--json` prints the manifest with the full environment and binding derivation IDs plus closure IDs, including upstream environments for composed v2 views. Neither mode reports the materialized derivation tree's filesystem path. For file discovery and reads, prefer `tree` and `cat` over parsing `show` output.
 
 ## Troubleshooting
 

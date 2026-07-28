@@ -1,4 +1,6 @@
 interface:
   display_name: "Memix CLI"
-  short_description: "Use memix-store and memix-view effectively"
-  default_prompt: "Use $memix-cli to store files and build a memix file-tree view."
+  short_description: "Recall, compose, and manage durable memory"
+  default_prompt: "Use $memix-cli to discover, compose, and load relevant durable memory."
+policy:
+  allow_implicit_invocation: true
