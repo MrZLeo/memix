@@ -29,18 +29,40 @@ For recall or load requests, follow this discovery ladder:
 3. If no existing view covers the request, explore the store broadly once with `memix-store tree --all --depth 2 --json`. Narrow only promising areas with `--type`, `--path`, and `--depth`; use store `cat` only after a candidate path is identified.
 4. Prefer an existing environment when it already covers the request. If it is close, compose it with `build --view`; add `--source` only for missing context. Build directly from sources only when no reusable view fits.
 5. Activate only when the task benefits from a workspace attachment, repeated multi-file reads, or tools that need a directory. For one or two reads, use view `tree`/`cat` without changing the active profile.
-6. Ask one focused clarification only when materially different selections remain plausible after exploration. Do not ask the user to manually enumerate sources that the inventories can resolve.
+6. When materially different selections remain plausible after exploration, escalate to a structured user choice (see Structured User Choice). Do not ask the user to manually enumerate sources that the inventories can resolve.
 
 Use an exploration budget unless the user asks for an exhaustive audit:
 
 - Inspect at most three candidate views, initially at depth 2.
 - Perform one broad store inventory and at most two narrower subtree inventories before deciding.
 - Read candidate file contents only when their type and logical path plausibly match the request.
-- If more than three materially different candidates remain or choosing one would change the meaning of the task, summarize the alternatives and ask.
+- If more than three materially different candidates remain or choosing one would change the meaning of the task, summarize the alternatives and escalate to a structured user choice.
 
-For save requests, do not require the user to name `ingest`. Infer the type and logical destination only when the request or an established workspace convention makes them clear; otherwise ask for the missing choice before storing.
+For save requests, do not require the user to name `ingest`. Infer the type and logical destination only when the request or an established workspace convention makes them clear; otherwise escalate the missing choice through a structured user choice before storing.
 
 After automatic composition or activation, briefly report reused environment IDs, added source locators, the resulting environment ID, and—if activated—the profile generation and attachment path. Never say memory was loaded or activated until the relevant command succeeds.
+
+## Structured User Choice
+
+When a decision genuinely belongs to the user, prefer the host's interactive question or selection tool (such as Claude Code's `AskUserQuestion` or Codex's `request_user_input`) over an open-ended plain-text question. If the host has no such tool, fall back to a short numbered list plus one focused question. Memix itself never prompts: its CLI must stay scriptable and never block on stdin, so all interactivity lives in the host.
+
+Escalate to a structured choice only when:
+
+- More than three materially different candidates remain after the exploration budget is spent, or choosing among them would change the meaning of the task.
+- A save request leaves the object type or logical destination genuinely ambiguous after checking request context and workspace conventions.
+
+Build each option from fields the JSON inventory already returns; never dump raw inventory:
+
+- label: a recognizable reference — an environment ID prefix with its dominant logical path, a `<type>/<logical-path>` store candidate, or the proposed type and destination for a save.
+- description: one disambiguating line from the same JSON: file count, total bytes, latest timestamp, upstream environment count, or a provenance hint.
+- Limit options to the few leading candidates (at most four), and rely on the host's free-form escape (such as "Other") so the user can reject all of them.
+- Offer multi-select only when the action truly consumes several candidates, such as picking multiple sources for one `build`. Activation, rollback, and base-environment choices are single-choice.
+
+After the user chooses:
+
+- Map the choice back to the full durable reference retained from the JSON inventory (full environment ID, source locator, or generation number); never reconstruct it from the displayed label alone.
+- Act on that reference, then report which reference was chosen and which command consumed it, following the reporting rule in Implicit Memory Workflow.
+- If the user dismisses the question or answers outside the options, ask at most one follow-up; otherwise proceed with the best-supported candidate and explain why.
 
 ## Core Rules
 
