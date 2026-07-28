@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
   "memix"
-  VERSION 0.1.2
+  VERSION 0.2.0
   LANGUAGES CXX
 )
 
