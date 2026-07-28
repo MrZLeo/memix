@@ -32,7 +32,7 @@ Treat memory as immutable evidence plus reproducible views, not as a mutable not
 
 * 📌 **Immutable blobs** — Stored blobs are immutable and content-addressed. Changed content becomes a new object instead of overwriting history.
 * 🌳 **Versioned trees** — Logical trees, generations, and refs describe how memory evolves while allowing old states to coexist and remain replayable.
-* 🔁 **Reproducible views** — Views are derived artifacts, not new sources of truth. Identical inputs and operator versions reuse the same derivation.
+* 🔁 **Composable views** — Views are first-class derived artifacts, not new sources of truth. They can reference and mount existing view environments while preserving transitive provenance.
 * 🧾 **Provenance built-in** — A view retains its source generations, blob identities, derivation, artifacts, and environment closure.
 * 🎯 **Explicit selection** — Memix does not invent hidden dependencies or silently activate additional memory.
 * 🔗 **Profile-style activation** — Built views attach to a workspace through numbered profile generations and one switchable `current` pointer, the only mutable layer in the system.
@@ -119,6 +119,7 @@ The full bootstrap procedure is also available in
 ./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
 ./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
 ./build/bin/Release/memix-store --store-root /tmp/memix-store rules tree
+./build/bin/Release/memix-store --store-root /tmp/memix-store tree --all --depth 2 --json
 ./build/bin/Release/memix-store --store-root /tmp/memix-store list
 ./build/bin/Release/memix-store --store-root /tmp/memix-store list --json
 ./build/bin/Release/memix-store --version
@@ -133,6 +134,10 @@ the attachment with `status`:
 
 ```bash
 ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store build --source rules/README.md | head -n1 | awk '{print $2}')
+./build/bin/Release/memix-view --store-root /tmp/memix-store list --json
+./build/bin/Release/memix-view --store-root /tmp/memix-store tree "$ENV" --depth 2
+./build/bin/Release/memix-view --store-root /tmp/memix-store cat "$ENV" rules/README.md
+./build/bin/Release/memix-view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md
 ./build/bin/Release/memix-view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
 cat ./.memory/rules/README.md
 ./build/bin/Release/memix-view --store-root /tmp/memix-store generations --into ./.memory
