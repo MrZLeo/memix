@@ -522,6 +522,79 @@ TEST_CASE("documents can be ingested into a canonical context tree",
   REQUIRE((*files)[0].context_path == fs::path("notes/design.md"));
 }
 
+TEST_CASE("store catalog explores types, subtrees, depth, counts, and bytes",
+          "[store]") {
+  TemporaryDirectory directory("store-catalog");
+  const fs::path design = directory.path() / "design.md";
+  const fs::path decisions = directory.path() / "decisions.md";
+  const fs::path rule = directory.path() / "AGENTS.md";
+  write_file(design, "design\n");
+  write_file(decisions, "decisions\n");
+  write_file(rule, "rule\n");
+
+  const memix::Store store(directory.path() / "store");
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Documents,
+                  .source_path = design,
+                  .context_path = "notes/design.md",
+              })
+              .has_value());
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Documents,
+                  .source_path = decisions,
+                  .context_path = "notes/project/decisions.md",
+              })
+              .has_value());
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Rules,
+                  .source_path = rule,
+                  .context_path = "repo/AGENTS.md",
+              })
+              .has_value());
+
+  const auto all = store.catalog();
+  REQUIRE(all.has_value());
+  bool saw_documents_root = false;
+  bool saw_rules_root = false;
+  for (const memix::StoreCatalogEntry &entry : *all) {
+    if (entry.directory
+        && entry.context_path.empty()
+        && entry.type == memix::MemoryObjectType::Documents) {
+      saw_documents_root = true;
+      REQUIRE(entry.file_count == 2);
+      REQUIRE(entry.total_size_bytes == 17);
+    }
+    if (entry.directory
+        && entry.context_path.empty()
+        && entry.type == memix::MemoryObjectType::Rules) {
+      saw_rules_root = true;
+      REQUIRE(entry.file_count == 1);
+      REQUIRE(entry.total_size_bytes == 5);
+    }
+  }
+  REQUIRE(saw_documents_root);
+  REQUIRE(saw_rules_root);
+
+  const auto notes = store.catalog(memix::StoreCatalogOptions{
+      .type = memix::MemoryObjectType::Documents,
+      .path = "notes",
+      .depth = 1,
+  });
+  REQUIRE(notes.has_value());
+  REQUIRE(notes->size() == 3);
+  REQUIRE((*notes)[0].context_path == fs::path("notes"));
+  REQUIRE((*notes)[0].directory);
+  REQUIRE((*notes)[0].file_count == 2);
+  REQUIRE((*notes)[1].context_path == fs::path("notes/design.md"));
+  REQUIRE_FALSE((*notes)[1].directory);
+  REQUIRE((*notes)[2].context_path == fs::path("notes/project"));
+  REQUIRE((*notes)[2].directory);
+  REQUIRE((*notes)[2].file_count == 1);
+}
+
 TEST_CASE("document context generations preserve old paths after replacement",
           "[store]") {
   TemporaryDirectory directory("document-context-generations");

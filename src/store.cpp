@@ -18,6 +18,7 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -2015,6 +2016,114 @@ collect_context_files(const fs::path &root, std::string_view tree_id,
   return {};
 }
 
+struct CatalogDirectoryAggregate {
+  std::size_t file_count = 0;
+  std::uintmax_t total_size_bytes = 0;
+  std::string latest_created_at;
+};
+
+struct CatalogTypeResult {
+  std::vector<memix::StoreCatalogEntry> entries;
+  bool matched = false;
+};
+
+std::vector<fs::path> catalog_path_components(const fs::path &path) {
+  return path | std::ranges::to<std::vector<fs::path>>();
+}
+
+bool
+catalog_path_is_within(const fs::path &candidate, const fs::path &ancestor) {
+  if (ancestor.empty()) {
+    return true;
+  }
+  const std::vector<fs::path> candidate_components =
+      catalog_path_components(candidate);
+  const std::vector<fs::path> ancestor_components =
+      catalog_path_components(ancestor);
+  return ancestor_components.size() <= candidate_components.size()
+      && std::ranges::equal(ancestor_components,
+                            candidate_components
+                                | std::views::take(ancestor_components.size()));
+}
+
+std::size_t catalog_relative_depth(const fs::path &path, const fs::path &base) {
+  return catalog_path_components(path).size()
+       - catalog_path_components(base).size();
+}
+
+bool catalog_path_is_visible(const fs::path &path,
+                             const memix::StoreCatalogOptions &options) {
+  return !options.depth.has_value()
+      || catalog_relative_depth(path, options.path) <= *options.depth;
+}
+
+void aggregate_catalog_directories(
+    const memix::StoreFile &file, const fs::path &base,
+    std::map<fs::path, CatalogDirectoryAggregate> &directories) {
+  fs::path directory = file.context_path.parent_path();
+  while (catalog_path_is_within(directory, base)) {
+    CatalogDirectoryAggregate &aggregate = directories[directory];
+    ++aggregate.file_count;
+    aggregate.total_size_bytes += file.blob.size_bytes;
+    aggregate.latest_created_at =
+        std::max(aggregate.latest_created_at, file.blob.created_at);
+    if (directory == base) {
+      return;
+    }
+    directory = directory.parent_path();
+  }
+}
+
+StoreResult<CatalogTypeResult>
+catalog_for_type(const memix::Store &store, memix::MemoryObjectType type,
+                 const memix::StoreCatalogOptions &options) {
+  const std::optional<std::string_view> generation =
+      options.generation.has_value()
+          ? std::optional<std::string_view>(*options.generation)
+          : std::nullopt;
+  StoreResult<std::vector<memix::StoreFile>> files =
+      store.list_files(type, generation);
+  if (!files) {
+    return std::unexpected(files.error());
+  }
+
+  CatalogTypeResult result;
+  std::map<fs::path, CatalogDirectoryAggregate> directories;
+  for (const memix::StoreFile &file : *files) {
+    if (!catalog_path_is_within(file.context_path, options.path)) {
+      continue;
+    }
+    result.matched = true;
+    aggregate_catalog_directories(file, options.path, directories);
+    if (catalog_path_is_visible(file.context_path, options)) {
+      result.entries.push_back(memix::StoreCatalogEntry{
+          .type = type,
+          .context_path = file.context_path,
+          .directory = false,
+          .file_count = 1,
+          .total_size_bytes = file.blob.size_bytes,
+          .latest_created_at = file.blob.created_at,
+          .blob_id = file.blob.id,
+      });
+    }
+  }
+  for (const auto &[path, aggregate] : directories) {
+    if (!catalog_path_is_visible(path, options)) {
+      continue;
+    }
+    result.entries.push_back(memix::StoreCatalogEntry{
+        .type = type,
+        .context_path = path,
+        .directory = true,
+        .file_count = aggregate.file_count,
+        .total_size_bytes = aggregate.total_size_bytes,
+        .latest_created_at = aggregate.latest_created_at,
+        .blob_id = {},
+    });
+  }
+  return result;
+}
+
 } // namespace
 
 namespace memix {
@@ -2187,6 +2296,49 @@ Store::list_files(MemoryObjectType type,
         return collect_context_files(root_, tree_id, type, fs::path{}, files)
             .transform([&files] { return std::move(files); });
       });
+}
+
+StoreResult<std::vector<StoreCatalogEntry>>
+Store::catalog(const StoreCatalogOptions &options) const {
+  if (!options.type.has_value() && options.generation.has_value()) {
+    return store_error(ErrorKind::InvalidArgument,
+                       "catalog --generation requires one object type");
+  }
+
+  const std::vector<MemoryObjectType> types = options.type.has_value()
+                                                ? std::vector{*options.type}
+                                                : memory_object_types();
+  std::vector<StoreCatalogEntry> entries;
+  bool matched_any = false;
+  for (const MemoryObjectType type : types) {
+    StoreResult<CatalogTypeResult> result =
+        catalog_for_type(*this, type, options);
+    if (!result) {
+      if (!options.type.has_value()
+          && result.error().kind == ErrorKind::NotFound) {
+        continue;
+      }
+      return std::unexpected(result.error());
+    }
+    matched_any = matched_any || result->matched;
+    std::ranges::move(result->entries, std::back_inserter(entries));
+  }
+
+  if (!matched_any && options.type.has_value() && !options.path.empty()) {
+    return store_error(ErrorKind::ContextPathNotFound,
+                       std::format("{} path does not exist `{}`",
+                                   to_string(*options.type),
+                                   options.path.generic_string()));
+  }
+
+  std::ranges::sort(entries, [](const StoreCatalogEntry &left,
+                                const StoreCatalogEntry &right) {
+    return std::tuple{to_string(left.type), left.context_path.generic_string(),
+                      !left.directory}
+         < std::tuple{to_string(right.type),
+                      right.context_path.generic_string(), !right.directory};
+  });
+  return entries;
 }
 
 StoreResult<std::optional<std::string>>

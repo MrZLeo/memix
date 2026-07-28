@@ -188,6 +188,23 @@ struct StoreFile {
   StoredObject blob;
 };
 
+struct StoreCatalogOptions {
+  std::optional<MemoryObjectType> type;
+  fs::path path;
+  std::optional<std::size_t> depth;
+  std::optional<std::string> generation;
+};
+
+struct StoreCatalogEntry {
+  MemoryObjectType type = MemoryObjectType::Documents;
+  fs::path context_path;
+  bool directory = false;
+  std::size_t file_count = 0;
+  std::uintmax_t total_size_bytes = 0;
+  std::string latest_created_at;
+  std::string blob_id;
+};
+
 class Store {
 public:
   explicit Store(fs::path root) : root_(std::move(root)) {}
@@ -219,6 +236,9 @@ public:
   [[nodiscard]] StoreResult<std::vector<StoreFile>>
   list_files(MemoryObjectType type,
              std::optional<std::string_view> generation = std::nullopt) const;
+
+  [[nodiscard]] StoreResult<std::vector<StoreCatalogEntry>>
+  catalog(const StoreCatalogOptions &options = {}) const;
 
   [[nodiscard]] StoreResult<std::optional<std::string>>
   read_ref(std::string_view ref_name) const;

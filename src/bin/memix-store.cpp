@@ -6,6 +6,7 @@
 #include "memix/store.hpp"
 
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -16,6 +17,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -63,6 +65,10 @@ struct StoreCliOptions {
   std::string cat_generation;
   std::string tree_type_name;
   std::string tree_generation;
+  fs::path tree_path;
+  std::optional<std::size_t> tree_depth;
+  bool tree_all = false;
+  bool tree_json = false;
 };
 
 std::string supported_types_message() {
@@ -142,6 +148,66 @@ void print_context_tree_table(const std::vector<memix::StoreFile> &files) {
       });
 }
 
+struct StoreCatalogEntryJson {
+  std::string type;
+  std::string path;
+  std::string kind;
+  std::size_t file_count = 0;
+  std::uintmax_t size_bytes = 0;
+  std::string latest_created_at;
+  std::string blob;
+};
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const StoreCatalogEntryJson &entry) {
+  builder.start_object();
+  builder.template append_key_value<"type">(entry.type);
+  builder.append_comma();
+  builder.template append_key_value<"path">(entry.path);
+  builder.append_comma();
+  builder.template append_key_value<"kind">(entry.kind);
+  builder.append_comma();
+  builder.template append_key_value<"file_count">(entry.file_count);
+  builder.append_comma();
+  builder.template append_key_value<"size_bytes">(entry.size_bytes);
+  builder.append_comma();
+  builder.template append_key_value<"latest_created_at">(
+      entry.latest_created_at);
+  builder.append_comma();
+  builder.template append_key_value<"blob">(entry.blob);
+  builder.end_object();
+}
+
+std::vector<StoreCatalogEntryJson>
+catalog_json_entries(const std::vector<memix::StoreCatalogEntry> &entries) {
+  return entries
+       | std::views::transform([](const memix::StoreCatalogEntry &entry) {
+           return StoreCatalogEntryJson{
+               .type = std::string(memix::to_string(entry.type)),
+               .path = entry.context_path.generic_string(),
+               .kind = entry.directory ? "directory" : "file",
+               .file_count = entry.file_count,
+               .size_bytes = entry.total_size_bytes,
+               .latest_created_at = entry.latest_created_at,
+               .blob = entry.blob_id,
+           };
+         })
+       | std::ranges::to<std::vector>();
+}
+
+void print_catalog_table(const std::vector<memix::StoreCatalogEntry> &entries) {
+  std::println("{:<{}}{:<11}{:>7}{:>{}}  {}", "TYPE", kTypeColumnWidth, "KIND",
+               "FILES", "SIZE", kSizeColumnWidth, "PATH");
+  for (const memix::StoreCatalogEntry &entry : entries) {
+    std::println(
+        "{:<{}}{:<11}{:>7}{:>{}}  {}", memix::to_string(entry.type),
+        kTypeColumnWidth, entry.directory ? "directory" : "file",
+        entry.file_count, format_size(entry.total_size_bytes), kSizeColumnWidth,
+        entry.context_path.empty() ? "." : entry.context_path.generic_string());
+  }
+}
+
 std::expected<std::string, memix::StoreError>
 metadata_json_array(const std::vector<memix::StoredObject> &objects) {
   std::string output = "[";
@@ -193,6 +259,24 @@ print_json_array(const std::vector<memix::StoredObject> &objects) {
     return memix::cli_detail::unexpected_error(formatted_json.error());
   }
   std::println("{}", *formatted_json);
+  return {};
+}
+
+memix::cli_detail::VoidResult
+print_catalog_json(const std::vector<memix::StoreCatalogEntry> &entries) {
+  simdjson::builder::string_builder builder;
+  builder.append(catalog_json_entries(entries));
+  const memix::detail::CommonResult<std::string> json =
+      memix::detail::json_from_builder(builder);
+  if (!json) {
+    return memix::cli_detail::unexpected_error(json.error().message);
+  }
+  const std::expected<std::string, memix::StoreError> formatted =
+      pretty_json(*json);
+  if (!formatted) {
+    return memix::cli_detail::unexpected_error(formatted.error());
+  }
+  std::println("{}", *formatted);
   return {};
 }
 
@@ -361,11 +445,16 @@ memix::cli_detail::VoidResult run_cat(const StoreCliOptions &options) {
 }
 
 memix::cli_detail::VoidResult run_tree(const StoreCliOptions &options) {
-  const memix::cli_detail::Result<memix::MemoryObjectType> type =
-      require_command_type(CommandTypeRequest{
-          .command_name = "tree",
-          .type_name = options.tree_type_name,
-      });
+  if (options.tree_all && !options.tree_type_name.empty()) {
+    return memix::cli_detail::unexpected_error(
+        "tree accepts either --all or --type, not both");
+  }
+  if (!options.tree_all && options.tree_type_name.empty()) {
+    return memix::cli_detail::unexpected_error(
+        "tree requires --type with an object type, or --all");
+  }
+  const memix::cli_detail::Result<std::optional<memix::MemoryObjectType>> type =
+      optional_type(options.tree_type_name);
   if (!type) {
     return std::unexpected(type.error());
   }
@@ -373,12 +462,41 @@ memix::cli_detail::VoidResult run_tree(const StoreCliOptions &options) {
   if (!store) {
     return std::unexpected(store.error());
   }
-  const std::expected<std::vector<memix::StoreFile>, memix::StoreError> files =
-      store->list_files(*type, optional_generation(options.tree_generation));
-  if (!files) {
-    return memix::cli_detail::unexpected_error(files.error());
+  const bool legacy_output = !options.tree_all
+                          && options.tree_path.empty()
+                          && !options.tree_depth.has_value()
+                          && !options.tree_json;
+  if (legacy_output) {
+    if (!type->has_value()) {
+      return memix::cli_detail::unexpected_error(
+          "tree requires --type with an object type");
+    }
+    const std::expected<std::vector<memix::StoreFile>, memix::StoreError>
+        files = store->list_files(type->value(),
+                                  optional_generation(options.tree_generation));
+    if (!files) {
+      return memix::cli_detail::unexpected_error(files.error());
+    }
+    print_context_tree_table(*files);
+    return {};
   }
-  print_context_tree_table(*files);
+
+  const std::expected<std::vector<memix::StoreCatalogEntry>, memix::StoreError>
+      entries = store->catalog(memix::StoreCatalogOptions{
+          .type = *type,
+          .path = options.tree_path,
+          .depth = options.tree_depth,
+          .generation = options.tree_generation.empty()
+                          ? std::nullopt
+                          : std::optional<std::string>(options.tree_generation),
+      });
+  if (!entries) {
+    return memix::cli_detail::unexpected_error(entries.error());
+  }
+  if (options.tree_json) {
+    return print_catalog_json(*entries);
+  }
+  print_catalog_table(*entries);
   return {};
 }
 
@@ -459,6 +577,35 @@ void add_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
 
 void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
   add_type_option(parser, options.tree_type_name);
+  parser.add(Argum::Option("--all")
+                 .help("Explore every available object type.")
+                 .handler([&options]() { options.tree_all = true; }));
+  parser.add(Argum::Option("--path")
+                 .argName("TEXT")
+                 .help("Limit output to one logical path or subtree.")
+                 .handler([&options](std::string_view value) {
+                   options.tree_path = fs::path(value);
+                 }));
+  parser.add(
+      Argum::Option("--depth")
+          .argName("INTEGER")
+          .help("Maximum depth relative to --path (0 shows the root only).")
+          .handler([&options](std::string_view value) -> Argum::Expected<void> {
+            std::size_t depth = 0;
+            const char *const begin = value.data();
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            const char *const end = begin + value.size();
+            const auto [parsed_end, error] = std::from_chars(begin, end, depth);
+            if (value.empty() || error != std::errc{} || parsed_end != end) {
+              return memix::cli_detail::argum_validation_error(std::format(
+                  "--depth expects a non-negative integer, got `{}`", value));
+            }
+            options.tree_depth = depth;
+            return {};
+          }));
+  parser.add(Argum::Option("--json")
+                 .help("Emit structured catalog entries as JSON.")
+                 .handler([&options]() { options.tree_json = true; }));
   add_generation_option(parser, options.tree_generation,
                         "Generation id. Defaults to the selected type's "
                         "latest ref.");
