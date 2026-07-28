@@ -318,6 +318,28 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
 @implementation MMXViewDerivationOutput
 @end
 
+@interface MMXViewEnvironmentClosure ()
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *derivations;
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *artifacts;
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *rawObjects;
+@property(nonatomic, copy, readwrite) NSArray<NSString *> *environments;
+@end
+
+@implementation MMXViewEnvironmentClosure
+@end
+
+@interface MMXResolvedViewEnvironmentInput ()
+@property(nonatomic, copy, readwrite) NSString *environmentID;
+@property(nonatomic, copy, readwrite) NSString *derivationID;
+@property(nonatomic, copy, readwrite) NSString *artifactID;
+@property(nonatomic, copy, readwrite) NSString *outputRole;
+@property(nonatomic, copy, readwrite) NSString *mount;
+@property(nonatomic, strong, readwrite) MMXViewEnvironmentClosure *closure;
+@end
+
+@implementation MMXResolvedViewEnvironmentInput
+@end
+
 @interface MMXViewDerivation ()
 @property(nonatomic, copy, readwrite) NSString *derivationID;
 @property(nonatomic, copy, readwrite) NSString *irHash;
@@ -326,6 +348,8 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
     NSArray<MMXResolvedViewFile *> *resolvedFiles;
 @property(nonatomic, copy, readwrite)
     NSArray<MMXViewDerivationOutput *> *outputs;
+@property(nonatomic, copy, readwrite)
+    NSArray<MMXResolvedViewEnvironmentInput *> *environmentInputs;
 @property(nonatomic, copy, readwrite) NSString *manifestPath;
 @property(nonatomic, copy, readwrite) NSString *treePath;
 @property(nonatomic, readwrite) BOOL inserted;
@@ -341,15 +365,6 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
 @end
 
 @implementation MMXViewEnvironmentBinding
-@end
-
-@interface MMXViewEnvironmentClosure ()
-@property(nonatomic, copy, readwrite) NSArray<NSString *> *derivations;
-@property(nonatomic, copy, readwrite) NSArray<NSString *> *artifacts;
-@property(nonatomic, copy, readwrite) NSArray<NSString *> *rawObjects;
-@end
-
-@implementation MMXViewEnvironmentClosure
 @end
 
 @interface MMXViewEnvironment ()
@@ -434,6 +449,41 @@ NSArray<MMXViewDerivationOutput *> *MMXWrapViewDerivationOutputs(
   return wrapped;
 }
 
+MMXViewEnvironmentClosure *
+MMXWrapViewEnvironmentClosure(const memix::ViewEnvironmentClosure &closure) {
+  MMXViewEnvironmentClosure *const wrapped =
+      [[MMXViewEnvironmentClosure alloc] init];
+  wrapped.derivations = MMXStringArray(closure.derivations);
+  wrapped.artifacts = MMXStringArray(closure.artifacts);
+  wrapped.rawObjects = MMXStringArray(closure.raw_objects);
+  wrapped.environments = MMXStringArray(closure.environments);
+  return wrapped;
+}
+
+MMXResolvedViewEnvironmentInput *MMXWrapResolvedViewEnvironmentInput(
+    const memix::ResolvedViewEnvironmentInput &input) {
+  MMXResolvedViewEnvironmentInput *const wrapped =
+      [[MMXResolvedViewEnvironmentInput alloc] init];
+  wrapped.environmentID = MMXString(input.environment_id);
+  wrapped.derivationID = MMXString(input.derivation_id);
+  wrapped.artifactID = MMXString(input.artifact_id);
+  wrapped.outputRole = MMXString(input.output_role);
+  wrapped.mount = MMXPathString(input.mount);
+  wrapped.closure = MMXWrapViewEnvironmentClosure(input.closure);
+  return wrapped;
+}
+
+NSArray<MMXResolvedViewEnvironmentInput *> *
+MMXWrapResolvedViewEnvironmentInputs(
+    const std::vector<memix::ResolvedViewEnvironmentInput> &inputs) {
+  NSMutableArray<MMXResolvedViewEnvironmentInput *> *const wrapped =
+      [[NSMutableArray alloc] initWithCapacity:inputs.size()];
+  for (const memix::ResolvedViewEnvironmentInput &input : inputs) {
+    [wrapped addObject:MMXWrapResolvedViewEnvironmentInput(input)];
+  }
+  return wrapped;
+}
+
 MMXViewDerivation *
 MMXWrapViewDerivation(const memix::ViewDerivation &derivation) {
   MMXViewDerivation *const wrapped = [[MMXViewDerivation alloc] init];
@@ -442,6 +492,8 @@ MMXWrapViewDerivation(const memix::ViewDerivation &derivation) {
   wrapped.target = MMXViewTargetKindFromMemory(derivation.target);
   wrapped.resolvedFiles = MMXWrapResolvedViewFiles(derivation.resolved_files);
   wrapped.outputs = MMXWrapViewDerivationOutputs(derivation.outputs);
+  wrapped.environmentInputs =
+      MMXWrapResolvedViewEnvironmentInputs(derivation.environment_inputs);
   wrapped.manifestPath = MMXPathString(derivation.manifest_path);
   wrapped.treePath = MMXPathString(derivation.tree_path);
   wrapped.inserted = derivation.inserted;
@@ -465,16 +517,6 @@ NSArray<MMXViewEnvironmentBinding *> *MMXWrapViewEnvironmentBindings(
   for (const memix::ViewEnvironmentBinding &binding : bindings) {
     [wrapped addObject:MMXWrapViewEnvironmentBinding(binding)];
   }
-  return wrapped;
-}
-
-MMXViewEnvironmentClosure *
-MMXWrapViewEnvironmentClosure(const memix::ViewEnvironmentClosure &closure) {
-  MMXViewEnvironmentClosure *const wrapped =
-      [[MMXViewEnvironmentClosure alloc] init];
-  wrapped.derivations = MMXStringArray(closure.derivations);
-  wrapped.artifacts = MMXStringArray(closure.artifacts);
-  wrapped.rawObjects = MMXStringArray(closure.raw_objects);
   return wrapped;
 }
 

@@ -56,6 +56,22 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
 @property(nonatomic, copy, readonly) NSString *path;
 @end
 
+@interface MMXViewEnvironmentClosure : NSObject
+@property(nonatomic, copy, readonly) NSArray<NSString *> *derivations;
+@property(nonatomic, copy, readonly) NSArray<NSString *> *artifacts;
+@property(nonatomic, copy, readonly) NSArray<NSString *> *rawObjects;
+@property(nonatomic, copy, readonly) NSArray<NSString *> *environments;
+@end
+
+@interface MMXResolvedViewEnvironmentInput : NSObject
+@property(nonatomic, copy, readonly) NSString *environmentID;
+@property(nonatomic, copy, readonly) NSString *derivationID;
+@property(nonatomic, copy, readonly) NSString *artifactID;
+@property(nonatomic, copy, readonly) NSString *outputRole;
+@property(nonatomic, copy, readonly) NSString *mount;
+@property(nonatomic, strong, readonly) MMXViewEnvironmentClosure *closure;
+@end
+
 @interface MMXViewDerivation : NSObject
 @property(nonatomic, copy, readonly) NSString *derivationID;
 @property(nonatomic, copy, readonly) NSString *irHash;
@@ -64,6 +80,8 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
     NSArray<MMXResolvedViewFile *> *resolvedFiles;
 @property(nonatomic, copy, readonly)
     NSArray<MMXViewDerivationOutput *> *outputs;
+@property(nonatomic, copy, readonly)
+    NSArray<MMXResolvedViewEnvironmentInput *> *environmentInputs;
 @property(nonatomic, copy, readonly) NSString *manifestPath;
 @property(nonatomic, copy, readonly) NSString *treePath;
 @property(nonatomic, readonly) BOOL inserted;
@@ -73,12 +91,6 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
 @property(nonatomic, copy, readonly) NSString *mount;
 @property(nonatomic, copy, readonly) NSString *derivationID;
 @property(nonatomic, copy, readonly) NSString *outputRole;
-@end
-
-@interface MMXViewEnvironmentClosure : NSObject
-@property(nonatomic, copy, readonly) NSArray<NSString *> *derivations;
-@property(nonatomic, copy, readonly) NSArray<NSString *> *artifacts;
-@property(nonatomic, copy, readonly) NSArray<NSString *> *rawObjects;
 @end
 
 @interface MMXViewEnvironment : NSObject

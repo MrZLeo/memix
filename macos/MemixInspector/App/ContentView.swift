@@ -615,10 +615,17 @@ private struct EnvironmentDetail: View {
             ("Target", environment.derivation.target.title),
             ("Resolved files", "\(environment.derivation.resolvedFiles.count)"),
             ("Outputs", environment.derivation.outputs.map(\.role).joined(separator: ", ")),
+            (
+                "Environment inputs",
+                environment.derivation.environmentInputs
+                    .map { "\($0.mount):\($0.outputRole) ← \($0.environmentID)" }
+                    .joined(separator: ", ")
+            ),
             ("Derivation manifest", environment.derivation.manifestPath),
             ("Tree", environment.derivation.treePath),
             ("Derivation inserted", environment.derivation.inserted ? "true" : "false"),
             ("Bindings", environment.bindings.map { "\($0.mount):\($0.outputRole)" }.joined(separator: ", ")),
+            ("Closure environments", "\(environment.closure.environments.count)"),
             ("Closure derivations", "\(environment.closure.derivations.count)"),
             ("Closure artifacts", "\(environment.closure.artifacts.count)"),
             ("Raw objects", "\(environment.closure.rawObjects.count)"),
