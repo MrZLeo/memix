@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <random>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -22,6 +24,8 @@ static_assert(memix::parse_view_target_kind("context_pack")
               == memix::ViewTargetKind::ContextPack);
 static_assert(memix::to_string(memix::ViewVersionKind::Generation)
               == "generation");
+static_assert(memix::parse_view_input_kind("environment")
+              == memix::ViewInputKind::Environment);
 
 namespace {
 
@@ -151,6 +155,30 @@ TEST_CASE("view expression lowering parses path locators with defaults",
           != std::string::npos);
   REQUIRE(ir_json->find("\"locator\":\"rules/repo/AGENTS.md@latest\"")
           != std::string::npos);
+}
+
+TEST_CASE("typed view expressions parse context and environment inputs",
+          "[view]") {
+  TemporaryDirectory directory("typed-expression");
+  const memix::ViewService views{memix::Store(directory.path() / "store")};
+  const auto expression = views.parse_expression(
+      R"({"schema":"memix.view.expr.v2","inputs":[)"
+      R"({"kind":"context","locator":"rules/repo/AGENTS.md"},)"
+      R"({"kind":"environment","environment":"abcd","output":"file_tree",)"
+      R"("mount":"prior"}]})");
+  REQUIRE(expression.has_value());
+  REQUIRE(expression->inputs.size() == 2);
+  REQUIRE(expression->inputs[0].kind == memix::ViewInputKind::Context);
+  REQUIRE(expression->inputs[1].kind == memix::ViewInputKind::Environment);
+  REQUIRE(expression->inputs[1].mount == fs::path("prior"));
+
+  const auto ir = views.lower_to_ir(*expression);
+  REQUIRE(ir.has_value());
+  REQUIRE(ir->schema == "memix.view.ir.v2");
+  REQUIRE(ir->inputs[0].kind == memix::ViewInputKind::Context);
+  REQUIRE(ir->inputs[1].kind == memix::ViewInputKind::Environment);
+  REQUIRE(ir->inputs[1].environment_id == "abcd");
+  REQUIRE(ir->inputs[1].mount == fs::path("prior"));
 }
 
 TEST_CASE("view expression lowering rejects invalid locators", "[view]") {
@@ -335,6 +363,34 @@ TEST_CASE("view file tree environment records file and directory closure",
       read_file(resolved->derivation.tree_path / "rules" / "repo" / "AGENTS.md")
       == "repo rules\n");
 
+  const memix::ViewResult<std::vector<memix::ViewEnvironmentInfo>>
+      environments = views.list_environments();
+  REQUIRE(environments.has_value());
+  REQUIRE(environments->size() == 1);
+  REQUIRE((*environments)[0].id == first->id);
+  REQUIRE((*environments)[0].file_count == 3);
+  REQUIRE((*environments)[0].total_size_bytes == 25);
+
+  const memix::ViewResult<std::vector<memix::ViewCatalogEntry>> catalog =
+      views.environment_tree(first->id, memix::ViewCatalogOptions{
+                                            .path = "chat/task",
+                                            .depth = 2,
+                                        });
+  REQUIRE(catalog.has_value());
+  REQUIRE(catalog->size() == 4);
+  REQUIRE((*catalog)[0].path == fs::path("chat/task"));
+  REQUIRE((*catalog)[0].directory);
+  REQUIRE((*catalog)[0].file_count == 2);
+  REQUIRE((*catalog)[1].path == fs::path("chat/task/2026-05-20"));
+  REQUIRE((*catalog)[1].directory);
+
+  const memix::ViewResult<memix::ResolvedViewFile> catalog_file =
+      views.read_environment_file(first->id, "chat/task/2026-05-20/a.md");
+  REQUIRE(catalog_file.has_value());
+  REQUIRE(
+      read_file(catalog_file->blob.object_dir / catalog_file->blob.content_path)
+      == "chat a\n");
+
   const std::string copied_environment_id(64, 'f');
   const fs::path copied_environment_path =
       first->manifest_path.parent_path()
@@ -345,6 +401,159 @@ TEST_CASE("view file tree environment records file and directory closure",
       views.resolve_environment(copied_environment_id);
   REQUIRE_FALSE(mismatched.has_value());
   REQUIRE(mismatched.error().kind == memix::ErrorKind::InvalidData);
+}
+
+TEST_CASE("views compose environments with mounts and transitive provenance",
+          "[view]") {
+  TemporaryDirectory directory("view-composition");
+  const fs::path rule_source = directory.path() / "AGENTS.md";
+  const fs::path document_source = directory.path() / "design.md";
+  write_file(rule_source, "repo rules\n");
+  write_file(document_source, "design\n");
+
+  const memix::Store store(directory.path() / "store");
+  ingest_context_file(store, memix::MemoryObjectType::Rules, rule_source,
+                      "repo/AGENTS.md", "rules");
+  ingest_context_file(store, memix::MemoryObjectType::Documents,
+                      document_source, "notes/design.md", "design");
+  const memix::ViewService views(store);
+
+  const auto base_expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md"});
+  REQUIRE(base_expression.has_value());
+  const auto base = views.build(*base_expression);
+  REQUIRE(base.has_value());
+  const std::string base_derivation_manifest =
+      read_file(base->derivation.manifest_path);
+  const std::string base_environment_manifest = read_file(base->manifest_path);
+
+  const auto composed_expression = views.expression_from_inputs({
+      memix::AuthoredViewInput{
+          .kind = memix::ViewInputKind::Context,
+          .locator = "documents/notes/design.md",
+      },
+      memix::AuthoredViewInput{
+          .kind = memix::ViewInputKind::Environment,
+          .environment_id = base->id.substr(0, 16),
+          .output_role = "file_tree",
+          .mount = "prior",
+      },
+  });
+  REQUIRE(composed_expression.has_value());
+  const auto composed_ir = views.lower_to_ir(*composed_expression);
+  REQUIRE(composed_ir.has_value());
+  REQUIRE(composed_ir->schema == "memix.view.ir.v2");
+  const auto composed_ir_json = memix::view_ir_json(*composed_ir);
+  REQUIRE(composed_ir_json.has_value());
+  REQUIRE(composed_ir_json->find("\"kind\":\"environment\"")
+          != std::string::npos);
+
+  const auto composed = views.build(*composed_expression);
+  REQUIRE(composed.has_value());
+  REQUIRE(composed->derivation.environment_inputs.size() == 1);
+  REQUIRE(composed->derivation.environment_inputs[0].environment_id
+          == base->id);
+  REQUIRE(composed->closure.environments == std::vector{base->id});
+  REQUIRE(composed->closure.derivations.size() == 2);
+  REQUIRE(composed->closure.artifacts.size() == 4);
+  REQUIRE(composed->closure.raw_objects.size() == 2);
+  REQUIRE(read_file(composed->derivation.tree_path
+                    / "prior"
+                    / "rules"
+                    / "repo"
+                    / "AGENTS.md")
+          == "repo rules\n");
+  REQUIRE(
+      read_file(
+          composed->derivation.tree_path / "documents" / "notes" / "design.md")
+      == "design\n");
+  REQUIRE(read_file(composed->derivation.manifest_path)
+              .find("\"schema\":\"memix.view.derivation.v2\"")
+          != std::string::npos);
+  REQUIRE(read_file(composed->derivation.manifest_path)
+              .find("\"resolved_view_inputs\"")
+          != std::string::npos);
+  REQUIRE(read_file(composed->manifest_path)
+              .find("\"schema\":\"memix.view.environment.v2\"")
+          != std::string::npos);
+
+  const auto transitive_expression = views.expression_from_inputs({
+      memix::AuthoredViewInput{
+          .kind = memix::ViewInputKind::Environment,
+          .environment_id = composed->id,
+          .output_role = "file_tree",
+          .mount = "archive",
+      },
+  });
+  REQUIRE(transitive_expression.has_value());
+  const auto transitive = views.build(*transitive_expression);
+  REQUIRE(transitive.has_value());
+  REQUIRE(transitive->closure.environments.size() == 2);
+  REQUIRE(std::ranges::contains(transitive->closure.environments, base->id));
+  REQUIRE(
+      std::ranges::contains(transitive->closure.environments, composed->id));
+  REQUIRE(transitive->closure.derivations.size() == 3);
+  REQUIRE(transitive->closure.artifacts.size() == 6);
+  REQUIRE(transitive->closure.raw_objects.size() == 2);
+  REQUIRE(read_file(transitive->derivation.tree_path
+                    / "archive"
+                    / "prior"
+                    / "rules"
+                    / "repo"
+                    / "AGENTS.md")
+          == "repo rules\n");
+
+  const auto rebuilt_base = views.build(*base_expression);
+  REQUIRE(rebuilt_base.has_value());
+  REQUIRE(rebuilt_base->id == base->id);
+  REQUIRE(rebuilt_base->derivation.id == base->derivation.id);
+  REQUIRE(read_file(rebuilt_base->derivation.manifest_path)
+          == base_derivation_manifest);
+  REQUIRE(read_file(rebuilt_base->manifest_path) == base_environment_manifest);
+
+  const auto environments = views.list_environments();
+  REQUIRE(environments.has_value());
+  const auto transitive_info = std::ranges::find(
+      *environments, transitive->id, &memix::ViewEnvironmentInfo::id);
+  REQUIRE(transitive_info != environments->end());
+  REQUIRE(transitive_info->upstream_environment_count == 2);
+}
+
+TEST_CASE("view composition rejects output path collisions", "[view]") {
+  TemporaryDirectory directory("view-composition-collision");
+  const fs::path old_source = directory.path() / "old.md";
+  const fs::path new_source = directory.path() / "new.md";
+  write_file(old_source, "old\n");
+  write_file(new_source, "new\n");
+
+  const memix::Store store(directory.path() / "store");
+  ingest_context_file(store, memix::MemoryObjectType::Rules, old_source,
+                      "repo/AGENTS.md", "old");
+  const memix::ViewService views(store);
+  const auto old_view =
+      views.build(*views.expression_from_sources({"rules/repo/AGENTS.md"}));
+  REQUIRE(old_view.has_value());
+
+  ingest_context_file(store, memix::MemoryObjectType::Rules, new_source,
+                      "repo/AGENTS.md", "new");
+  const auto new_view =
+      views.build(*views.expression_from_sources({"rules/repo/AGENTS.md"}));
+  REQUIRE(new_view.has_value());
+
+  const auto expression = views.expression_from_inputs({
+      memix::AuthoredViewInput{
+          .kind = memix::ViewInputKind::Environment,
+          .environment_id = old_view->id,
+      },
+      memix::AuthoredViewInput{
+          .kind = memix::ViewInputKind::Environment,
+          .environment_id = new_view->id,
+      },
+  });
+  REQUIRE(expression.has_value());
+  const auto collision = views.build(*expression);
+  REQUIRE_FALSE(collision.has_value());
+  REQUIRE(collision.error().kind == memix::ErrorKind::Conflict);
 }
 
 TEST_CASE("concurrent view builds report one insertion and clean temps",

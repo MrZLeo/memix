@@ -5,6 +5,7 @@
 #include "memix/store.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -17,6 +18,7 @@ namespace memix {
 enum class ViewTargetKind : std::uint8_t { FileTree, ContextPack };
 enum class ViewVersionKind : std::uint8_t { Ref, Generation };
 enum class ActivationMode : std::uint8_t { Link, Copy };
+enum class ViewInputKind : std::uint8_t { Context, Environment };
 
 namespace detail {
 
@@ -32,6 +34,11 @@ struct ViewVersionKindToken {
 
 struct ActivationModeToken {
   ActivationMode value;
+  std::string_view token;
+};
+
+struct ViewInputKindToken {
+  ViewInputKind value;
   std::string_view token;
 };
 
@@ -68,6 +75,17 @@ inline constexpr std::array kActivationModeTokens{
     },
 };
 
+inline constexpr std::array kViewInputKindTokens{
+    ViewInputKindToken{
+        .value = ViewInputKind::Context,
+        .token = "context",
+    },
+    ViewInputKindToken{
+        .value = ViewInputKind::Environment,
+        .token = "environment",
+    },
+};
+
 } // namespace detail
 
 [[nodiscard]] constexpr std::string_view
@@ -97,11 +115,31 @@ parse_activation_mode(std::string_view value) noexcept {
                                                  value);
 }
 
+[[nodiscard]] constexpr std::string_view
+to_string(ViewInputKind kind) noexcept {
+  return detail::token_for(detail::kViewInputKindTokens, kind);
+}
+
+[[nodiscard]] constexpr std::optional<ViewInputKind>
+parse_view_input_kind(std::string_view value) noexcept {
+  return detail::value_for_token<ViewInputKind>(detail::kViewInputKindTokens,
+                                                value);
+}
+
+struct AuthoredViewInput {
+  ViewInputKind kind = ViewInputKind::Context;
+  std::string locator;
+  std::string environment_id;
+  std::string output_role = "file_tree";
+  fs::path mount;
+};
+
 struct AuthoredViewExpression {
   std::string schema = "memix.view.expr.v1";
   std::string profile;
   std::vector<std::string> sources;
   ViewTargetKind target = ViewTargetKind::FileTree;
+  std::vector<AuthoredViewInput> inputs;
 };
 
 struct ViewVersionSelector {
@@ -116,6 +154,10 @@ struct ViewIrInput {
   ViewVersionSelector version;
   bool recursive = false;
   bool required = true;
+  ViewInputKind kind = ViewInputKind::Context;
+  std::string environment_id;
+  std::string output_role = "file_tree";
+  fs::path mount;
 };
 
 struct ViewIrTarget {
@@ -144,6 +186,22 @@ struct ViewDerivationOutput {
   fs::path path;
 };
 
+struct ViewEnvironmentClosure {
+  std::vector<std::string> derivations;
+  std::vector<std::string> artifacts;
+  std::vector<std::string> raw_objects;
+  std::vector<std::string> environments;
+};
+
+struct ResolvedViewEnvironmentInput {
+  std::string environment_id;
+  std::string derivation_id;
+  std::string artifact_id;
+  std::string output_role = "file_tree";
+  fs::path mount;
+  ViewEnvironmentClosure closure;
+};
+
 struct ViewDerivation {
   std::string id;
   std::string ir_hash;
@@ -153,18 +211,13 @@ struct ViewDerivation {
   fs::path manifest_path;
   fs::path tree_path;
   bool inserted = false;
+  std::vector<ResolvedViewEnvironmentInput> environment_inputs;
 };
 
 struct ViewEnvironmentBinding {
   fs::path mount;
   std::string derivation_id;
   std::string output_role;
-};
-
-struct ViewEnvironmentClosure {
-  std::vector<std::string> derivations;
-  std::vector<std::string> artifacts;
-  std::vector<std::string> raw_objects;
 };
 
 struct ViewEnvironment {
@@ -174,6 +227,27 @@ struct ViewEnvironment {
   ViewEnvironmentClosure closure;
   ViewDerivation derivation;
   bool inserted = false;
+};
+
+struct ViewCatalogOptions {
+  fs::path path;
+  std::optional<std::size_t> depth;
+};
+
+struct ViewCatalogEntry {
+  fs::path path;
+  bool directory = false;
+  std::size_t file_count = 0;
+  std::uintmax_t total_size_bytes = 0;
+  std::string blob_id;
+};
+
+struct ViewEnvironmentInfo {
+  std::string id;
+  std::string derivation_id;
+  std::size_t file_count = 0;
+  std::uintmax_t total_size_bytes = 0;
+  std::size_t upstream_environment_count = 0;
 };
 
 // Profiles are the only mutable layer: a named sequence of generations with
@@ -245,6 +319,10 @@ public:
       std::vector<std::string> sources,
       ViewTargetKind target = ViewTargetKind::FileTree) const;
 
+  [[nodiscard]] ViewResult<AuthoredViewExpression> expression_from_inputs(
+      std::vector<AuthoredViewInput> inputs,
+      ViewTargetKind target = ViewTargetKind::FileTree) const;
+
   [[nodiscard]] ViewResult<ViewIr>
   lower_to_ir(const AuthoredViewExpression &expression) const;
 
@@ -255,6 +333,17 @@ public:
 
   [[nodiscard]] ViewResult<ViewEnvironment>
   resolve_environment(std::string_view environment_prefix) const;
+
+  [[nodiscard]] ViewResult<std::vector<ViewEnvironmentInfo>>
+  list_environments() const;
+
+  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
+  environment_tree(std::string_view environment_prefix,
+                   const ViewCatalogOptions &options = {}) const;
+
+  [[nodiscard]] ViewResult<ResolvedViewFile>
+  read_environment_file(std::string_view environment_prefix,
+                        const fs::path &path) const;
 
   [[nodiscard]] ViewResult<ViewActivation>
   activate(std::string_view environment_prefix,
