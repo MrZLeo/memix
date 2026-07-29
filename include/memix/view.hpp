@@ -180,6 +180,12 @@ struct ResolvedViewFile {
   StoredObject blob;
 };
 
+struct ResolvedViewInputResolution {
+  std::string locator;
+  std::string source_generation;
+  ViewVersionSelector version;
+};
+
 struct ViewDerivationOutput {
   std::string role;
   std::string artifact;
@@ -212,6 +218,9 @@ struct ViewDerivation {
   fs::path tree_path;
   bool inserted = false;
   std::vector<ResolvedViewEnvironmentInput> environment_inputs;
+  // Absent only for legacy manifests. New manifests contain one entry for
+  // every context input, including inputs that resolved no files.
+  std::optional<std::vector<ResolvedViewInputResolution>> input_resolutions;
 };
 
 struct ViewEnvironmentBinding {
@@ -311,8 +320,11 @@ struct QuestFreshness {
   std::string ir_hash;
   std::string derivation_id;
   std::string resolved_at;
-  // Contains context/ref inputs only. Composed environment inputs are omitted:
-  // their resolved environment IDs are content-pinned and cannot drift.
+  // Contains context inputs only. Composed environment inputs are omitted:
+  // their resolved environment IDs are content-pinned and cannot drift. For
+  // legacy derivation manifests without per-input resolutions, freshness falls
+  // back to resolved-file locator matching and conservatively marks an input
+  // not represented there as not fresh.
   std::vector<QuestFreshnessInput> inputs;
   bool stale = false;
 };

@@ -164,6 +164,54 @@ std::string json_string_field(std::string_view json, std::string_view key) {
   return std::string(json.substr(value_begin, end - value_begin));
 }
 
+void erase_json_array_field(std::string &json, std::string_view key) {
+  const std::string prefix = std::format(R"(,"{}":[)", key);
+  const std::size_t begin = json.find(prefix);
+  REQUIRE(begin != std::string::npos);
+  const std::size_t array_begin = begin + prefix.size() - 1;
+  std::size_t depth = 0;
+  for (std::size_t index = array_begin; index < json.size(); ++index) {
+    if (json[index] == '[') {
+      ++depth;
+    } else if (json[index] == ']') {
+      REQUIRE(depth > 0);
+      --depth;
+      if (depth == 0) {
+        json.erase(begin, index - begin + 1);
+        return;
+      }
+    }
+  }
+  FAIL("unterminated JSON array");
+}
+
+void erase_first_json_object_from_array(std::string &json,
+                                        std::string_view key) {
+  const std::string prefix = std::format(R"("{}":[)", key);
+  const std::size_t field_begin = json.find(prefix);
+  REQUIRE(field_begin != std::string::npos);
+  const std::size_t object_begin = field_begin + prefix.size();
+  REQUIRE(object_begin < json.size());
+  REQUIRE(json[object_begin] == '{');
+  std::size_t depth = 0;
+  for (std::size_t index = object_begin; index < json.size(); ++index) {
+    if (json[index] == '{') {
+      ++depth;
+    } else if (json[index] == '}') {
+      REQUIRE(depth > 0);
+      --depth;
+      if (depth == 0) {
+        const bool followed_by_comma =
+            index + 1 < json.size() && json[index + 1] == ',';
+        json.erase(object_begin,
+                   index - object_begin + (followed_by_comma ? 2 : 1));
+        return;
+      }
+    }
+  }
+  FAIL("unterminated JSON object");
+}
+
 const memix::QuestInfo &
 quest_with_hash(const std::vector<memix::QuestInfo> &quests,
                 std::string_view ir_hash) {
@@ -406,6 +454,154 @@ TEST_CASE("quest resolution and freshness follow refs but preserve pins",
   REQUIRE(no_resolution.error().kind == memix::ErrorKind::NotFound);
 }
 
+TEST_CASE("freshness retains overlapping pinned and ref inputs", "[quest]") {
+  TemporaryDirectory directory("freshness-overlap");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path second_source = directory.path() / "second.md";
+  write_file(first_source, "first\n");
+  write_file(second_source, "second\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, first_source, "repo/AGENTS.md", "first");
+  const memix::ViewService views(store);
+  const auto expression = views.expression_from_sources({
+      "rules/repo/AGENTS.md@generation/000001",
+      "rules/repo/AGENTS.md@latest",
+  });
+  REQUIRE(expression);
+
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+  REQUIRE(environment->derivation.resolved_files.size() == 1);
+  REQUIRE(environment->derivation.input_resolutions.has_value());
+  REQUIRE(environment->derivation.input_resolutions->size() == 2);
+  const std::string manifest =
+      read_file(environment->derivation.manifest_path);
+  REQUIRE(manifest.contains(R"("input_resolutions":[)"));
+
+  ingest_context_file(store, second_source, "repo/AGENTS.md", "second");
+  const auto freshness =
+      views.quest_freshness(environment->derivation.ir_hash);
+  REQUIRE(freshness);
+  REQUIRE(freshness->inputs.size() == 2);
+  const auto pinned = std::ranges::find(
+      freshness->inputs, true, &memix::QuestFreshnessInput::pinned);
+  const auto followed = std::ranges::find(
+      freshness->inputs, false, &memix::QuestFreshnessInput::pinned);
+  REQUIRE(pinned != freshness->inputs.end());
+  REQUIRE(followed != freshness->inputs.end());
+  REQUIRE(pinned->fresh);
+  REQUIRE_FALSE(followed->fresh);
+  REQUIRE(freshness->stale);
+}
+
+TEST_CASE("freshness records optional inputs that resolve no files",
+          "[quest]") {
+  TemporaryDirectory directory("freshness-optional");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path second_source = directory.path() / "second.md";
+  write_file(first_source, "first\n");
+  write_file(second_source, "second\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, first_source, "repo/present.md", "first");
+  const memix::ViewService views(store);
+  const memix::ViewIr ir{
+      .schema = "memix.view.ir.v1",
+      .inputs =
+          {
+              memix::ViewIrInput{
+                  .locator = "rules/repo/missing.md@latest",
+                  .type = memix::MemoryObjectType::Rules,
+                  .path = "repo/missing.md",
+                  .version =
+                      memix::ViewVersionSelector{
+                          .kind = memix::ViewVersionKind::Ref,
+                          .value = "latest",
+                      },
+                  .recursive = false,
+                  .required = false,
+              },
+          },
+      .target = {},
+  };
+
+  const auto derivation = views.build_ir(ir);
+  REQUIRE(derivation);
+  REQUIRE(derivation->resolved_files.empty());
+  REQUIRE(derivation->input_resolutions.has_value());
+  REQUIRE(derivation->input_resolutions->size() == 1);
+  REQUIRE(derivation->input_resolutions->front().locator
+          == "rules/repo/missing.md@latest");
+  const std::string manifest = read_file(derivation->manifest_path);
+  REQUIRE(manifest.contains(R"("resolved_inputs":[])"));
+  REQUIRE(manifest.contains(
+      R"("input_resolutions":[{"locator":"rules/repo/missing.md@latest")"));
+
+  const auto environment = views.resolve_quest(derivation->ir_hash);
+  REQUIRE(environment);
+  REQUIRE(environment->derivation.id == derivation->id);
+  const auto initially_fresh = views.quest_freshness(derivation->ir_hash);
+  REQUIRE(initially_fresh);
+  REQUIRE_FALSE(initially_fresh->stale);
+  REQUIRE(initially_fresh->inputs.size() == 1);
+  REQUIRE(initially_fresh->inputs.front().fresh);
+
+  ingest_context_file(store, second_source, "repo/other.md", "second");
+  const auto stale = views.quest_freshness(derivation->ir_hash);
+  REQUIRE(stale);
+  REQUIRE(stale->stale);
+  REQUIRE_FALSE(stale->inputs.front().fresh);
+}
+
+TEST_CASE("legacy freshness fallback never skips an absent locator",
+          "[quest]") {
+  TemporaryDirectory directory("freshness-legacy");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path second_source = directory.path() / "second.md";
+  write_file(first_source, "first\n");
+  write_file(second_source, "second\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, first_source, "repo/a.md", "first");
+  ingest_context_file(store, second_source, "repo/b.md", "second");
+  const memix::ViewService views(store);
+  const auto expression = views.expression_from_sources({
+      "rules/repo/a.md@latest",
+      "rules/repo/b.md@latest",
+  });
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+
+  const fs::path manifest_path = environment->derivation.manifest_path;
+  std::string legacy_manifest = read_file(manifest_path);
+  erase_json_array_field(legacy_manifest, "input_resolutions");
+  REQUIRE(fs::permissions(manifest_path.parent_path(), fs::perms::owner_all));
+  REQUIRE(fs::permissions(manifest_path, fs::perms::owner_all));
+  write_file(manifest_path, legacy_manifest);
+
+  const auto complete_legacy =
+      views.quest_freshness(environment->derivation.ir_hash);
+  REQUIRE(complete_legacy);
+  REQUIRE_FALSE(complete_legacy->stale);
+  REQUIRE(complete_legacy->inputs.size() == 2);
+  REQUIRE(std::ranges::all_of(
+      complete_legacy->inputs, &memix::QuestFreshnessInput::fresh));
+
+  erase_first_json_object_from_array(legacy_manifest, "resolved_inputs");
+  write_file(manifest_path, legacy_manifest);
+  const auto incomplete_legacy =
+      views.quest_freshness(environment->derivation.ir_hash);
+  REQUIRE(incomplete_legacy);
+  REQUIRE(incomplete_legacy->stale);
+  REQUIRE(incomplete_legacy->inputs.size() == 2);
+  REQUIRE(std::ranges::count(
+              incomplete_legacy->inputs, false,
+              &memix::QuestFreshnessInput::fresh)
+          == 1);
+}
+
 TEST_CASE("quest finding combines semantic and structural lookup", "[quest]") {
   TemporaryDirectory directory("find");
   const memix::ViewService views{memix::Store(directory.path() / "store")};
@@ -491,6 +687,57 @@ TEST_CASE("quest finding combines semantic and structural lookup", "[quest]") {
   const auto untyped = views.find_quests({}, fs::path("shared/item.md"));
   REQUIRE(untyped);
   REQUIRE(untyped->size() == 2);
+}
+
+TEST_CASE("quest finding enriches only metadata matches", "[quest]") {
+  constexpr std::size_t excluded_receipt_count = 10000;
+  TemporaryDirectory directory("find-two-pass");
+  const fs::path source = directory.path() / "matching.md";
+  write_file(source, "matching\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/matching.md", "matching");
+  const memix::ViewService views(store);
+
+  const auto matching_expression =
+      views.expression_from_sources({"rules/repo/matching.md@latest"});
+  const auto excluded_expression =
+      views.expression_from_sources({"rules/repo/excluded.md@latest"});
+  REQUIRE(matching_expression);
+  REQUIRE(excluded_expression);
+  const auto matching =
+      views.build(*matching_expression, memix::BuildOptions{
+                                            .intent = "needle metadata",
+                                            .name = "matching",
+                                        });
+  const auto excluded =
+      views.define_quest(*excluded_expression, "unrelated metadata", "");
+  REQUIRE(matching);
+  REQUIRE(excluded);
+  const auto read =
+      views.read_environment_file(matching->id, "rules/repo/matching.md");
+  REQUIRE(read);
+
+  const std::string fake_id(64, 'a');
+  const std::string receipt =
+      std::format(R"({{"at":"2026-07-29T00:00:00Z","operation":"cat",)"
+                  R"("environment_id":"{}","derivation_id":"{}",)"
+                  R"("path":"rules/repo/excluded.md"}})"
+                  "\n",
+                  fake_id, fake_id);
+  std::string large_receipts;
+  large_receipts.reserve(receipt.size() * excluded_receipt_count);
+  for (std::size_t index = 0; index < excluded_receipt_count; ++index) {
+    large_receipts += receipt;
+  }
+  write_file(receipts_path(store_root, excluded->ir_hash), large_receipts);
+
+  const auto matches = views.find_quests({"needle"}, std::nullopt);
+  REQUIRE(matches);
+  REQUIRE(matches->size() == 1);
+  REQUIRE(matches->front().ir_hash == matching->derivation.ir_hash);
+  REQUIRE(matches->front().resolution_count == 1);
+  REQUIRE(matches->front().read_count == 1);
 }
 
 TEST_CASE("derivation manifests add created_at and legacy manifests parse",
@@ -682,7 +929,10 @@ TEST_CASE("composed quest builds persist timestamps history and freshness",
   const std::string manifest = read_file(composed->derivation.manifest_path);
   REQUIRE(manifest.contains(R"("schema":"memix.view.derivation.v2")"));
   REQUIRE(manifest.contains(R"("created_at":")"));
+  REQUIRE(manifest.contains(R"("input_resolutions":[)"));
   REQUIRE(manifest.contains(R"("resolved_view_inputs":[)"));
+  REQUIRE(composed->derivation.input_resolutions.has_value());
+  REQUIRE(composed->derivation.input_resolutions->size() == 1);
 
   const auto freshness = views.quest_freshness(composed->derivation.ir_hash);
   REQUIRE(freshness);
@@ -1309,6 +1559,150 @@ TEST_CASE("receipt scans tolerate unknown operations and missing optionals",
       quest_with_hash(*listed, environment->derivation.ir_hash);
   REQUIRE(quest.read_count == 1);
   REQUIRE(quest.activation_count == 1);
+}
+
+TEST_CASE("concurrent quest definitions atomically publish complete metadata",
+          "[quest]") {
+  constexpr int writer_count = 16;
+  TemporaryDirectory directory("concurrent-metadata");
+  const fs::path store_root = directory.path() / "store";
+  const memix::ViewService views{memix::Store(store_root)};
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto initial = views.define_quest(*expression, "initial", "initial");
+  REQUIRE(initial);
+
+  std::atomic<int> ready = 0;
+  std::atomic<int> completed = 0;
+  std::atomic<bool> start = false;
+  std::atomic<bool> parse_failed = false;
+  std::vector<memix::ViewResult<memix::QuestDefinition>> results(writer_count);
+  std::vector<std::thread> writers;
+  writers.reserve(writer_count);
+  for (int index = 0; index < writer_count; ++index) {
+    writers.emplace_back([&, index]() {
+      ready.fetch_add(1, std::memory_order_acq_rel);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      const memix::ViewService thread_views{memix::Store(store_root)};
+      results.at(static_cast<std::size_t>(index)) =
+          thread_views.define_quest(
+              *expression, std::format("intent-{}", index),
+              std::format("name-{}", index));
+      completed.fetch_add(1, std::memory_order_acq_rel);
+    });
+  }
+  std::thread reader([&]() {
+    while (!start.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    const memix::ViewService thread_views{memix::Store(store_root)};
+    while (completed.load(std::memory_order_acquire) != writer_count) {
+      const auto listed = thread_views.list_quests();
+      if (!listed) {
+        parse_failed.store(true, std::memory_order_release);
+        return;
+      }
+    }
+  });
+  while (ready.load(std::memory_order_acquire) != writer_count) {
+    std::this_thread::yield();
+  }
+  start.store(true, std::memory_order_release);
+  for (std::thread &writer : writers) {
+    writer.join();
+  }
+  reader.join();
+
+  REQUIRE_FALSE(parse_failed.load(std::memory_order_acquire));
+  for (const auto &result : results) {
+    const std::string error = result ? "" : result.error().message;
+    INFO(error);
+    REQUIRE(result);
+  }
+  const std::string quest_json = read_file(initial->quest_dir / "quest.json");
+  const std::string final_intent = json_string_field(quest_json, "intent");
+  const std::string final_name = json_string_field(quest_json, "name");
+  bool matches_writer = false;
+  for (int index = 0; index < writer_count; ++index) {
+    if (final_intent == std::format("intent-{}", index)
+        && final_name == std::format("name-{}", index)) {
+      matches_writer = true;
+      break;
+    }
+  }
+  REQUIRE(matches_writer);
+}
+
+TEST_CASE("concurrent define and annotated build preserve quest metadata and "
+          "history",
+          "[quest]") {
+  TemporaryDirectory directory("concurrent-define-build");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto initial = views.define_quest(*expression, "initial", "initial");
+  REQUIRE(initial);
+
+  std::atomic<int> ready = 0;
+  std::atomic<bool> start = false;
+  memix::ViewResult<memix::QuestDefinition> defined;
+  memix::ViewResult<memix::ViewEnvironment> built;
+  std::thread definer([&]() {
+    ready.fetch_add(1, std::memory_order_acq_rel);
+    while (!start.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    const memix::ViewService thread_views{memix::Store(store_root)};
+    defined =
+        thread_views.define_quest(*expression, "define-intent", "define-name");
+  });
+  std::thread builder([&]() {
+    ready.fetch_add(1, std::memory_order_acq_rel);
+    while (!start.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    const memix::ViewService thread_views{memix::Store(store_root)};
+    built = thread_views.build(*expression, memix::BuildOptions{
+                                                .intent = "build-intent",
+                                                .name = "build-name",
+                                            });
+  });
+  while (ready.load(std::memory_order_acquire) != 2) {
+    std::this_thread::yield();
+  }
+  start.store(true, std::memory_order_release);
+  definer.join();
+  builder.join();
+
+  const std::string define_error =
+      defined ? std::string{} : defined.error().message;
+  const std::string build_error = built ? std::string{} : built.error().message;
+  INFO(define_error);
+  INFO(build_error);
+  REQUIRE(defined);
+  REQUIRE(built);
+  REQUIRE(history_line_count(store_root, initial->ir_hash) == 1);
+  const std::string quest_json = read_file(initial->quest_dir / "quest.json");
+  const std::string final_intent = json_string_field(quest_json, "intent");
+  const std::string final_name = json_string_field(quest_json, "name");
+  const bool define_won =
+      final_intent == "define-intent" && final_name == "define-name";
+  const bool build_won =
+      final_intent == "build-intent" && final_name == "build-name";
+  REQUIRE((define_won || build_won));
+  const auto listed = views.list_quests();
+  REQUIRE(listed);
+  REQUIRE(listed->size() == 1);
+  REQUIRE(listed->front().resolution_count == 1);
 }
 
 TEST_CASE("concurrent quest reads append complete receipt lines",

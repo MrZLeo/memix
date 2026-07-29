@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -59,6 +60,7 @@ constexpr std::string_view kQuestIrFilename = "ir.json";
 constexpr std::string_view kQuestManifestFilename = "quest.json";
 constexpr std::string_view kQuestHistoryFilename = "history.jsonl";
 constexpr std::string_view kQuestReceiptsFilename = "receipts.jsonl";
+constexpr std::string_view kQuestMetadataLockName = "metadata.lock";
 constexpr std::string_view kLatestVersion = "latest";
 constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
 constexpr std::string_view kFileTreeOperatorVersionV2 = "file-tree-v2";
@@ -74,6 +76,8 @@ constexpr std::string_view kWorkspaceProfilePrefix = "ws-";
 constexpr std::size_t kWorkspaceProfileHashLength = 16;
 constexpr std::size_t kMaxProfileNameLength = 64;
 constexpr std::size_t kTimestampBufferBytes = 32;
+constexpr std::size_t kQuestLockAcquireAttempts = 1000;
+constexpr auto kQuestLockRetryDelay = std::chrono::milliseconds(1);
 
 template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
@@ -123,6 +127,12 @@ struct ResolvedInputJson {
   std::string output_path;
   std::string generation;
   std::string blob;
+};
+
+struct InputResolutionJson {
+  std::string locator;
+  std::string generation;
+  VersionJson version;
 };
 
 struct ResolvedEnvironmentInputJson {
@@ -258,6 +268,18 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.template append_key_value<"generation">(input.generation);
   builder.append_comma();
   builder.template append_key_value<"blob">(input.blob);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const InputResolutionJson &input) {
+  builder.start_object();
+  builder.template append_key_value<"locator">(input.locator);
+  builder.append_comma();
+  builder.template append_key_value<"generation">(input.generation);
+  builder.append_comma();
+  builder.template append_key_value<"version">(input.version);
   builder.end_object();
 }
 
@@ -1211,6 +1233,20 @@ resolved_input_json(const std::vector<memix::ResolvedViewFile> &files) {
        | std::ranges::to<std::vector>();
 }
 
+std::vector<InputResolutionJson> input_resolution_json(
+    const std::vector<memix::ResolvedViewInputResolution> &resolutions) {
+  return resolutions
+       | std::views::transform(
+             [](const memix::ResolvedViewInputResolution &resolution) {
+               return InputResolutionJson{
+                   .locator = resolution.locator,
+                   .generation = resolution.source_generation,
+                   .version = version_json_for(resolution.version),
+               };
+             })
+       | std::ranges::to<std::vector>();
+}
+
 std::vector<ResolvedEnvironmentInputJson> resolved_environment_input_json(
     const std::vector<memix::ResolvedViewEnvironmentInput> &inputs) {
   return inputs
@@ -1711,6 +1747,7 @@ resolve_input(const memix::Store &store, const memix::ViewIrInput &input,
 struct ResolvedBuildInputs {
   std::vector<memix::ResolvedViewFile> files;
   std::vector<memix::ResolvedViewEnvironmentInput> environment_inputs;
+  std::vector<memix::ResolvedViewInputResolution> input_resolutions;
 };
 
 ViewVoid resolve_context_input(const memix::Store &store,
@@ -1721,6 +1758,12 @@ ViewVoid resolve_context_input(const memix::Store &store,
   if (!generation) {
     return std::unexpected(generation.error());
   }
+  resolved.input_resolutions.push_back(
+      memix::ResolvedViewInputResolution{
+          .locator = input.locator,
+          .source_generation = *generation,
+          .version = input.version,
+      });
   ViewResult<std::vector<memix::ResolvedViewFile>> input_files =
       resolve_input(store, input, *generation);
   if (!input_files) {
@@ -2356,6 +2399,55 @@ resolved_files_from_json(const memix::Store &store,
   return files;
 }
 
+ViewResult<std::optional<std::vector<memix::ResolvedViewInputResolution>>>
+input_resolutions_from_json(const JsonObjectReader &fields) {
+  memix::detail::CommonResult<std::optional<simdjson::dom::array>>
+      resolutions_result = fields.optional_array("input_resolutions");
+  if (!resolutions_result) {
+    return view_error(std::move(resolutions_result.error()),
+                      memix::ErrorKind::InvalidData);
+  }
+  if (!resolutions_result->has_value()) {
+    return std::optional<
+        std::vector<memix::ResolvedViewInputResolution>>{};
+  }
+
+  std::vector<memix::ResolvedViewInputResolution> resolutions;
+  for (const simdjson::dom::element resolution_element :
+       **resolutions_result) {
+    memix::detail::CommonResult<simdjson::dom::object> fields_result =
+        memix::detail::json_object_from_element(resolution_element);
+    if (!fields_result) {
+      return view_error(memix::detail::with_error_context(
+          std::move(fields_result.error()), "input resolution",
+          memix::ErrorKind::InvalidData));
+    }
+    const JsonObjectReader resolution_fields(*fields_result);
+    ViewResult<std::string> locator =
+        read_string_field(resolution_fields, "locator");
+    ViewResult<std::string> generation =
+        read_string_field(resolution_fields, "generation");
+    ViewResult<memix::ViewVersionSelector> version =
+        ir_version_from_json(resolution_fields);
+    if (!locator) {
+      return std::unexpected(locator.error());
+    }
+    if (!generation) {
+      return std::unexpected(generation.error());
+    }
+    if (!version) {
+      return std::unexpected(version.error());
+    }
+    resolutions.push_back(memix::ResolvedViewInputResolution{
+        .locator = std::move(*locator),
+        .source_generation = std::move(*generation),
+        .version = std::move(*version),
+    });
+  }
+  return std::optional<std::vector<memix::ResolvedViewInputResolution>>{
+      std::move(resolutions)};
+}
+
 ViewResult<memix::ViewEnvironment>
 environment_from_json(std::string_view text, const fs::path &manifest_path);
 
@@ -2506,6 +2598,12 @@ derivation_from_json(const memix::Store &store, std::string_view text,
   if (!resolved_files) {
     return std::unexpected(resolved_files.error());
   }
+  ViewResult<
+      std::optional<std::vector<memix::ResolvedViewInputResolution>>>
+      input_resolutions = input_resolutions_from_json(fields);
+  if (!input_resolutions) {
+    return std::unexpected(input_resolutions.error());
+  }
   ViewResult<std::vector<memix::ViewDerivationOutput>> outputs =
       derivation_outputs_from_json(fields);
   if (!outputs) {
@@ -2528,6 +2626,7 @@ derivation_from_json(const memix::Store &store, std::string_view text,
       .tree_path = manifest_path.parent_path() / std::string(kTreeDir),
       .inserted = false,
       .environment_inputs = std::move(*environment_inputs),
+      .input_resolutions = std::move(*input_resolutions),
   };
 }
 
@@ -2906,6 +3005,29 @@ read_quest_record(const fs::path &root, std::string_view ir_hash) {
   return quest;
 }
 
+ViewResult<fs::path>
+acquire_quest_metadata_lock(const fs::path &quest_dir) {
+  fs::path lock = quest_dir / std::string(kQuestMetadataLockName);
+  for (std::size_t attempt = 0; attempt < kQuestLockAcquireAttempts;
+       ++attempt) {
+    const memix::FsResult<bool> acquired = fs::create_directory(lock);
+    if (!acquired) {
+      return view_error(acquired.error());
+    }
+    if (*acquired) {
+      return lock;
+    }
+    if (attempt + 1 < kQuestLockAcquireAttempts) {
+      std::this_thread::sleep_for(kQuestLockRetryDelay);
+    }
+  }
+  return view_error(
+      memix::ErrorKind::Locked,
+      std::format("quest `{}` metadata is locked by another memix process; "
+                  "remove `{}` if the lock is stale",
+                  quest_dir.filename().string(), lock.string()));
+}
+
 ViewVoid
 write_mutable_quest_record(const fs::path &root, const QuestRecord &quest) {
   ViewResult<std::string> json = quest_json_for(quest);
@@ -2914,10 +3036,22 @@ write_mutable_quest_record(const fs::path &root, const QuestRecord &quest) {
   }
   const fs::path path =
       quest_dir_for(root, quest.ir_hash) / std::string(kQuestManifestFilename);
-  const memix::FsVoid written = fs::write_text_file(path, *json);
+  ViewResult<fs::path> temp =
+      unique_temp_dir(path.parent_path(), path.filename().string());
+  if (!temp) {
+    return std::unexpected(temp.error());
+  }
+  memix::scope_exit cleanup(
+      [temp_path = *temp] { std::ignore = fs::remove(temp_path); });
+  const memix::FsVoid written = fs::write_text_file(*temp, *json);
   if (!written) {
     return view_error(written.error());
   }
+  const memix::FsVoid published = fs::rename(*temp, path);
+  if (!published) {
+    return view_error(published.error());
+  }
+  cleanup.release();
   return {};
 }
 
@@ -3044,19 +3178,31 @@ upsert_quest( // NOLINT(readability-function-cognitive-complexity)
         .existed = true,
     };
   }
+  ViewResult<fs::path> metadata_lock =
+      acquire_quest_metadata_lock(quest_dir);
+  if (!metadata_lock) {
+    return std::unexpected(metadata_lock.error());
+  }
+  const memix::scope_exit release_metadata_lock(
+      [lock = *metadata_lock] { std::ignore = fs::remove(lock); });
   ViewResult<QuestRecord> quest = read_quest_record(root, ir_hash);
   if (!quest) {
     return std::unexpected(quest.error());
   }
-  if (metadata.intent.has_value()) {
+  bool changed = false;
+  if (metadata.intent.has_value() && quest->intent != *metadata.intent) {
     quest->intent = *metadata.intent;
+    changed = true;
   }
-  if (metadata.name.has_value()) {
+  if (metadata.name.has_value() && quest->name != *metadata.name) {
     quest->name = *metadata.name;
+    changed = true;
   }
-  const ViewVoid written = write_mutable_quest_record(root, *quest);
-  if (!written) {
-    return std::unexpected(written.error());
+  if (changed) {
+    const ViewVoid written = write_mutable_quest_record(root, *quest);
+    if (!written) {
+      return std::unexpected(written.error());
+    }
   }
   return memix::QuestDefinition{
       .ir_hash = ir_hash,
@@ -3344,6 +3490,91 @@ void record_quest_receipt_best_effort(const fs::path &root,
   output.write(line.data(), static_cast<std::streamsize>(line.size()));
 }
 
+memix::QuestInfo quest_info_from_record(const QuestRecord &quest) {
+  return memix::QuestInfo{
+      .ir_hash = quest.ir_hash,
+      .intent = quest.intent,
+      .name = quest.name,
+      .created_at = quest.created_at,
+      .resolution_count = 0,
+      .last_resolved_at = {},
+      .latest_derivation_id = {},
+      .latest_environment_id = {},
+      .read_count = 0,
+      .last_read_at = {},
+      .activation_count = 0,
+      .last_activated_at = {},
+  };
+}
+
+void enrich_quest_info(const fs::path &root, memix::QuestInfo &info) {
+  ViewResult<std::vector<QuestHistoryEntry>> history =
+      read_quest_history(root, info.ir_hash);
+  if (history) {
+    info.resolution_count = history->size();
+    if (!history->empty()) {
+      const QuestHistoryEntry &latest = history->back();
+      info.last_resolved_at = latest.resolved_at;
+      info.latest_derivation_id = latest.derivation_id;
+      info.latest_environment_id = latest.environment_id;
+    }
+  }
+  ViewResult<QuestReceiptSummary> receipts =
+      read_quest_receipt_summary(root, info.ir_hash);
+  if (receipts) {
+    info.read_count = receipts->read_count;
+    info.last_read_at = receipts->last_read_at;
+    info.activation_count = receipts->activation_count;
+    info.last_activated_at = receipts->last_activated_at;
+  }
+}
+
+ViewResult<std::vector<memix::QuestInfo>>
+scan_quest_metadata(const fs::path &root) {
+  const fs::path quests_dir = quests_dir_for(root);
+  const memix::FsResult<bool> exists = fs::exists(quests_dir);
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (!*exists) {
+    return std::vector<memix::QuestInfo>{};
+  }
+  std::vector<memix::QuestInfo> quests;
+  std::error_code iterator_error;
+  const fs::directory_iterator end;
+  for (fs::directory_iterator iterator{quests_dir, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    if (!entry.is_directory(entry_error)) {
+      if (entry_error) {
+        return view_error(
+            fs::make_fs_error("failed to inspect", entry_error, entry.path()));
+      }
+      continue;
+    }
+    const std::string ir_hash = entry.path().filename().string();
+    if (!memix::detail::is_lower_hex_sha256(ir_hash)) {
+      continue;
+    }
+    ViewResult<QuestRecord> quest = read_quest_record(root, ir_hash);
+    if (!quest) {
+      return std::unexpected(quest.error());
+    }
+    quests.push_back(quest_info_from_record(*quest));
+  }
+  if (iterator_error) {
+    return view_error(fs::make_fs_error("failed to list directory",
+                                        iterator_error, quests_dir));
+  }
+  std::ranges::sort(
+      quests, [](const memix::QuestInfo &left, const memix::QuestInfo &right) {
+        return std::tie(left.created_at, left.ir_hash)
+             < std::tie(right.created_at, right.ir_hash);
+      });
+  return quests;
+}
+
 ViewResult<std::string>
 resolve_unique_quest_id(const fs::path &root, std::string_view prefix) {
   if (!memix::detail::is_lower_hex_prefix(prefix)) {
@@ -3413,6 +3644,75 @@ load_quest_ir(const fs::path &root, std::string_view ir_hash) {
       .text = *text,
       .context = context,
   });
+}
+
+struct RecordedInputGeneration {
+  std::string value;
+  bool found = false;
+};
+
+RecordedInputGeneration recorded_input_generation(
+    const memix::ViewIrInput &input,
+    const memix::ViewDerivation &derivation,
+    std::vector<bool> &used_input_resolutions) {
+  if (derivation.input_resolutions.has_value()) {
+    for (std::size_t index = 0;
+         index < derivation.input_resolutions->size(); ++index) {
+      const memix::ResolvedViewInputResolution &candidate =
+          derivation.input_resolutions->at(index);
+      if (!used_input_resolutions.at(index)
+          && candidate.locator == input.locator
+          && candidate.version.kind == input.version.kind
+          && candidate.version.value == input.version.value) {
+        used_input_resolutions.at(index) = true;
+        return RecordedInputGeneration{
+            .value = candidate.source_generation,
+            .found = true,
+        };
+      }
+    }
+    return {};
+  }
+
+  const auto legacy_resolution = std::ranges::find(
+      derivation.resolved_files, input.locator,
+      &memix::ResolvedViewFile::locator);
+  if (legacy_resolution == derivation.resolved_files.end()) {
+    return {};
+  }
+  return RecordedInputGeneration{
+      .value = legacy_resolution->source_generation,
+      .found = true,
+  };
+}
+
+ViewResult<memix::QuestFreshnessInput> freshness_input_status(
+    const memix::Store &store, const memix::ViewIrInput &input,
+    RecordedInputGeneration recorded) {
+  memix::QuestFreshnessInput status{
+      .locator = input.locator,
+      .recorded_generation = std::move(recorded.value),
+      .current_generation = std::nullopt,
+      .pinned = input.version.kind == memix::ViewVersionKind::Generation
+             || input.version.value.starts_with("generation/"),
+      .fresh = recorded.found,
+  };
+  if (status.pinned || !recorded.found) {
+    return status;
+  }
+
+  memix::StoreResult<std::optional<std::string>> current =
+      store.read_ref(version_ref_name(input.type, input.version.value));
+  if (!current) {
+    return view_error(current.error());
+  }
+  if (current->has_value()) {
+    status.current_generation = **current;
+    status.fresh = **current == status.recorded_generation;
+  } else {
+    status.fresh = false;
+  }
+  return status;
 }
 
 ViewResult<std::optional<fs::file_status>> lstat(const fs::path &path) {
@@ -5013,6 +5313,7 @@ ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
       .tree_path = derivation_dir / std::string(kTreeDir),
       .inserted = false,
       .environment_inputs = std::move(resolved->environment_inputs),
+      .input_resolutions = std::move(resolved->input_resolutions),
   };
   const memix::FsResult<bool> derivation_exists = fs::exists(derivation_dir);
   if (!derivation_exists) {
@@ -5130,82 +5431,14 @@ ViewService::define_quest(const AuthoredViewExpression &expression,
 }
 
 ViewResult<std::vector<QuestInfo>> ViewService::list_quests() const {
-  const fs::path quests_dir = quests_dir_for(store_.root());
-  const memix::FsResult<bool> exists = fs::exists(quests_dir);
-  if (!exists) {
-    return view_error(exists.error());
+  ViewResult<std::vector<QuestInfo>> quests =
+      scan_quest_metadata(store_.root());
+  if (!quests) {
+    return std::unexpected(quests.error());
   }
-  if (!*exists) {
-    return std::vector<QuestInfo>{};
+  for (QuestInfo &quest : *quests) {
+    enrich_quest_info(store_.root(), quest);
   }
-
-  std::vector<QuestInfo> quests;
-  std::error_code iterator_error;
-  const fs::directory_iterator end;
-  for (fs::directory_iterator iterator{quests_dir, iterator_error};
-       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
-    const fs::directory_entry &entry = *iterator;
-    std::error_code entry_error;
-    if (!entry.is_directory(entry_error)) {
-      if (entry_error) {
-        return view_error(
-            fs::make_fs_error("failed to inspect", entry_error, entry.path()));
-      }
-      continue;
-    }
-    const std::string ir_hash = entry.path().filename().string();
-    if (!detail::is_lower_hex_sha256(ir_hash)) {
-      continue;
-    }
-    ViewResult<QuestRecord> quest =
-        read_quest_record(store_.root(), ir_hash);
-    if (!quest) {
-      return std::unexpected(quest.error());
-    }
-    QuestInfo info{
-        .ir_hash = quest->ir_hash,
-        .intent = quest->intent,
-        .name = quest->name,
-        .created_at = quest->created_at,
-        .resolution_count = 0,
-        .last_resolved_at = {},
-        .latest_derivation_id = {},
-        .latest_environment_id = {},
-        .read_count = 0,
-        .last_read_at = {},
-        .activation_count = 0,
-        .last_activated_at = {},
-    };
-    ViewResult<std::vector<QuestHistoryEntry>> history =
-        read_quest_history(store_.root(), ir_hash);
-    if (history) {
-      info.resolution_count = history->size();
-      if (!history->empty()) {
-        const QuestHistoryEntry &latest = history->back();
-        info.last_resolved_at = latest.resolved_at;
-        info.latest_derivation_id = latest.derivation_id;
-        info.latest_environment_id = latest.environment_id;
-      }
-    }
-    ViewResult<QuestReceiptSummary> receipts =
-        read_quest_receipt_summary(store_.root(), ir_hash);
-    if (receipts) {
-      info.read_count = receipts->read_count;
-      info.last_read_at = receipts->last_read_at;
-      info.activation_count = receipts->activation_count;
-      info.last_activated_at = receipts->last_activated_at;
-    }
-    quests.push_back(std::move(info));
-  }
-  if (iterator_error) {
-    return view_error(fs::make_fs_error("failed to list directory",
-                                        iterator_error, quests_dir));
-  }
-  std::ranges::sort(
-      quests, [](const QuestInfo &left, const QuestInfo &right) {
-        return std::tie(left.created_at, left.ir_hash)
-             < std::tie(right.created_at, right.ir_hash);
-      });
   return quests;
 }
 
@@ -5251,12 +5484,13 @@ ViewService::find_quests(std::vector<std::string> terms,
     cover_path = std::move(*valid_cover);
   }
 
-  ViewResult<std::vector<QuestInfo>> quests = list_quests();
-  if (!quests) {
-    return std::unexpected(quests.error());
+  ViewResult<std::vector<QuestInfo>> metadata =
+      scan_quest_metadata(store_.root());
+  if (!metadata) {
+    return std::unexpected(metadata.error());
   }
   std::vector<QuestInfo> matches;
-  for (QuestInfo &quest : *quests) {
+  for (QuestInfo &quest : *metadata) {
     const std::string searchable =
         lower_ascii(std::format("{} {}", quest.intent, quest.name));
     const bool terms_match =
@@ -5286,6 +5520,9 @@ ViewService::find_quests(std::vector<std::string> terms,
       }
     }
     matches.push_back(std::move(quest));
+  }
+  for (QuestInfo &quest : matches) {
+    enrich_quest_info(store_.root(), quest);
   }
   return matches;
 }
@@ -5355,39 +5592,23 @@ ViewService::quest_freshness(std::string_view quest_prefix) const {
       .inputs = {},
       .stale = false,
   };
+  std::vector<bool> used_input_resolutions;
+  if (derivation->input_resolutions.has_value()) {
+    used_input_resolutions.resize(derivation->input_resolutions->size());
+  }
   for (const ViewIrInput &input : ir->inputs) {
     if (input.kind != ViewInputKind::Context) {
       continue;
     }
-    const auto resolution = std::ranges::find(
-        derivation->resolved_files, input.locator,
-        &ResolvedViewFile::locator);
-    if (resolution == derivation->resolved_files.end()) {
-      continue;
+    RecordedInputGeneration recorded = recorded_input_generation(
+        input, *derivation, used_input_resolutions);
+    ViewResult<QuestFreshnessInput> status =
+        freshness_input_status(store_, input, std::move(recorded));
+    if (!status) {
+      return std::unexpected(status.error());
     }
-    QuestFreshnessInput status{
-        .locator = input.locator,
-        .recorded_generation = resolution->source_generation,
-        .current_generation = std::nullopt,
-        .pinned = input.version.kind == ViewVersionKind::Generation
-               || input.version.value.starts_with("generation/"),
-        .fresh = true,
-    };
-    if (!status.pinned) {
-      StoreResult<std::optional<std::string>> current =
-          store_.read_ref(version_ref_name(input.type, input.version.value));
-      if (!current) {
-        return view_error(current.error());
-      }
-      if (current->has_value()) {
-        status.current_generation = **current;
-        status.fresh = **current == status.recorded_generation;
-      } else {
-        status.fresh = false;
-      }
-    }
-    freshness.stale = freshness.stale || !status.fresh;
-    freshness.inputs.push_back(std::move(status));
+    freshness.stale = freshness.stale || !status->fresh;
+    freshness.inputs.push_back(std::move(*status));
   }
   return freshness;
 }
@@ -6213,6 +6434,12 @@ ViewResult<std::string> view_derivation_json(const ViewDerivation &derivation) {
     builder.append_key_value<"policy_snapshot">(std::optional<std::string>{});
     builder.append_comma();
     builder.append_key_value<"resolved_inputs">(inputs);
+    if (derivation.input_resolutions.has_value()) {
+      const std::vector<InputResolutionJson> input_resolutions =
+          input_resolution_json(*derivation.input_resolutions);
+      builder.append_comma();
+      builder.append_key_value<"input_resolutions">(input_resolutions);
+    }
     builder.append_comma();
     builder.append_key_value<"outputs">(outputs);
     builder.end_object();
@@ -6250,6 +6477,12 @@ ViewResult<std::string> view_derivation_json(const ViewDerivation &derivation) {
   builder.append_key_value<"policy_snapshot">(std::optional<std::string>{});
   builder.append_comma();
   builder.append_key_value<"resolved_inputs">(inputs);
+  if (derivation.input_resolutions.has_value()) {
+    const std::vector<InputResolutionJson> input_resolutions =
+        input_resolution_json(*derivation.input_resolutions);
+    builder.append_comma();
+    builder.append_key_value<"input_resolutions">(input_resolutions);
+  }
   builder.append_comma();
   builder.append_key_value<"resolved_view_inputs">(environment_inputs);
   builder.append_comma();

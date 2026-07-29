@@ -162,11 +162,15 @@ available for low-level environment debugging.
 
 The plain `quests` and `find` tables shorten long intent/name cells with `...`
 so columns stay separate; their `--json` forms always retain the complete
-strings. Freshness reports only context inputs that can follow refs. Composed
-`--view` inputs are omitted because their resolved environment IDs are
-content-pinned; therefore a quest containing only view inputs reports an empty
-input list and `stale: false`. A deleted followed ref is reported with
-`pinned: false`, `current_generation: null`, and `fresh: false`.
+strings. Freshness uses the derivation manifest's `input_resolutions`: one
+record per context input before file deduplication, including optional inputs
+that resolved no files. Composed `--view` inputs are omitted because their
+resolved environment IDs are content-pinned; therefore a quest containing only
+view inputs reports an empty input list and `stale: false`. A deleted followed
+ref is reported with `pinned: false`, `current_generation: null`, and
+`fresh: false`. Legacy manifests without `input_resolutions` fall back to
+matching locators in `resolved_inputs`; any context locator absent there is
+conservatively reported `fresh: false` rather than silently skipped.
 
 Successful `memix-view cat` and `tree` calls, including `tree --json`, and
 every successful `activate` append best-effort consumption receipts to the
