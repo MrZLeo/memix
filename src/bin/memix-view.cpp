@@ -45,6 +45,7 @@ enum class ViewCommand : std::uint8_t {
   Resolve,
   Freshness,
   Quests,
+  Stats,
   Show,
   Activate,
   Generations,
@@ -83,6 +84,7 @@ struct ViewCliOptions {
   bool resolve_json = false;
   bool freshness_json = false;
   bool quests_json = false;
+  bool stats_json = false;
   bool intent_provided = false;
   bool name_provided = false;
   bool show_json = false;
@@ -115,6 +117,10 @@ struct QuestInfoJson {
   std::string last_resolved_at;
   std::string latest_derivation_id;
   std::string latest_environment_id;
+  std::size_t read_count = 0;
+  std::string last_read_at;
+  std::size_t activation_count = 0;
+  std::string last_activated_at;
 };
 
 struct QuestDefinitionJson {
@@ -139,6 +145,32 @@ struct QuestFreshnessJson {
   std::string resolved_at;
   std::vector<QuestFreshnessInputJson> inputs;
   bool stale = false;
+};
+
+struct QuestEnvironmentReadsJson {
+  std::string environment_id;
+  std::size_t read_count = 0;
+};
+
+struct QuestProfileActivationsJson {
+  std::string profile;
+  std::size_t activation_count = 0;
+};
+
+struct QuestStatsJson {
+  std::string ir_hash;
+  std::size_t resolution_count = 0;
+  std::string last_resolved_at;
+  std::size_t activation_count = 0;
+  std::string first_activated_at;
+  std::string last_activated_at;
+  std::vector<QuestProfileActivationsJson> activations_by_profile;
+  std::size_t read_count = 0;
+  std::string first_read_at;
+  std::string last_read_at;
+  std::size_t cat_count = 0;
+  std::size_t tree_count = 0;
+  std::vector<QuestEnvironmentReadsJson> reads_by_environment;
 };
 
 template <typename Builder>
@@ -195,6 +227,16 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.append_comma();
   builder.template append_key_value<"latest_environment_id">(
       quest.latest_environment_id);
+  builder.append_comma();
+  builder.template append_key_value<"read_count">(quest.read_count);
+  builder.append_comma();
+  builder.template append_key_value<"last_read_at">(quest.last_read_at);
+  builder.append_comma();
+  builder.template append_key_value<"activation_count">(
+      quest.activation_count);
+  builder.append_comma();
+  builder.template append_key_value<"last_activated_at">(
+      quest.last_activated_at);
   builder.end_object();
 }
 
@@ -248,6 +290,64 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.end_object();
 }
 
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestEnvironmentReadsJson &reads) {
+  builder.start_object();
+  builder.template append_key_value<"environment_id">(reads.environment_id);
+  builder.append_comma();
+  builder.template append_key_value<"read_count">(reads.read_count);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestProfileActivationsJson &activations) {
+  builder.start_object();
+  builder.template append_key_value<"profile">(activations.profile);
+  builder.append_comma();
+  builder.template append_key_value<"activation_count">(
+      activations.activation_count);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestStatsJson &stats) {
+  builder.start_object();
+  builder.template append_key_value<"ir_hash">(stats.ir_hash);
+  builder.append_comma();
+  builder.template append_key_value<"resolution_count">(stats.resolution_count);
+  builder.append_comma();
+  builder.template append_key_value<"last_resolved_at">(stats.last_resolved_at);
+  builder.append_comma();
+  builder.template append_key_value<"activation_count">(
+      stats.activation_count);
+  builder.append_comma();
+  builder.template append_key_value<"first_activated_at">(
+      stats.first_activated_at);
+  builder.append_comma();
+  builder.template append_key_value<"last_activated_at">(
+      stats.last_activated_at);
+  builder.append_comma();
+  builder.template append_key_value<"activations_by_profile">(
+      stats.activations_by_profile);
+  builder.append_comma();
+  builder.template append_key_value<"read_count">(stats.read_count);
+  builder.append_comma();
+  builder.template append_key_value<"first_read_at">(stats.first_read_at);
+  builder.append_comma();
+  builder.template append_key_value<"last_read_at">(stats.last_read_at);
+  builder.append_comma();
+  builder.template append_key_value<"cat_count">(stats.cat_count);
+  builder.append_comma();
+  builder.template append_key_value<"tree_count">(stats.tree_count);
+  builder.append_comma();
+  builder.template append_key_value<"reads_by_environment">(
+      stats.reads_by_environment);
+  builder.end_object();
+}
+
 memix::cli_detail::Result<memix::ViewService>
 make_service(const ViewCliOptions &options) {
   const memix::cli_detail::Result<fs::path> root =
@@ -292,6 +392,10 @@ QuestInfoJson quest_info_json_for(const memix::QuestInfo &info) {
       .last_resolved_at = info.last_resolved_at,
       .latest_derivation_id = info.latest_derivation_id,
       .latest_environment_id = info.latest_environment_id,
+      .read_count = info.read_count,
+      .last_read_at = info.last_read_at,
+      .activation_count = info.activation_count,
+      .last_activated_at = info.last_activated_at,
   };
 }
 
@@ -363,16 +467,18 @@ std::string truncate_table_cell(std::string_view value, std::size_t width) {
 void print_quest_table(const std::vector<memix::QuestInfo> &quests) {
   constexpr std::size_t intent_width = 28;
   constexpr std::size_t name_width = 24;
-  std::println("{:<66}  {:<28}  {:<24}  {:>12}  {:<22}  {:<15}", "QUEST",
-               "INTENT", "NAME", "RESOLUTIONS", "LAST_RESOLVED",
-               "ENVIRONMENT");
+  std::println(
+      "{:<66}  {:<28}  {:<24}  {:>12}  {:>8}  {:>8}  {:<22}  {:<22}  {:<15}",
+      "QUEST", "INTENT", "NAME", "RESOLUTIONS", "READS", "ACTS",
+      "LAST_RESOLVED", "LAST_READ", "ENVIRONMENT");
   for (const memix::QuestInfo &quest : quests) {
-    std::println("{:<66}  {:<28}  {:<24}  {:>12}  {:<22}  {:<15}",
-                 quest.ir_hash,
-                 truncate_table_cell(quest.intent, intent_width),
-                 truncate_table_cell(quest.name, name_width),
-                 quest.resolution_count, quest.last_resolved_at,
-                 memix::cli_detail::short_id(quest.latest_environment_id));
+    std::println(
+        "{:<66}  {:<28}  {:<24}  {:>12}  {:>8}  {:>8}  {:<22}  {:<22}  {:<15}",
+        quest.ir_hash, truncate_table_cell(quest.intent, intent_width),
+        truncate_table_cell(quest.name, name_width), quest.resolution_count,
+        quest.read_count, quest.activation_count, quest.last_resolved_at,
+        quest.last_read_at,
+        memix::cli_detail::short_id(quest.latest_environment_id));
   }
 }
 
@@ -616,6 +722,81 @@ memix::cli_detail::VoidResult run_quests(const ViewCliOptions &options) {
     return memix::cli_detail::unexpected_error(quests.error());
   }
   return print_quests(*quests, options.quests_json);
+}
+
+memix::cli_detail::VoidResult run_stats(const ViewCliOptions &options) {
+  if (options.quest_id.empty()) {
+    return memix::cli_detail::unexpected_error("stats expects a quest id");
+  }
+  const memix::cli_detail::Result<memix::ViewService> service =
+      make_service(options);
+  if (!service) {
+    return std::unexpected(service.error());
+  }
+  const memix::ViewResult<memix::QuestStats> stats =
+      service->quest_stats(options.quest_id);
+  if (!stats) {
+    return memix::cli_detail::unexpected_error(stats.error());
+  }
+  if (options.stats_json) {
+    const std::vector<QuestProfileActivationsJson> activations_by_profile =
+        stats->activations_by_profile
+        | std::views::transform(
+            [](const memix::QuestProfileActivations &activations) {
+              return QuestProfileActivationsJson{
+                  .profile = activations.profile,
+                  .activation_count = activations.activation_count,
+              };
+            })
+        | std::ranges::to<std::vector>();
+    const std::vector<QuestEnvironmentReadsJson> reads_by_environment =
+        stats->reads_by_environment
+        | std::views::transform([](const memix::QuestEnvironmentReads &reads) {
+            return QuestEnvironmentReadsJson{
+                .environment_id = reads.environment_id,
+                .read_count = reads.read_count,
+            };
+          })
+        | std::ranges::to<std::vector>();
+    return print_json(QuestStatsJson{
+        .ir_hash = stats->ir_hash,
+        .resolution_count = stats->resolution_count,
+        .last_resolved_at = stats->last_resolved_at,
+        .activation_count = stats->activation_count,
+        .first_activated_at = stats->first_activated_at,
+        .last_activated_at = stats->last_activated_at,
+        .activations_by_profile = activations_by_profile,
+        .read_count = stats->read_count,
+        .first_read_at = stats->first_read_at,
+        .last_read_at = stats->last_read_at,
+        .cat_count = stats->cat_count,
+        .tree_count = stats->tree_count,
+        .reads_by_environment = reads_by_environment,
+    });
+  }
+  std::println("quest: {}", stats->ir_hash);
+  std::println("resolutions: {}", stats->resolution_count);
+  std::println("last_resolved: {}", stats->last_resolved_at);
+  std::println("activations: {}", stats->activation_count);
+  std::println("first_activated: {}", stats->first_activated_at);
+  std::println("last_activated: {}", stats->last_activated_at);
+  std::println("activations_by_profile:");
+  for (const memix::QuestProfileActivations &activations :
+       stats->activations_by_profile) {
+    std::println("  {} {}", activations.profile, activations.activation_count);
+  }
+  std::println("reads: {}", stats->read_count);
+  std::println("first_read: {}", stats->first_read_at);
+  std::println("last_read: {}", stats->last_read_at);
+  std::println("cat_reads: {}", stats->cat_count);
+  std::println("tree_reads: {}", stats->tree_count);
+  std::println("reads_by_environment:");
+  for (const memix::QuestEnvironmentReads &reads :
+       stats->reads_by_environment) {
+    std::println("  {} {}", memix::cli_detail::short_id(reads.environment_id),
+                 reads.read_count);
+  }
+  return {};
 }
 
 memix::cli_detail::VoidResult run_find(const ViewCliOptions &options) {
@@ -1091,6 +1272,11 @@ void add_freshness_command(Argum::Parser &parser, ViewCliOptions &options) {
                        options.freshness_json);
 }
 
+void add_stats_command(Argum::Parser &parser, ViewCliOptions &options) {
+  add_quest_id_command(parser, options, "Quest id or unique prefix.",
+                       options.stats_json);
+}
+
 void add_show_command(Argum::Parser &parser, ViewCliOptions &options) {
   parser.add(Argum::Positional("environment-id")
                  .help("View environment id or unique prefix.")
@@ -1180,8 +1366,8 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: define, find, resolve, freshness, quests, list, "
-                "tree, cat, build, show, activate, generations, "
+          .help("Subcommand: define, find, resolve, freshness, quests, stats, "
+                "list, tree, cat, build, show, activate, generations, "
                 "rollback, deactivate, or status.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
@@ -1230,6 +1416,11 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
               add_quests_command(parser, options);
               return {};
             }
+            if (value == "stats") {
+              options.command = ViewCommand::Stats;
+              add_stats_command(parser, options);
+              return {};
+            }
             if (value == "show") {
               options.command = ViewCommand::Show;
               add_show_command(parser, options);
@@ -1262,7 +1453,7 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
             }
             return memix::cli_detail::argum_validation_error(std::format(
                 "unsupported command `{}`; expected "
-                "define|find|resolve|freshness|quests|list|tree|cat|"
+                "define|find|resolve|freshness|quests|stats|list|tree|cat|"
                 "build|show|activate|generations|rollback|deactivate|status",
                 value));
           }));
@@ -1348,6 +1539,14 @@ void print_quests_help() {
   std::print("{}", parser.formatHelp("memix-view quests"));
 }
 
+void print_stats_help() {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_stats_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-view stats"));
+}
+
 void print_show_help() {
   Argum::Parser parser;
   ViewCliOptions options;
@@ -1425,6 +1624,9 @@ void print_selected_help(ViewCommand command) {
   case ViewCommand::Quests:
     print_quests_help();
     return;
+  case ViewCommand::Stats:
+    print_stats_help();
+    return;
   case ViewCommand::Show:
     print_show_help();
     return;
@@ -1469,6 +1671,8 @@ memix::cli_detail::VoidResult dispatch(const ViewCliOptions &options) {
     return run_freshness(options);
   case ViewCommand::Quests:
     return run_quests(options);
+  case ViewCommand::Stats:
+    return run_stats(options);
   case ViewCommand::Show:
     return run_show(options);
   case ViewCommand::Activate:

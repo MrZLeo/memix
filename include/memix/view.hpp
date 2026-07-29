@@ -259,6 +259,36 @@ struct QuestInfo {
   std::string last_resolved_at;
   std::string latest_derivation_id;
   std::string latest_environment_id;
+  std::size_t read_count = 0;
+  std::string last_read_at;
+  std::size_t activation_count = 0;
+  std::string last_activated_at;
+};
+
+struct QuestEnvironmentReads {
+  std::string environment_id;
+  std::size_t read_count = 0;
+};
+
+struct QuestProfileActivations {
+  std::string profile;
+  std::size_t activation_count = 0;
+};
+
+struct QuestStats {
+  std::string ir_hash;
+  std::size_t resolution_count = 0;
+  std::string last_resolved_at;
+  std::size_t activation_count = 0;
+  std::string first_activated_at;
+  std::string last_activated_at;
+  std::vector<QuestProfileActivations> activations_by_profile;
+  std::size_t read_count = 0;
+  std::string first_read_at;
+  std::string last_read_at;
+  std::size_t cat_count = 0;
+  std::size_t tree_count = 0;
+  std::vector<QuestEnvironmentReads> reads_by_environment;
 };
 
 struct QuestDefinition {
@@ -402,6 +432,9 @@ public:
   [[nodiscard]] ViewResult<QuestFreshness>
   quest_freshness(std::string_view quest_prefix) const;
 
+  [[nodiscard]] ViewResult<QuestStats>
+  quest_stats(std::string_view quest_prefix) const;
+
   [[nodiscard]] ViewResult<ViewEnvironment>
   resolve_environment(std::string_view environment_prefix) const;
 
@@ -434,6 +467,12 @@ public:
   deactivate(const fs::path &into, bool wipe_profile = false) const;
 
 private:
+  void record_activation(const ViewEnvironment &environment,
+                         const ViewActivation &activation,
+                         ActivationMode mode,
+                         std::optional<std::string_view> via = std::nullopt)
+      const;
+
   Store store_;
 };
 

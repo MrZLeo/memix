@@ -138,6 +138,7 @@ QUEST=$(./build/bin/Release/memix-view --store-root /tmp/memix-store define --so
 ./build/bin/Release/memix-view --store-root /tmp/memix-store find repository --covers rules/README.md
 ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
 ./build/bin/Release/memix-view --store-root /tmp/memix-store freshness "$QUEST"
+./build/bin/Release/memix-view --store-root /tmp/memix-store stats "$QUEST" --json
 ./build/bin/Release/memix-view --store-root /tmp/memix-store list --json
 ./build/bin/Release/memix-view --store-root /tmp/memix-store tree "$ENV" --depth 2
 ./build/bin/Release/memix-view --store-root /tmp/memix-store cat "$ENV" rules/README.md
@@ -165,6 +166,21 @@ strings. Freshness reports only context inputs that can follow refs. Composed
 content-pinned; therefore a quest containing only view inputs reports an empty
 input list and `stale: false`. A deleted followed ref is reported with
 `pinned: false`, `current_generation: null`, and `fresh: false`.
+
+Successful `memix-view cat` and `tree` calls, including `tree --json`, and
+every successful `activate` append best-effort consumption receipts to the
+quest's `receipts.jsonl`. Activation is recorded even for a no-op
+re-activation, and rollback records the environment it recommits. Once
+attached, ordinary reads through `./.memory` bypass the CLI; activation is the
+observable proxy for that otherwise invisible use and the strongest admission
+signal. Receipt bookkeeping never makes the primary operation fail, legacy
+environments without a quest are silently skipped, and `deactivate` records
+nothing. `stats` presents activation totals and per-profile counts before read
+totals, cat/tree counts, and per-environment reuse. `quests` and `find` show
+`READS` and `ACTS`; their JSON also includes read and activation recency.
+This remains evidence for future admission policy, not a promotion or eviction
+policy itself. `show` is provenance debugging and does not count as
+consumption.
 
 `memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
 then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,

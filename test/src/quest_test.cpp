@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <format>
@@ -14,6 +15,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace fs = memix::fs;
@@ -80,6 +82,13 @@ void write_file(const fs::path &path, std::string_view contents) {
   REQUIRE(output);
 }
 
+void append_file(const fs::path &path, std::string_view contents) {
+  std::ofstream output(path, std::ios::binary | std::ios::app);
+  REQUIRE(output);
+  output << contents;
+  REQUIRE(output);
+}
+
 std::string read_file(const fs::path &path) {
   std::ifstream input(path, std::ios::binary);
   REQUIRE(input);
@@ -121,6 +130,38 @@ history_line_count(const fs::path &store_root, std::string_view ir_hash) {
   const std::string history =
       read_file(store_root / "views" / "quests" / ir_hash / "history.jsonl");
   return static_cast<std::size_t>(std::ranges::count(history, '\n'));
+}
+
+fs::path receipts_path(const fs::path &store_root, std::string_view ir_hash) {
+  return store_root / "views" / "quests" / ir_hash / "receipts.jsonl";
+}
+
+std::vector<std::string> jsonl_lines(const fs::path &path) {
+  const std::string contents = read_file(path);
+  std::vector<std::string> lines;
+  std::string_view remaining = contents;
+  while (!remaining.empty()) {
+    const std::size_t end = remaining.find('\n');
+    const std::string_view line = remaining.substr(0, end);
+    if (!line.empty()) {
+      lines.emplace_back(line);
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    remaining.remove_prefix(end + 1);
+  }
+  return lines;
+}
+
+std::string json_string_field(std::string_view json, std::string_view key) {
+  const std::string prefix = std::format(R"("{}":")", key);
+  const std::size_t begin = json.find(prefix);
+  REQUIRE(begin != std::string_view::npos);
+  const std::size_t value_begin = begin + prefix.size();
+  const std::size_t end = json.find('"', value_begin);
+  REQUIRE(end != std::string_view::npos);
+  return std::string(json.substr(value_begin, end - value_begin));
 }
 
 const memix::QuestInfo &
@@ -568,6 +609,11 @@ TEST_CASE("quest listing tolerates absent history but rejects bad metadata",
   REQUIRE(corrupt_history);
   REQUIRE(corrupt_history->size() == 1);
   REQUIRE(corrupt_history->front().resolution_count == 0);
+  const auto corrupt_history_stats = views.quest_stats(definition->ir_hash);
+  REQUIRE(corrupt_history_stats);
+  REQUIRE(corrupt_history_stats->resolution_count == 0);
+  REQUIRE(corrupt_history_stats->read_count == 0);
+
   write_file(definition->quest_dir / "quest.json", "not json");
   const auto corrupt_quest = views.list_quests();
   REQUIRE_FALSE(corrupt_quest);
@@ -681,6 +727,721 @@ TEST_CASE("composed quest builds persist timestamps history and freshness",
   REQUIRE_FALSE(view_only_freshness->stale);
 }
 
+TEST_CASE("cat and tree append complete attributed quest receipts",
+          "[quest][receipts]") {
+  TemporaryDirectory directory("receipts-basic");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+
+  const auto file = views.read_environment_file(
+      environment->id, fs::path("rules/repo/AGENTS.md"));
+  REQUIRE(file);
+  std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == 1);
+  REQUIRE(json_string_field(receipts[0], "operation") == "cat");
+  REQUIRE(json_string_field(receipts[0], "path") == "rules/repo/AGENTS.md");
+  REQUIRE(json_string_field(receipts[0], "environment_id") == environment->id);
+  REQUIRE(json_string_field(receipts[0], "derivation_id")
+          == environment->derivation.id);
+  REQUIRE_FALSE(json_string_field(receipts[0], "at").empty());
+  REQUIRE_FALSE(receipts[0].contains("read_at"));
+
+  const auto whole_tree = views.environment_tree(environment->id);
+  REQUIRE(whole_tree);
+  const auto subtree =
+      views.environment_tree(environment->id, memix::ViewCatalogOptions{
+                                                  .path = "rules/repo",
+                                                  .depth = std::nullopt,
+                                              });
+  REQUIRE(subtree);
+  receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == 3);
+  REQUIRE(json_string_field(receipts[1], "operation") == "tree");
+  REQUIRE(json_string_field(receipts[1], "path") == ".");
+  REQUIRE(json_string_field(receipts[2], "operation") == "tree");
+  REQUIRE(json_string_field(receipts[2], "path") == "rules/repo");
+  REQUIRE(json_string_field(receipts[2], "environment_id") == environment->id);
+  REQUIRE(json_string_field(receipts[2], "derivation_id")
+          == environment->derivation.id);
+
+  const auto missing_file =
+      views.read_environment_file(environment->id, "rules/missing.md");
+  REQUIRE_FALSE(missing_file);
+  const auto missing_tree =
+      views.environment_tree(environment->id, memix::ViewCatalogOptions{
+                                                  .path = "rules/missing",
+                                                  .depth = std::nullopt,
+                                              });
+  REQUIRE_FALSE(missing_tree);
+  REQUIRE(
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash))
+          .size()
+      == 3);
+}
+
+TEST_CASE("receipts are attributed to the quest that produced the environment",
+          "[quest][receipts]") {
+  TemporaryDirectory directory("receipt-attribution");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path second_source = directory.path() / "second.md";
+  write_file(first_source, "first\n");
+  write_file(second_source, "second\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, first_source, "repo/first.md", "first");
+  ingest_context_file(store, second_source, "repo/second.md", "second");
+  const memix::ViewService views(store);
+  const auto first_expression =
+      views.expression_from_sources({"rules/repo/first.md@latest"});
+  const auto second_expression =
+      views.expression_from_sources({"rules/repo/second.md@latest"});
+  REQUIRE(first_expression);
+  REQUIRE(second_expression);
+  const auto first = views.build(*first_expression);
+  const auto second = views.build(*second_expression);
+  REQUIRE(first);
+  REQUIRE(second);
+
+  REQUIRE(views.read_environment_file(first->id, "rules/repo/first.md"));
+  REQUIRE(views.read_environment_file(second->id, "rules/repo/second.md"));
+  const std::vector<std::string> first_receipts =
+      jsonl_lines(receipts_path(store_root, first->derivation.ir_hash));
+  const std::vector<std::string> second_receipts =
+      jsonl_lines(receipts_path(store_root, second->derivation.ir_hash));
+  REQUIRE(first_receipts.size() == 1);
+  REQUIRE(second_receipts.size() == 1);
+  REQUIRE(json_string_field(first_receipts.front(), "environment_id")
+          == first->id);
+  REQUIRE(json_string_field(second_receipts.front(), "environment_id")
+          == second->id);
+}
+
+TEST_CASE("activation receipts record intent events and skip deactivation",
+          "[quest][receipts][activation]") {
+  TemporaryDirectory directory("activation-receipt");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+  const fs::path attachment = directory.path() / ".memory";
+  const memix::ActivationOptions options{
+      .profile = "workspace",
+      .into = attachment,
+      .mode = memix::ActivationMode::Link,
+      .force = false,
+  };
+
+  const auto first = views.activate(environment->id, options);
+  REQUIRE(first);
+  REQUIRE(first->generation == 1);
+  std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == 1);
+  REQUIRE(receipts.front().starts_with(R"({"at":")"));
+  REQUIRE_FALSE(receipts.front().contains("read_at"));
+  REQUIRE(json_string_field(receipts.front(), "operation") == "activate");
+  REQUIRE(json_string_field(receipts.front(), "environment_id")
+          == environment->id);
+  REQUIRE(json_string_field(receipts.front(), "derivation_id")
+          == environment->derivation.id);
+  REQUIRE(json_string_field(receipts.front(), "profile") == "workspace");
+  REQUIRE(json_string_field(receipts.front(), "mode") == "link");
+  REQUIRE(receipts.front().contains(R"("generation":1)"));
+  REQUIRE_FALSE(receipts.front().contains(R"("via":)"));
+  REQUIRE_FALSE(receipts.front().contains(R"("path":)"));
+
+  const auto no_op = views.activate(environment->id, options);
+  REQUIRE(no_op);
+  REQUIRE_FALSE(no_op->switched);
+  receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == 2);
+  REQUIRE(json_string_field(receipts.back(), "operation") == "activate");
+  REQUIRE(receipts.back().contains(R"("generation":1)"));
+
+  const auto deactivated = views.deactivate(attachment);
+  REQUIRE(deactivated);
+  REQUIRE(
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash))
+          .size()
+      == 2);
+}
+
+TEST_CASE("rollback receipts identify the recommitted environment",
+          "[quest][receipts][activation]") {
+  TemporaryDirectory directory("rollback-receipt");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "first\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "first");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto first = views.build(*expression);
+  REQUIRE(first);
+  const memix::ActivationOptions options{
+      .profile = "workspace",
+      .into = directory.path() / ".memory",
+      .mode = memix::ActivationMode::Link,
+      .force = false,
+  };
+  REQUIRE(views.activate(first->id, options));
+
+  write_file(source, "second\n");
+  ingest_context_file(store, source, "repo/AGENTS.md", "second");
+  const auto second = views.resolve_quest(first->derivation.ir_hash);
+  REQUIRE(second);
+  REQUIRE(second->id != first->id);
+  REQUIRE(views.activate(second->id, options));
+
+  const auto rolled_back = views.rollback("workspace");
+  REQUIRE(rolled_back);
+  REQUIRE(rolled_back->environment_id == first->id);
+  REQUIRE(rolled_back->derivation_id == first->derivation.id);
+  REQUIRE(rolled_back->generation == 1);
+  const std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, first->derivation.ir_hash));
+  REQUIRE(receipts.size() == 3);
+  const std::string &rollback = receipts.back();
+  REQUIRE(json_string_field(rollback, "operation") == "activate");
+  REQUIRE(json_string_field(rollback, "environment_id") == first->id);
+  REQUIRE(json_string_field(rollback, "derivation_id")
+          == first->derivation.id);
+  REQUIRE(json_string_field(rollback, "profile") == "workspace");
+  REQUIRE(json_string_field(rollback, "mode") == "link");
+  REQUIRE(json_string_field(rollback, "via") == "rollback");
+  REQUIRE(rollback.contains(R"("generation":1)"));
+}
+
+TEST_CASE("activation receipt failures and legacy quests are best effort",
+          "[quest][receipts][activation]") {
+  TemporaryDirectory directory("activation-best-effort");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+
+  const fs::path legacy_store_root = directory.path() / "legacy-store";
+  const memix::Store legacy_store(legacy_store_root);
+  ingest_context_file(legacy_store, source, "repo/AGENTS.md", "legacy");
+  const memix::ViewService legacy_views(legacy_store);
+  const auto legacy_expression =
+      legacy_views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(legacy_expression);
+  const auto legacy_environment = legacy_views.build(*legacy_expression);
+  REQUIRE(legacy_environment);
+  const fs::path legacy_quest_dir = legacy_store_root
+                                  / "views"
+                                  / "quests"
+                                  / legacy_environment->derivation.ir_hash;
+  const memix::FsResult<std::uintmax_t> removed =
+      fs::remove_all(legacy_quest_dir);
+  REQUIRE(removed);
+  REQUIRE(*removed > 0);
+  const auto legacy_activation =
+      legacy_views.activate(legacy_environment->id,
+                            {
+                                .profile = "legacy",
+                                .into = directory.path() / ".legacy-memory",
+                                .mode = memix::ActivationMode::Link,
+                            });
+  REQUIRE(legacy_activation);
+  const memix::FsResult<bool> legacy_receipts_exist = fs::exists(
+      receipts_path(legacy_store_root, legacy_environment->derivation.ir_hash));
+  REQUIRE(legacy_receipts_exist);
+  REQUIRE_FALSE(*legacy_receipts_exist);
+
+  const fs::path read_only_store_root = directory.path() / "readonly-store";
+  const memix::Store read_only_store(read_only_store_root);
+  ingest_context_file(read_only_store, source, "repo/AGENTS.md", "read-only");
+  const memix::ViewService read_only_views(read_only_store);
+  const auto read_only_expression =
+      read_only_views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(read_only_expression);
+  const auto read_only_environment =
+      read_only_views.build(*read_only_expression);
+  REQUIRE(read_only_environment);
+  const memix::ActivationOptions read_only_options{
+      .profile = "read-only",
+      .into = directory.path() / ".readonly-memory",
+      .mode = memix::ActivationMode::Link,
+      .force = false,
+  };
+  REQUIRE(read_only_views.activate(read_only_environment->id,
+                                   read_only_options));
+  const fs::path receipt_log = receipts_path(
+      read_only_store_root, read_only_environment->derivation.ir_hash);
+  REQUIRE(jsonl_lines(receipt_log).size() == 1);
+  const memix::FsVoid made_read_only =
+      fs::permissions(receipt_log, fs::perms::owner_read);
+  REQUIRE(made_read_only);
+  const auto no_op =
+      read_only_views.activate(read_only_environment->id, read_only_options);
+  const memix::FsVoid restored = fs::permissions(
+      receipt_log, fs::perms::owner_read | fs::perms::owner_write);
+  REQUIRE(restored);
+  REQUIRE(no_op);
+  REQUIRE(jsonl_lines(receipt_log).size() == 1);
+}
+
+TEST_CASE("legacy reads and receipt append failures remain successful",
+          "[quest][receipts]") {
+  TemporaryDirectory directory("receipt-best-effort");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+
+  const fs::path legacy_store_root = directory.path() / "legacy-store";
+  const memix::Store legacy_store(legacy_store_root);
+  ingest_context_file(legacy_store, source, "repo/AGENTS.md", "legacy");
+  const memix::ViewService legacy_views(legacy_store);
+  const auto legacy_expression =
+      legacy_views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(legacy_expression);
+  const auto legacy_environment = legacy_views.build(*legacy_expression);
+  REQUIRE(legacy_environment);
+  const fs::path legacy_quest_dir = legacy_store_root
+                                  / "views"
+                                  / "quests"
+                                  / legacy_environment->derivation.ir_hash;
+  const memix::FsResult<std::uintmax_t> removed =
+      fs::remove_all(legacy_quest_dir);
+  REQUIRE(removed);
+  REQUIRE(*removed > 0);
+  const auto legacy_read = legacy_views.read_environment_file(
+      legacy_environment->id, "rules/repo/AGENTS.md");
+  REQUIRE(legacy_read);
+  const memix::FsResult<bool> legacy_receipts_exist = fs::exists(
+      receipts_path(legacy_store_root, legacy_environment->derivation.ir_hash));
+  REQUIRE(legacy_receipts_exist);
+  REQUIRE_FALSE(*legacy_receipts_exist);
+
+  const fs::path read_only_store_root = directory.path() / "readonly-store";
+  const memix::Store read_only_store(read_only_store_root);
+  ingest_context_file(read_only_store, source, "repo/AGENTS.md", "read-only");
+  const memix::ViewService read_only_views(read_only_store);
+  const auto read_only_expression =
+      read_only_views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(read_only_expression);
+  const auto read_only_environment =
+      read_only_views.build(*read_only_expression);
+  REQUIRE(read_only_environment);
+  const fs::path read_only_quest_dir =
+      read_only_store_root
+      / "views"
+      / "quests"
+      / read_only_environment->derivation.ir_hash;
+  const memix::FsVoid made_read_only = fs::permissions(
+      read_only_quest_dir, fs::perms::owner_read | fs::perms::owner_exec);
+  REQUIRE(made_read_only);
+  const auto read_only_result = read_only_views.read_environment_file(
+      read_only_environment->id, "rules/repo/AGENTS.md");
+  const memix::FsResult<bool> read_only_receipts_exist =
+      fs::exists(receipts_path(read_only_store_root,
+                               read_only_environment->derivation.ir_hash));
+  const memix::FsVoid restored =
+      fs::permissions(read_only_quest_dir, fs::perms::owner_all);
+  REQUIRE(restored);
+  REQUIRE(read_only_result);
+  REQUIRE(read_only_receipts_exist);
+  REQUIRE_FALSE(*read_only_receipts_exist);
+}
+
+TEST_CASE("quest listings summarize receipts and tolerate corrupt logs",
+          "[quest][receipts]") {
+  TemporaryDirectory directory("receipt-listing");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+  REQUIRE(views.read_environment_file(environment->id, "rules/repo/AGENTS.md"));
+
+  const std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == 1);
+  const std::string read_at = json_string_field(receipts.front(), "at");
+  const auto listed = views.list_quests();
+  REQUIRE(listed);
+  const memix::QuestInfo &quest =
+      quest_with_hash(*listed, environment->derivation.ir_hash);
+  REQUIRE(quest.read_count == 1);
+  REQUIRE(quest.last_read_at == read_at);
+
+  write_file(receipts_path(store_root, environment->derivation.ir_hash),
+             "not json\n");
+  const auto corrupt_listing = views.list_quests();
+  REQUIRE(corrupt_listing);
+  const memix::QuestInfo &corrupt_quest =
+      quest_with_hash(*corrupt_listing, environment->derivation.ir_hash);
+  REQUIRE(corrupt_quest.read_count == 0);
+  REQUIRE(corrupt_quest.last_read_at.empty());
+  REQUIRE(corrupt_quest.activation_count == 0);
+  REQUIRE(corrupt_quest.last_activated_at.empty());
+  const auto corrupt_stats = views.quest_stats(environment->derivation.ir_hash);
+  REQUIRE(corrupt_stats);
+  REQUIRE(corrupt_stats->resolution_count == 1);
+  REQUIRE(corrupt_stats->activation_count == 0);
+  REQUIRE(corrupt_stats->first_activated_at.empty());
+  REQUIRE(corrupt_stats->last_activated_at.empty());
+  REQUIRE(corrupt_stats->activations_by_profile.empty());
+  REQUIRE(corrupt_stats->read_count == 0);
+  REQUIRE(corrupt_stats->first_read_at.empty());
+  REQUIRE(corrupt_stats->last_read_at.empty());
+}
+
+TEST_CASE("quest stats aggregate reads across resolutions and environments",
+          "[quest][receipts]") {
+  TemporaryDirectory directory("receipt-stats");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path second_source = directory.path() / "second.md";
+  const fs::path third_source = directory.path() / "third.md";
+  write_file(first_source, "first\n");
+  write_file(second_source, "second\n");
+  write_file(third_source, "third\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, first_source, "repo/AGENTS.md", "first");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto first = views.build(*expression);
+  REQUIRE(first);
+  REQUIRE(views.read_environment_file(first->id, "rules/repo/AGENTS.md"));
+  REQUIRE(views.environment_tree(first->id));
+
+  ingest_context_file(store, second_source, "repo/AGENTS.md", "second");
+  const auto second = views.resolve_quest(first->derivation.ir_hash);
+  REQUIRE(second);
+  REQUIRE(second->id != first->id);
+  REQUIRE(views.read_environment_file(first->id, "rules/repo/AGENTS.md"));
+  REQUIRE(views.read_environment_file(second->id, "rules/repo/AGENTS.md"));
+  REQUIRE(views.environment_tree(second->id, memix::ViewCatalogOptions{
+                                                 .path = "rules/repo",
+                                                 .depth = std::nullopt,
+                                             }));
+
+  ingest_context_file(store, third_source, "repo/AGENTS.md", "third");
+  const auto third = views.resolve_quest(first->derivation.ir_hash);
+  REQUIRE(third);
+  REQUIRE(third->id != second->id);
+  REQUIRE(views.read_environment_file(third->id, "rules/repo/AGENTS.md"));
+  REQUIRE(views.read_environment_file(third->id, "rules/repo/AGENTS.md"));
+
+  const std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, first->derivation.ir_hash));
+  REQUIRE(receipts.size() == 7);
+  const auto stats = views.quest_stats(first->derivation.ir_hash);
+  REQUIRE(stats);
+  REQUIRE(stats->ir_hash == first->derivation.ir_hash);
+  REQUIRE(stats->resolution_count == 3);
+  REQUIRE_FALSE(stats->last_resolved_at.empty());
+  REQUIRE(stats->read_count == 7);
+  REQUIRE(stats->first_read_at
+          == json_string_field(receipts.front(), "at"));
+  REQUIRE(stats->last_read_at == json_string_field(receipts.back(), "at"));
+  REQUIRE(stats->cat_count == 5);
+  REQUIRE(stats->tree_count == 2);
+  REQUIRE(stats->reads_by_environment.size() == 3);
+  REQUIRE(stats->reads_by_environment[0].environment_id == first->id);
+  REQUIRE(stats->reads_by_environment[0].read_count == 3);
+  const std::string lower_tied_id = std::min(second->id, third->id);
+  const std::string higher_tied_id = std::max(second->id, third->id);
+  REQUIRE(stats->reads_by_environment[1].environment_id == lower_tied_id);
+  REQUIRE(stats->reads_by_environment[1].read_count == 2);
+  REQUIRE(stats->reads_by_environment[2].environment_id == higher_tied_id);
+  REQUIRE(stats->reads_by_environment[2].read_count == 2);
+
+  const auto zero_expression =
+      views.expression_from_sources({"rules/repo/OTHER.md@latest"});
+  REQUIRE(zero_expression);
+  const auto zero_definition =
+      views.define_quest(*zero_expression, "zero reads", "");
+  REQUIRE(zero_definition);
+  const auto zero = views.quest_stats(zero_definition->ir_hash);
+  REQUIRE(zero);
+  REQUIRE(zero->resolution_count == 0);
+  REQUIRE(zero->last_resolved_at.empty());
+  REQUIRE(zero->read_count == 0);
+  REQUIRE(zero->first_read_at.empty());
+  REQUIRE(zero->last_read_at.empty());
+  REQUIRE(zero->cat_count == 0);
+  REQUIRE(zero->tree_count == 0);
+  REQUIRE(zero->reads_by_environment.empty());
+
+  const auto unknown = views.quest_stats(std::string(64, 'f'));
+  REQUIRE_FALSE(unknown);
+  REQUIRE(unknown.error().kind == memix::ErrorKind::NotFound);
+}
+
+TEST_CASE("quest stats aggregate activations by profile",
+          "[quest][receipts][activation]") {
+  TemporaryDirectory directory("activation-stats");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+
+  const memix::ActivationOptions beta{
+      .profile = "beta",
+      .into = directory.path() / ".memory-beta",
+      .mode = memix::ActivationMode::Link,
+      .force = false,
+  };
+  const memix::ActivationOptions alpha{
+      .profile = "alpha",
+      .into = directory.path() / ".memory-alpha",
+      .mode = memix::ActivationMode::Link,
+      .force = false,
+  };
+  const memix::ActivationOptions gamma{
+      .profile = "gamma",
+      .into = directory.path() / ".memory-gamma",
+      .mode = memix::ActivationMode::Link,
+      .force = false,
+  };
+  REQUIRE(views.activate(environment->id, beta));
+  REQUIRE(views.activate(environment->id, alpha));
+  REQUIRE(views.activate(environment->id, alpha));
+  REQUIRE(views.activate(environment->id, gamma));
+  REQUIRE(
+      views.read_environment_file(environment->id, "rules/repo/AGENTS.md"));
+
+  const std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == 5);
+  const auto stats = views.quest_stats(environment->derivation.ir_hash);
+  REQUIRE(stats);
+  REQUIRE(stats->activation_count == 4);
+  REQUIRE(stats->first_activated_at
+          == json_string_field(receipts.front(), "at"));
+  REQUIRE(stats->last_activated_at
+          == json_string_field(receipts.at(3), "at"));
+  REQUIRE(stats->activations_by_profile.size() == 3);
+  REQUIRE(stats->activations_by_profile[0].profile == "alpha");
+  REQUIRE(stats->activations_by_profile[0].activation_count == 2);
+  REQUIRE(stats->activations_by_profile[1].profile == "beta");
+  REQUIRE(stats->activations_by_profile[1].activation_count == 1);
+  REQUIRE(stats->activations_by_profile[2].profile == "gamma");
+  REQUIRE(stats->activations_by_profile[2].activation_count == 1);
+  REQUIRE(stats->read_count == 1);
+
+  const auto listed = views.list_quests();
+  REQUIRE(listed);
+  const memix::QuestInfo &quest =
+      quest_with_hash(*listed, environment->derivation.ir_hash);
+  REQUIRE(quest.activation_count == 4);
+  REQUIRE(quest.last_activated_at == stats->last_activated_at);
+}
+
+TEST_CASE("receipt scans tolerate unknown operations and missing optionals",
+          "[quest][receipts]") {
+  TemporaryDirectory directory("receipt-forward-compatibility");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+  REQUIRE(
+      views.read_environment_file(environment->id, "rules/repo/AGENTS.md"));
+  const fs::path log =
+      receipts_path(store_root, environment->derivation.ir_hash);
+  append_file(
+      log,
+      std::format(
+          R"({{"at":"future-1","operation":"future","environment_id":"{}","derivation_id":"{}"}})"
+          "\n",
+          environment->id, environment->derivation.id));
+  append_file(
+      log,
+      std::format(
+          R"({{"at":"future-2","operation":"activate","environment_id":"{}","derivation_id":"{}"}})"
+          "\n",
+          environment->id, environment->derivation.id));
+
+  const auto stats = views.quest_stats(environment->derivation.ir_hash);
+  REQUIRE(stats);
+  REQUIRE(stats->read_count == 1);
+  REQUIRE(stats->activation_count == 1);
+  REQUIRE(stats->first_activated_at == "future-2");
+  REQUIRE(stats->last_activated_at == "future-2");
+  REQUIRE(stats->activations_by_profile.empty());
+  const auto listed = views.list_quests();
+  REQUIRE(listed);
+  const memix::QuestInfo &quest =
+      quest_with_hash(*listed, environment->derivation.ir_hash);
+  REQUIRE(quest.read_count == 1);
+  REQUIRE(quest.activation_count == 1);
+}
+
+TEST_CASE("concurrent quest reads append complete receipt lines",
+          "[quest][receipts]") {
+  constexpr int reader_count = 16;
+  TemporaryDirectory directory("concurrent-receipts");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment = views.build(*expression);
+  REQUIRE(environment);
+
+  std::atomic<int> ready = 0;
+  std::atomic<bool> start = false;
+  std::vector<memix::ViewResult<memix::ResolvedViewFile>> results(reader_count);
+  std::vector<std::thread> readers;
+  readers.reserve(reader_count);
+  for (int index = 0; index < reader_count; ++index) {
+    readers.emplace_back([&, index]() {
+      ready.fetch_add(1, std::memory_order_acq_rel);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      const memix::ViewService thread_views{memix::Store(store_root)};
+      results.at(static_cast<std::size_t>(index)) =
+          thread_views.read_environment_file(environment->id,
+                                             "rules/repo/AGENTS.md");
+    });
+  }
+  while (ready.load(std::memory_order_acquire) != reader_count) {
+    std::this_thread::yield();
+  }
+  start.store(true, std::memory_order_release);
+  for (std::thread &reader : readers) {
+    reader.join();
+  }
+  for (const auto &result : results) {
+    const std::string error = result ? "" : result.error().message;
+    INFO(error);
+    REQUIRE(result);
+  }
+
+  const std::vector<std::string> receipts =
+      jsonl_lines(receipts_path(store_root, environment->derivation.ir_hash));
+  REQUIRE(receipts.size() == static_cast<std::size_t>(reader_count));
+  for (const std::string &receipt : receipts) {
+    REQUIRE(receipt.starts_with(R"({"at":")"));
+    REQUIRE(json_string_field(receipt, "operation") == "cat");
+    REQUIRE(json_string_field(receipt, "environment_id") == environment->id);
+    REQUIRE(json_string_field(receipt, "derivation_id")
+            == environment->derivation.id);
+    REQUIRE(json_string_field(receipt, "path") == "rules/repo/AGENTS.md");
+  }
+}
+
+TEST_CASE("concurrent quest builds append complete history lines", "[quest]") {
+  constexpr int builder_count = 16;
+  TemporaryDirectory directory("concurrent-history");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+
+  std::atomic<int> ready = 0;
+  std::atomic<bool> start = false;
+  std::vector<memix::ViewResult<memix::ViewEnvironment>> results(builder_count);
+  std::vector<std::thread> builders;
+  builders.reserve(builder_count);
+  for (int index = 0; index < builder_count; ++index) {
+    builders.emplace_back([&, index]() {
+      ready.fetch_add(1, std::memory_order_acq_rel);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      const memix::ViewService thread_views{memix::Store(store_root)};
+      results.at(static_cast<std::size_t>(index)) =
+          thread_views.build(*expression);
+    });
+  }
+  while (ready.load(std::memory_order_acquire) != builder_count) {
+    std::this_thread::yield();
+  }
+  start.store(true, std::memory_order_release);
+  for (std::thread &builder : builders) {
+    builder.join();
+  }
+
+  std::string ir_hash;
+  std::string derivation_id;
+  std::string environment_id;
+  for (const auto &result : results) {
+    const std::string error = result ? "" : result.error().message;
+    INFO(error);
+    REQUIRE(result);
+    if (ir_hash.empty()) {
+      ir_hash = result->derivation.ir_hash;
+      derivation_id = result->derivation.id;
+      environment_id = result->id;
+    }
+    REQUIRE(result->derivation.ir_hash == ir_hash);
+    REQUIRE(result->derivation.id == derivation_id);
+    REQUIRE(result->id == environment_id);
+  }
+
+  const std::string history =
+      read_file(store_root / "views" / "quests" / ir_hash / "history.jsonl");
+  REQUIRE(history.ends_with('\n'));
+  REQUIRE(static_cast<std::size_t>(std::ranges::count(history, '\n'))
+          == static_cast<std::size_t>(builder_count));
+  std::string_view remaining = history;
+  while (!remaining.empty()) {
+    const std::size_t end = remaining.find('\n');
+    REQUIRE(end != std::string_view::npos);
+    const std::string_view line = remaining.substr(0, end);
+    REQUIRE(line.starts_with(R"({"resolved_at":")"));
+    REQUIRE(line.ends_with(
+        std::format(R"(","derivation_id":"{}","environment_id":"{}"}})",
+                    derivation_id, environment_id)));
+    remaining.remove_prefix(end + 1);
+  }
+}
+
 TEST_CASE("quest CLI validates find and truncates only plain tables",
           "[quest][cli]") {
   TemporaryDirectory directory("cli");
@@ -748,4 +1509,119 @@ TEST_CASE("quest CLI validates find and truncates only plain tables",
   REQUIRE(cleared.status == 0);
   REQUIRE(cleared.output.contains(R"("intent":"")"));
   REQUIRE(cleared.output.contains(R"("name":"")"));
+}
+
+TEST_CASE("quest stats CLI reports consumption evidence",
+          "[quest][receipts][cli]") {
+  TemporaryDirectory directory("stats-cli");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  ingest_context_file(store, source, "repo/AGENTS.md", "initial");
+  const memix::ViewService views(store);
+  const auto expression =
+      views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
+  REQUIRE(expression);
+  const auto environment =
+      views.build(*expression, memix::BuildOptions{
+                                   .intent = "CLI reuse evidence",
+                                   .name = "cli stats",
+                               });
+  REQUIRE(environment);
+  REQUIRE(views.activate(environment->id,
+                         {
+                             .profile = "cli",
+                             .into = directory.path() / ".memory",
+                             .mode = memix::ActivationMode::Link,
+                         }));
+
+  const CliResult cat =
+      run_cli(directory.path(), store_root,
+              {"cat", environment->id, "rules/repo/AGENTS.md"});
+  INFO(cat.error);
+  REQUIRE(cat.status == 0);
+  REQUIRE(cat.output == "rules\n");
+  const CliResult tree =
+      run_cli(directory.path(), store_root,
+              {"tree", environment->id, "--path", "rules/repo", "--json"});
+  INFO(tree.error);
+  REQUIRE(tree.status == 0);
+  REQUIRE(tree.output.contains(R"("path":"rules/repo/AGENTS.md")"));
+
+  const std::string quest_prefix =
+      environment->derivation.ir_hash.substr(0, 12);
+  const CliResult plain =
+      run_cli(directory.path(), store_root, {"stats", quest_prefix});
+  INFO(plain.error);
+  REQUIRE(plain.status == 0);
+  REQUIRE(plain.output.contains(
+      std::format("quest: {}", environment->derivation.ir_hash)));
+  REQUIRE(plain.output.contains("resolutions: 1"));
+  REQUIRE(plain.output.contains("activations: 1"));
+  REQUIRE(plain.output.contains("first_activated: "));
+  REQUIRE(plain.output.contains("last_activated: "));
+  REQUIRE(plain.output.contains("activations_by_profile:\n  cli 1"));
+  REQUIRE(plain.output.contains("reads: 2"));
+  REQUIRE(plain.output.contains("cat_reads: 1"));
+  REQUIRE(plain.output.contains("tree_reads: 1"));
+  REQUIRE(plain.output.contains("reads_by_environment:"));
+  REQUIRE(plain.output.contains(environment->id.substr(0, 12)));
+  REQUIRE(plain.output.find("\nactivations:")
+          < plain.output.find("\nreads:"));
+
+  const CliResult json =
+      run_cli(directory.path(), store_root, {"stats", quest_prefix, "--json"});
+  INFO(json.error);
+  REQUIRE(json.status == 0);
+  REQUIRE(json.output.contains(
+      std::format(R"("ir_hash":"{}")", environment->derivation.ir_hash)));
+  REQUIRE(json.output.contains(R"("resolution_count":1)"));
+  REQUIRE(json.output.contains(R"("activation_count":1)"));
+  REQUIRE(json.output.contains(R"("first_activated_at":")"));
+  REQUIRE(json.output.contains(R"("last_activated_at":")"));
+  REQUIRE(json.output.contains(
+      R"("activations_by_profile":[{"profile":"cli","activation_count":1}])"));
+  REQUIRE(json.output.contains(R"("read_count":2)"));
+  REQUIRE(json.output.contains(R"("cat_count":1)"));
+  REQUIRE(json.output.contains(R"("tree_count":1)"));
+  REQUIRE(json.output.contains(
+      std::format(R"("environment_id":"{}","read_count":2)", environment->id)));
+  REQUIRE(json.output.contains(R"("first_read_at":")"));
+  REQUIRE(json.output.contains(R"("last_read_at":")"));
+
+  const CliResult quests = run_cli(directory.path(), store_root, {"quests"});
+  INFO(quests.error);
+  REQUIRE(quests.status == 0);
+  REQUIRE(quests.output.contains("READS"));
+  REQUIRE(quests.output.contains("ACTS"));
+  REQUIRE(quests.output.find("READS") < quests.output.find("ACTS"));
+  REQUIRE(quests.output.contains("LAST_READ"));
+  REQUIRE_FALSE(quests.output.contains("LAST_ACTIVE"));
+  const CliResult found =
+      run_cli(directory.path(), store_root, {"find", "evidence"});
+  INFO(found.error);
+  REQUIRE(found.status == 0);
+  REQUIRE(found.output.contains("READS"));
+  REQUIRE(found.output.contains("ACTS"));
+  REQUIRE(found.output.find("READS") < found.output.find("ACTS"));
+  REQUIRE(found.output.contains("LAST_READ"));
+  REQUIRE_FALSE(found.output.contains("LAST_ACTIVE"));
+  const CliResult found_json =
+      run_cli(directory.path(), store_root, {"find", "evidence", "--json"});
+  INFO(found_json.error);
+  REQUIRE(found_json.status == 0);
+  REQUIRE(found_json.output.contains(R"("read_count":2)"));
+  REQUIRE(found_json.output.contains(R"("last_read_at":")"));
+  REQUIRE(found_json.output.contains(R"("activation_count":1)"));
+  REQUIRE(found_json.output.contains(R"("last_activated_at":")"));
+
+  const CliResult quests_json =
+      run_cli(directory.path(), store_root, {"quests", "--json"});
+  INFO(quests_json.error);
+  REQUIRE(quests_json.status == 0);
+  REQUIRE(quests_json.output.contains(R"("read_count":2)"));
+  REQUIRE(quests_json.output.contains(R"("last_read_at":")"));
+  REQUIRE(quests_json.output.contains(R"("activation_count":1)"));
+  REQUIRE(quests_json.output.contains(R"("last_activated_at":")"));
 }

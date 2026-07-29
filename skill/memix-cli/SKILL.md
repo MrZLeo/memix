@@ -170,6 +170,7 @@ memix-view --store-root "<store-root>" find repository instructions --json
 memix-view --store-root "<store-root>" freshness 9a41c0de12ab --json
 memix-view --store-root "<store-root>" resolve 9a41c0de12ab
 memix-view --store-root "<store-root>" quests --json
+memix-view --store-root "<store-root>" stats 9a41c0de12ab --json
 ```
 
 Plain `quests` and `find` tables truncate long intent/name cells with `...`;
@@ -179,6 +180,17 @@ their resolved environment IDs are content-pinned, so a view-only quest has
 `inputs: []` and `stale: false`. For a followed ref that has been deleted,
 freshness reports `pinned: false`, `current_generation: null`, and
 `fresh: false`.
+
+Successful `memix-view cat`, `tree`, and `activate` operations add best-effort
+consumption receipts. Activation is recorded even when re-activating the
+current environment; rollback records the environment it recommits, while
+deactivate records nothing. Reads through an activated filesystem path are not
+observable by the CLI, so activation is their observable proxy and a stronger
+workspace-commitment signal. `quests` exposes aggregate read and activation
+counts, and `stats` presents per-profile activations before cat/tree totals and
+reads per environment. Agents may weigh activations above reads when judging
+quest reuse, while still checking `freshness` before reuse. Legacy
+environments without quests are skipped silently.
 
 Compose existing view environments directly:
 

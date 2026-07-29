@@ -58,6 +58,7 @@ constexpr std::string_view kQuestSchema = "memix.quest.v1";
 constexpr std::string_view kQuestIrFilename = "ir.json";
 constexpr std::string_view kQuestManifestFilename = "quest.json";
 constexpr std::string_view kQuestHistoryFilename = "history.jsonl";
+constexpr std::string_view kQuestReceiptsFilename = "receipts.jsonl";
 constexpr std::string_view kLatestVersion = "latest";
 constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
 constexpr std::string_view kFileTreeOperatorVersionV2 = "file-tree-v2";
@@ -2765,6 +2766,60 @@ struct QuestHistoryEntry {
   std::string environment_id;
 };
 
+struct QuestReceipt {
+  std::string at;
+  std::string operation;
+  std::string environment_id;
+  std::string derivation_id;
+  std::optional<std::string> path;
+  std::optional<std::string> profile;
+  std::optional<std::uint64_t> generation;
+  std::optional<std::string> mode;
+  std::optional<std::string> via;
+};
+
+struct QuestReceiptSummary {
+  std::size_t activation_count = 0;
+  std::string first_activated_at;
+  std::string last_activated_at;
+  std::map<std::string, std::size_t> activations_by_profile;
+  std::size_t read_count = 0;
+  std::string first_read_at;
+  std::string last_read_at;
+  std::size_t cat_count = 0;
+  std::size_t tree_count = 0;
+  std::map<std::string, std::size_t> reads_by_environment;
+};
+
+void summarize_quest_receipt(const QuestReceipt &receipt,
+                             QuestReceiptSummary &summary) {
+  if (receipt.operation == "activate") {
+    if (summary.activation_count == 0) {
+      summary.first_activated_at = receipt.at;
+    }
+    ++summary.activation_count;
+    summary.last_activated_at = receipt.at;
+    if (receipt.profile.has_value()) {
+      ++summary.activations_by_profile[*receipt.profile];
+    }
+    return;
+  }
+  if (receipt.operation != "cat" && receipt.operation != "tree") {
+    return;
+  }
+  if (summary.read_count == 0) {
+    summary.first_read_at = receipt.at;
+  }
+  ++summary.read_count;
+  summary.last_read_at = receipt.at;
+  if (receipt.operation == "cat") {
+    ++summary.cat_count;
+  } else {
+    ++summary.tree_count;
+  }
+  ++summary.reads_by_environment[receipt.environment_id];
+}
+
 ViewResult<std::string> quest_json_for(const QuestRecord &quest) {
   simdjson::builder::string_builder builder;
   builder.start_object();
@@ -3132,6 +3187,161 @@ record_resolution(const fs::path &root, const memix::ViewDerivation &derivation,
         std::format("failed to append quest history `{}`", path.string()));
   }
   return {};
+}
+
+ViewResult<std::string> quest_receipt_json_for(const QuestReceipt &receipt) {
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"at">(receipt.at);
+  builder.append_comma();
+  builder.append_key_value<"operation">(receipt.operation);
+  builder.append_comma();
+  builder.append_key_value<"environment_id">(receipt.environment_id);
+  builder.append_comma();
+  builder.append_key_value<"derivation_id">(receipt.derivation_id);
+  if (receipt.path.has_value()) {
+    builder.append_comma();
+    builder.append_key_value<"path">(*receipt.path);
+  }
+  if (receipt.profile.has_value()) {
+    builder.append_comma();
+    builder.append_key_value<"profile">(*receipt.profile);
+  }
+  if (receipt.generation.has_value()) {
+    builder.append_comma();
+    builder.append_key_value<"generation">(*receipt.generation);
+  }
+  if (receipt.mode.has_value()) {
+    builder.append_comma();
+    builder.append_key_value<"mode">(*receipt.mode);
+  }
+  if (receipt.via.has_value()) {
+    builder.append_comma();
+    builder.append_key_value<"via">(*receipt.via);
+  }
+  builder.end_object();
+  return json_from_builder(builder);
+}
+
+ViewResult<QuestReceipt>
+quest_receipt_from_json(std::string_view text, const fs::path &path) {
+  memix::detail::CommonResult<memix::detail::JsonDocument> document =
+      memix::detail::parse_json_object(text);
+  if (!document) {
+    return view_error(memix::detail::with_error_context(
+        std::move(document.error()),
+        std::format("invalid quest receipt `{}`", path.string()),
+        memix::ErrorKind::InvalidData));
+  }
+  const JsonObjectReader fields(document->root_object());
+  ViewResult<std::string> at = read_string_field(fields, "at");
+  ViewResult<std::string> operation = read_string_field(fields, "operation");
+  ViewResult<std::string> environment_id =
+      read_string_field(fields, "environment_id");
+  ViewResult<std::string> derivation_id =
+      read_string_field(fields, "derivation_id");
+  ViewResult<std::optional<std::string>> profile =
+      optional_string(fields, "profile");
+  if (!at) {
+    return std::unexpected(at.error());
+  }
+  if (!operation) {
+    return std::unexpected(operation.error());
+  }
+  if (!environment_id) {
+    return std::unexpected(environment_id.error());
+  }
+  if (!derivation_id) {
+    return std::unexpected(derivation_id.error());
+  }
+  if (!profile) {
+    return std::unexpected(profile.error());
+  }
+  if (!memix::detail::is_lower_hex_sha256(*environment_id)
+      || !memix::detail::is_lower_hex_sha256(*derivation_id)) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      "quest receipt contains an invalid object id");
+  }
+  return QuestReceipt{
+      .at = std::move(*at),
+      .operation = std::move(*operation),
+      .environment_id = std::move(*environment_id),
+      .derivation_id = std::move(*derivation_id),
+      .path = std::nullopt,
+      .profile = std::move(*profile),
+      .generation = std::nullopt,
+      .mode = std::nullopt,
+      .via = std::nullopt,
+  };
+}
+
+ViewResult<QuestReceiptSummary>
+read_quest_receipt_summary(const fs::path &root, std::string_view ir_hash) {
+  const fs::path path =
+      quest_dir_for(root, ir_hash) / std::string(kQuestReceiptsFilename);
+  const memix::FsResult<bool> exists = fs::exists(path);
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (!*exists) {
+    return QuestReceiptSummary{};
+  }
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return view_error(
+        std::format("failed to open quest receipts `{}`", path.string()));
+  }
+  QuestReceiptSummary summary;
+  std::string line;
+  while (std::getline(input, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    ViewResult<QuestReceipt> receipt = quest_receipt_from_json(line, path);
+    if (!receipt) {
+      return std::unexpected(receipt.error());
+    }
+    summarize_quest_receipt(*receipt, summary);
+  }
+  if (!input.eof()) {
+    return view_error(
+        std::format("failed to read quest receipts `{}`", path.string()));
+  }
+  return summary;
+}
+
+void record_quest_receipt_best_effort(const fs::path &root,
+                                      const memix::ViewEnvironment &environment,
+                                      QuestReceipt receipt) {
+  const fs::path quest_dir =
+      quest_dir_for(root, environment.derivation.ir_hash);
+  const memix::FsResult<bool> exists = fs::exists(quest_dir);
+  if (!exists || !*exists) {
+    return;
+  }
+  ViewResult<std::string> at = utc_timestamp();
+  if (!at) {
+    return;
+  }
+  receipt.at = std::move(*at);
+  receipt.environment_id = environment.id;
+  receipt.derivation_id = environment.derivation.id;
+  ViewResult<std::string> json = quest_receipt_json_for(receipt);
+  if (!json) {
+    return;
+  }
+  const fs::path path = quest_dir / std::string(kQuestReceiptsFilename);
+  std::ofstream output(path, std::ios::binary | std::ios::app);
+  if (!output) {
+    return;
+  }
+  std::string line = std::move(*json);
+  line.push_back('\n');
+  if (line.size()
+      > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())) {
+    return;
+  }
+  output.write(line.data(), static_cast<std::streamsize>(line.size()));
 }
 
 ViewResult<std::string>
@@ -4961,6 +5171,10 @@ ViewResult<std::vector<QuestInfo>> ViewService::list_quests() const {
         .last_resolved_at = {},
         .latest_derivation_id = {},
         .latest_environment_id = {},
+        .read_count = 0,
+        .last_read_at = {},
+        .activation_count = 0,
+        .last_activated_at = {},
     };
     ViewResult<std::vector<QuestHistoryEntry>> history =
         read_quest_history(store_.root(), ir_hash);
@@ -4972,6 +5186,14 @@ ViewResult<std::vector<QuestInfo>> ViewService::list_quests() const {
         info.latest_derivation_id = latest.derivation_id;
         info.latest_environment_id = latest.environment_id;
       }
+    }
+    ViewResult<QuestReceiptSummary> receipts =
+        read_quest_receipt_summary(store_.root(), ir_hash);
+    if (receipts) {
+      info.read_count = receipts->read_count;
+      info.last_read_at = receipts->last_read_at;
+      info.activation_count = receipts->activation_count;
+      info.last_activated_at = receipts->last_activated_at;
     }
     quests.push_back(std::move(info));
   }
@@ -5168,6 +5390,90 @@ ViewService::quest_freshness(std::string_view quest_prefix) const {
     freshness.inputs.push_back(std::move(status));
   }
   return freshness;
+}
+
+ViewResult<QuestStats>
+ViewService::quest_stats(std::string_view quest_prefix) const {
+  ViewResult<std::string> ir_hash =
+      resolve_unique_quest_id(store_.root(), quest_prefix);
+  if (!ir_hash) {
+    return std::unexpected(ir_hash.error());
+  }
+  const ViewResult<QuestRecord> quest =
+      read_quest_record(store_.root(), *ir_hash);
+  if (!quest) {
+    return std::unexpected(quest.error());
+  }
+  QuestStats stats{
+      .ir_hash = *ir_hash,
+      .resolution_count = 0,
+      .last_resolved_at = {},
+      .activation_count = 0,
+      .first_activated_at = {},
+      .last_activated_at = {},
+      .activations_by_profile = {},
+      .read_count = 0,
+      .first_read_at = {},
+      .last_read_at = {},
+      .cat_count = 0,
+      .tree_count = 0,
+      .reads_by_environment = {},
+  };
+  ViewResult<std::vector<QuestHistoryEntry>> history =
+      read_quest_history(store_.root(), *ir_hash);
+  if (history) {
+    stats.resolution_count = history->size();
+    if (!history->empty()) {
+      stats.last_resolved_at = history->back().resolved_at;
+    }
+  }
+  ViewResult<QuestReceiptSummary> receipts =
+      read_quest_receipt_summary(store_.root(), *ir_hash);
+  if (!receipts) {
+    return stats;
+  }
+  stats.activation_count = receipts->activation_count;
+  stats.first_activated_at = receipts->first_activated_at;
+  stats.last_activated_at = receipts->last_activated_at;
+  stats.activations_by_profile.reserve(
+      receipts->activations_by_profile.size());
+  for (const auto &[profile, activation_count] :
+       receipts->activations_by_profile) {
+    stats.activations_by_profile.push_back(QuestProfileActivations{
+        .profile = profile,
+        .activation_count = activation_count,
+    });
+  }
+  std::ranges::sort(stats.activations_by_profile,
+                    [](const QuestProfileActivations &left,
+                       const QuestProfileActivations &right) {
+                      if (left.activation_count != right.activation_count) {
+                        return left.activation_count > right.activation_count;
+                      }
+                      return left.profile < right.profile;
+                    });
+  stats.read_count = receipts->read_count;
+  stats.first_read_at = receipts->first_read_at;
+  stats.last_read_at = receipts->last_read_at;
+  stats.cat_count = receipts->cat_count;
+  stats.tree_count = receipts->tree_count;
+  stats.reads_by_environment.reserve(receipts->reads_by_environment.size());
+  for (const auto &[environment_id, read_count] :
+       receipts->reads_by_environment) {
+    stats.reads_by_environment.push_back(QuestEnvironmentReads{
+        .environment_id = environment_id,
+        .read_count = read_count,
+    });
+  }
+  std::ranges::sort(stats.reads_by_environment,
+                    [](const QuestEnvironmentReads &left,
+                       const QuestEnvironmentReads &right) {
+                      if (left.read_count != right.read_count) {
+                        return left.read_count > right.read_count;
+                      }
+                      return left.environment_id < right.environment_id;
+                    });
+  return stats;
 }
 
 ViewResult<ViewEnvironment>
@@ -5395,6 +5701,20 @@ ViewService::environment_tree(std::string_view environment_prefix,
         return std::tuple{left.path.generic_string(), !left.directory}
              < std::tuple{right.path.generic_string(), !right.directory};
       });
+  record_quest_receipt_best_effort(store_.root(), *environment,
+                                   QuestReceipt{
+                                       .at = {},
+                                       .operation = "tree",
+                                       .environment_id = {},
+                                       .derivation_id = {},
+                                       .path = selected_path.empty()
+                                                 ? "."
+                                                 : selected_path.generic_string(),
+                                       .profile = std::nullopt,
+                                       .generation = std::nullopt,
+                                       .mode = std::nullopt,
+                                       .via = std::nullopt,
+                                   });
   return entries;
 }
 
@@ -5421,7 +5741,39 @@ ViewService::read_environment_file(std::string_view environment_prefix,
                       std::format("view file does not exist `{}`",
                                   validated->generic_string()));
   }
+  record_quest_receipt_best_effort(store_.root(), *environment,
+                                   QuestReceipt{
+                                       .at = {},
+                                       .operation = "cat",
+                                       .environment_id = {},
+                                       .derivation_id = {},
+                                       .path = validated->generic_string(),
+                                       .profile = std::nullopt,
+                                       .generation = std::nullopt,
+                                       .mode = std::nullopt,
+                                       .via = std::nullopt,
+                                   });
   return *file;
+}
+
+void ViewService::record_activation(
+    const ViewEnvironment &environment, const ViewActivation &activation,
+    ActivationMode mode, std::optional<std::string_view> via) const {
+  record_quest_receipt_best_effort(
+      store_.root(), environment,
+      QuestReceipt{
+          .at = {},
+          .operation = "activate",
+          .environment_id = {},
+          .derivation_id = {},
+          .path = std::nullopt,
+          .profile = activation.profile,
+          .generation = activation.generation,
+          .mode = std::string(to_string(mode)),
+          .via = via.has_value()
+                   ? std::optional<std::string>(std::in_place, *via)
+                   : std::nullopt,
+      });
 }
 
 ViewResult<ViewActivation>
@@ -5509,6 +5861,7 @@ ViewService::activate(std::string_view environment_prefix,
       .switched = generation->switched,
       .materialized = materialized,
   };
+  record_activation(*environment, activation, options.mode);
   return activation;
 }
 
@@ -5569,6 +5922,11 @@ ViewService::rollback(std::string_view profile,
         .switched = false,
         .materialized = false,
     };
+    const ViewResult<ViewEnvironment> environment =
+        resolve_environment(activation.environment_id);
+    if (environment) {
+      record_activation(*environment, activation, metadata->mode, "rollback");
+    }
     return activation;
   }
   std::optional<fs::path> workspace_lock;
@@ -5604,6 +5962,11 @@ ViewService::rollback(std::string_view profile,
       .switched = true,
       .materialized = *rematerialized,
   };
+  const ViewResult<ViewEnvironment> environment =
+      resolve_environment(activation.environment_id);
+  if (environment) {
+    record_activation(*environment, activation, metadata->mode, "rollback");
+  }
   return activation;
 }
 
