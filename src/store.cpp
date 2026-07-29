@@ -43,6 +43,7 @@ constexpr std::string_view kTreesDir = "trees";
 constexpr std::string_view kGenerationsDir = "generations";
 constexpr std::string_view kRefsDir = "refs";
 constexpr std::string_view kLocksDir = ".locks";
+constexpr std::string_view kLatestDir = "latest";
 constexpr std::string_view kLatestRef = "latest";
 constexpr std::string_view kContextTreeKind = "context_tree";
 constexpr std::string_view kContextGenerationKind = "context_generation";
@@ -385,6 +386,21 @@ fs::path refs_dir_for(const fs::path &root) {
 
 fs::path locks_dir_for(const fs::path &root) {
   return root / std::string(kLocksDir);
+}
+
+fs::path latest_dir_for(const fs::path &root) {
+  return root / std::string(kLatestDir);
+}
+
+fs::path projection_dir_for(const fs::path &root,
+                            memix::MemoryObjectType type) {
+  return latest_dir_for(root) / std::string(memix::to_string(type));
+}
+
+fs::path projection_path_for(const fs::path &root,
+                             memix::MemoryObjectType type,
+                             const fs::path &logical_path) {
+  return projection_dir_for(root, type) / logical_path;
 }
 
 std::string latest_ref_name(memix::MemoryObjectType type) {
@@ -2016,6 +2032,353 @@ collect_context_files(const fs::path &root, std::string_view tree_id,
   return {};
 }
 
+StoreResult<std::vector<fs::path>>
+projection_directories(const fs::path &root) {
+  const memix::FsResult<bool> exists = fs::exists(root);
+  if (!exists) {
+    return store_error(exists.error());
+  }
+  if (!*exists) {
+    return std::vector<fs::path>{};
+  }
+  const memix::FsResult<fs::file_status> root_status =
+      fs::symlink_status(root);
+  if (!root_status) {
+    return store_error(root_status.error());
+  }
+  if (root_status->type() != fs::file_type::directory) {
+    return store_error(
+        std::format("projection path is not a directory `{}`", root.string()));
+  }
+
+  std::vector<fs::path> directories{root};
+  std::error_code iterator_error;
+  const fs::recursive_directory_iterator end;
+  for (fs::recursive_directory_iterator iterator{root, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    const fs::file_status entry_status = entry.symlink_status(entry_error);
+    if (!entry_error && entry_status.type() == fs::file_type::directory) {
+      directories.push_back(entry.path());
+    } else if (entry_error) {
+      return store_error(
+          fs::make_fs_error("failed to inspect", entry_error, entry.path()));
+    }
+  }
+  if (iterator_error) {
+    return store_error(
+        fs::make_fs_error("failed to list directory", iterator_error, root));
+  }
+  return directories;
+}
+
+StoreVoid set_projection_directory_permissions(const fs::path &root,
+                                               fs::perms permissions) {
+  StoreResult<std::vector<fs::path>> directories =
+      projection_directories(root);
+  if (!directories) {
+    return std::unexpected(directories.error());
+  }
+  const bool writable =
+      (permissions & fs::perms::owner_write) != fs::perms::none;
+  if (!writable) {
+    std::ranges::reverse(*directories);
+  }
+  for (const fs::path &directory : *directories) {
+    const memix::FsVoid updated =
+        fs::permissions(directory, permissions, fs::perm_options::replace);
+    if (!updated) {
+      return store_error(updated.error());
+    }
+  }
+  return {};
+}
+
+struct ProjectionFile {
+  std::string blob_id;
+  fs::path content_path;
+};
+
+using ProjectionFiles = std::map<fs::path, ProjectionFile>;
+
+StoreResult<ProjectionFiles>
+projection_files_for_tree(const fs::path &root, memix::MemoryObjectType type,
+                          std::string_view tree_id) {
+  std::vector<memix::StoreFile> files;
+  const StoreVoid collected =
+      collect_context_files(root, tree_id, type, fs::path{}, files);
+  if (!collected) {
+    return std::unexpected(collected.error());
+  }
+  ProjectionFiles projection_files;
+  for (const memix::StoreFile &file : files) {
+    projection_files.emplace(
+        file.context_path,
+        ProjectionFile{
+            .blob_id = file.blob.id,
+            .content_path = file.blob.object_dir / file.blob.content_path,
+        });
+  }
+  return projection_files;
+}
+
+StoreVoid remove_projection_path_if_present(const fs::path &path) {
+  const memix::FsResult<bool> exists = fs::exists(path);
+  if (!exists) {
+    return store_error(exists.error());
+  }
+  if (!*exists) {
+    return {};
+  }
+  const memix::FsResult<fs::file_status> status = fs::symlink_status(path);
+  if (!status) {
+    return store_error(status.error());
+  }
+  const memix::FsResult<bool> removed = fs::remove(path);
+  if (!removed) {
+    return store_error(removed.error());
+  }
+  if (!*removed) {
+    return store_error(
+        std::format("failed to remove projection path `{}`", path.string()));
+  }
+  return {};
+}
+
+StoreVoid create_projection_hardlink(const fs::path &root,
+                                     memix::MemoryObjectType type,
+                                     const fs::path &logical_path,
+                                     const ProjectionFile &file) {
+  const fs::path projection_path =
+      projection_path_for(root, type, logical_path);
+  const StoreVoid removed = remove_projection_path_if_present(projection_path);
+  if (!removed) {
+    return std::unexpected(removed.error());
+  }
+  const StoreVoid parent_created =
+      ensure_directory(projection_path.parent_path(), fs::perms::owner_all);
+  if (!parent_created) {
+    return std::unexpected(parent_created.error());
+  }
+  const memix::FsVoid linked =
+      fs::create_hard_link(file.content_path, projection_path);
+  if (!linked) {
+    return store_error(linked.error());
+  }
+  return {};
+}
+
+StoreVoid
+remove_empty_projection_directories(const fs::path &projection_dir) {
+  StoreResult<std::vector<fs::path>> directories =
+      projection_directories(projection_dir);
+  if (!directories) {
+    return std::unexpected(directories.error());
+  }
+  std::ranges::reverse(*directories);
+  for (const fs::path &directory : *directories) {
+    if (directory == projection_dir) {
+      continue;
+    }
+    std::error_code iterator_error;
+    const fs::directory_iterator iterator{directory, iterator_error};
+    if (iterator_error) {
+      return store_error(fs::make_fs_error(
+          "failed to list directory", iterator_error, directory));
+    }
+    if (iterator != fs::directory_iterator{}) {
+      continue;
+    }
+    const memix::FsResult<bool> removed = fs::remove(directory);
+    if (!removed) {
+      return store_error(removed.error());
+    }
+  }
+  return {};
+}
+
+StoreResult<bool>
+prepare_projection_for_incremental_refresh(const fs::path &root,
+                                           memix::MemoryObjectType type) {
+  const fs::path latest_dir = latest_dir_for(root);
+  const memix::FsResult<bool> latest_exists = fs::exists(latest_dir);
+  if (!latest_exists) {
+    return store_error(latest_exists.error());
+  }
+  if (*latest_exists) {
+    const memix::FsResult<fs::file_status> latest_status =
+        fs::symlink_status(latest_dir);
+    if (!latest_status) {
+      return store_error(latest_status.error());
+    }
+    if (latest_status->type() != fs::file_type::directory) {
+      return store_error(std::format(
+          "projection root is not a directory `{}`", latest_dir.string()));
+    }
+    const memix::FsVoid made_writable = fs::permissions(
+        latest_dir, fs::perms::owner_all, fs::perm_options::replace);
+    if (!made_writable) {
+      return store_error(made_writable.error());
+    }
+  } else {
+    const StoreVoid latest_created =
+        ensure_directory(latest_dir, fs::perms::owner_all);
+    if (!latest_created) {
+      return std::unexpected(latest_created.error());
+    }
+  }
+
+  const fs::path projection_dir = projection_dir_for(root, type);
+  const memix::FsResult<bool> projection_exists = fs::exists(projection_dir);
+  if (!projection_exists) {
+    return store_error(projection_exists.error());
+  }
+  if (!*projection_exists) {
+    const StoreVoid projection_created =
+        ensure_directory(projection_dir, fs::perms::owner_all);
+    if (!projection_created) {
+      return std::unexpected(projection_created.error());
+    }
+    return false;
+  }
+  const StoreVoid made_writable = set_projection_directory_permissions(
+      projection_dir, fs::perms::owner_all);
+  if (!made_writable) {
+    return std::unexpected(made_writable.error());
+  }
+  return true;
+}
+
+StoreVoid freeze_projection_for_type(const fs::path &root,
+                                     memix::MemoryObjectType type) {
+  const StoreVoid type_frozen = set_projection_directory_permissions(
+      projection_dir_for(root, type),
+      fs::perms::owner_read | fs::perms::owner_exec);
+  if (!type_frozen) {
+    return std::unexpected(type_frozen.error());
+  }
+  const memix::FsVoid root_frozen =
+      fs::apply_read_only_directory_permissions(latest_dir_for(root));
+  if (!root_frozen) {
+    return store_error(root_frozen.error());
+  }
+  return {};
+}
+
+StoreVoid populate_projection(const fs::path &root,
+                              memix::MemoryObjectType type,
+                              const ProjectionFiles &files) {
+  for (const auto &[logical_path, file] : files) {
+    const StoreVoid linked =
+        create_projection_hardlink(root, type, logical_path, file);
+    if (!linked) {
+      return std::unexpected(linked.error());
+    }
+  }
+  return {};
+}
+
+StoreVoid refresh_existing_projection(
+    const fs::path &root, memix::MemoryObjectType type,
+    const ProjectionFiles &old_files, const ProjectionFiles &new_files) {
+  for (const auto &[logical_path, old_file] : old_files) {
+    const auto replacement = new_files.find(logical_path);
+    if (replacement != new_files.end()
+        && replacement->second.blob_id == old_file.blob_id) {
+      continue;
+    }
+    const StoreVoid removed = remove_projection_path_if_present(
+        projection_path_for(root, type, logical_path));
+    if (!removed) {
+      return std::unexpected(removed.error());
+    }
+  }
+  for (const auto &[logical_path, new_file] : new_files) {
+    const auto old_file = old_files.find(logical_path);
+    if (old_file != old_files.end()
+        && old_file->second.blob_id == new_file.blob_id) {
+      continue;
+    }
+    const StoreVoid linked =
+        create_projection_hardlink(root, type, logical_path, new_file);
+    if (!linked) {
+      return std::unexpected(linked.error());
+    }
+  }
+  return remove_empty_projection_directories(projection_dir_for(root, type));
+}
+
+StoreVoid refresh_projection_for_type(
+    const fs::path &root, memix::MemoryObjectType type,
+    std::optional<std::string_view> old_tree, std::string_view new_tree) {
+  ProjectionFiles old_files;
+  if (old_tree.has_value()) {
+    StoreResult<ProjectionFiles> collected_old =
+        projection_files_for_tree(root, type, *old_tree);
+    if (!collected_old) {
+      return std::unexpected(collected_old.error());
+    }
+    old_files = std::move(*collected_old);
+  }
+  StoreResult<ProjectionFiles> new_files =
+      projection_files_for_tree(root, type, new_tree);
+  if (!new_files) {
+    return std::unexpected(new_files.error());
+  }
+
+  StoreResult<bool> projection_existed =
+      prepare_projection_for_incremental_refresh(root, type);
+  if (!projection_existed) {
+    return std::unexpected(projection_existed.error());
+  }
+  const StoreVoid refreshed =
+      *projection_existed
+        ? refresh_existing_projection(root, type, old_files, *new_files)
+        : populate_projection(root, type, *new_files);
+  const StoreVoid frozen = freeze_projection_for_type(root, type);
+  if (!refreshed) {
+    return std::unexpected(refreshed.error());
+  }
+  if (!frozen) {
+    return std::unexpected(frozen.error());
+  }
+  return {};
+}
+
+StoreResult<std::size_t>
+rebuild_projection_for_type(const fs::path &root,
+                            memix::MemoryObjectType type) {
+  StoreResult<std::optional<std::string>> latest =
+      read_ref_value(root, latest_ref_name(type));
+  if (!latest) {
+    return std::unexpected(latest.error());
+  }
+  if (!latest->has_value()) {
+    return std::size_t{0};
+  }
+  StoreResult<std::string> tree_id =
+      root_tree_id_for_generation(root, type, **latest);
+  if (!tree_id) {
+    return std::unexpected(tree_id.error());
+  }
+  StoreResult<ProjectionFiles> files =
+      projection_files_for_tree(root, type, *tree_id);
+  if (!files) {
+    return std::unexpected(files.error());
+  }
+  const StoreVoid projection_created =
+      ensure_directory(projection_dir_for(root, type), fs::perms::owner_all);
+  if (!projection_created) {
+    return std::unexpected(projection_created.error());
+  }
+  const StoreVoid populated = populate_projection(root, type, *files);
+  if (!populated) {
+    return std::unexpected(populated.error());
+  }
+  return files->size();
+}
+
 struct CatalogDirectoryAggregate {
   std::size_t file_count = 0;
   std::uintmax_t total_size_bytes = 0;
@@ -2249,6 +2612,17 @@ Store::ingest_file(const FileIngestRequest &request) const {
     return std::unexpected(ref_error);
   }
 
+  std::optional<std::string> projection_warning;
+  const StoreVoid projection_refreshed = refresh_projection_for_type(
+      root_, request.type, parent_root_tree, *root_tree);
+  if (!projection_refreshed) {
+    projection_warning = std::format(
+        "failed to refresh latest/{} projection: {}; run `memix-store expose` "
+        "to rebuild it",
+        memix::to_string(request.type),
+        projection_refreshed.error().message);
+  }
+
   std::optional<std::string> previous_generation_result = *previous_generation;
   return FileIngestResult{
       .blob = std::move(*blob),
@@ -2256,6 +2630,7 @@ Store::ingest_file(const FileIngestRequest &request) const {
       .previous_generation = std::move(previous_generation_result),
       .type = request.type,
       .context_path = components->path(),
+      .projection_warning = std::move(projection_warning),
   };
 }
 
@@ -2339,6 +2714,74 @@ Store::catalog(const StoreCatalogOptions &options) const {
                       right.context_path.generic_string(), !right.directory};
   });
   return entries;
+}
+
+StoreResult<ExposeReport> Store::expose() const {
+  std::vector<fs::path> lock_paths;
+  const memix::scope_exit lock_cleanup([&lock_paths] {
+    for (const fs::path &lock_path : lock_paths) {
+      std::ignore = fs::remove_all(lock_path);
+    }
+  });
+  for (const MemoryObjectType type : memory_object_type_values()) {
+    const fs::path lock_path =
+        locks_dir_for(root_) / update_lock_name(type);
+    const StoreVoid locked = acquire_directory_lock(
+        lock_path, std::format("{} update", to_string(type)));
+    if (!locked) {
+      return std::unexpected(locked.error());
+    }
+    lock_paths.push_back(lock_path);
+  }
+
+  const fs::path latest_dir = latest_dir_for(root_);
+  const memix::FsResult<bool> latest_exists = fs::exists(latest_dir);
+  if (!latest_exists) {
+    return store_error(latest_exists.error());
+  }
+  if (*latest_exists) {
+    const memix::FsResult<fs::file_status> latest_status =
+        fs::symlink_status(latest_dir);
+    if (!latest_status) {
+      return store_error(latest_status.error());
+    }
+    if (latest_status->type() == fs::file_type::directory) {
+      const StoreVoid made_writable = set_projection_directory_permissions(
+          latest_dir, fs::perms::owner_all);
+      if (!made_writable) {
+        return std::unexpected(made_writable.error());
+      }
+    }
+    const memix::FsResult<std::uintmax_t> removed = fs::remove_all(latest_dir);
+    if (!removed) {
+      return store_error(removed.error());
+    }
+  }
+  const StoreVoid latest_created =
+      ensure_directory(latest_dir, fs::perms::owner_all);
+  if (!latest_created) {
+    return std::unexpected(latest_created.error());
+  }
+
+  ExposeReport report;
+  report.files_by_type.reserve(memory_object_type_values().size());
+  for (const MemoryObjectType type : memory_object_type_values()) {
+    StoreResult<std::size_t> file_count =
+        rebuild_projection_for_type(root_, type);
+    if (!file_count) {
+      return std::unexpected(file_count.error());
+    }
+    report.files_by_type.push_back(ExposeTypeReport{
+        .type = type,
+        .file_count = *file_count,
+    });
+  }
+  const StoreVoid frozen = set_projection_directory_permissions(
+      latest_dir, fs::perms::owner_read | fs::perms::owner_exec);
+  if (!frozen) {
+    return std::unexpected(frozen.error());
+  }
+  return report;
 }
 
 StoreResult<std::optional<std::string>>

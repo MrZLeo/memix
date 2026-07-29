@@ -122,6 +122,7 @@ The full bootstrap procedure is also available in
 ./build/bin/Release/memix-store --store-root /tmp/memix-store tree --all --depth 2 --json
 ./build/bin/Release/memix-store --store-root /tmp/memix-store list
 ./build/bin/Release/memix-store --store-root /tmp/memix-store list --json
+./build/bin/Release/memix-store --store-root /tmp/memix-store expose
 ./build/bin/Release/memix-store --version
 ./build/bin/Release/memix-store --help
 ```
@@ -188,6 +189,26 @@ and `documents`. Stored bytes live as immutable SHA-256 blobs under each
 type's `blobs/` directory; when ingest uses `--dest`, memix also records the
 blob in that type's canonical context tree and advances the type's latest
 generation ref.
+
+### Discovery surface
+
+`<store-root>/latest/` is a derived, read-only hardlink projection of every
+type's latest logical tree. It contains real directories and logical-path
+filenames, so ordinary tools work without special symlink flags:
+
+```bash
+rg -i "search terms" /tmp/memix-store/latest
+find /tmp/memix-store/latest -type f
+grep -R -i "search terms" /tmp/memix-store/latest
+```
+
+An ingest with `--dest` refreshes the affected type after committing its new
+generation. Blob-only ingests have no logical path and do not appear. The
+projection contains no source-of-truth state and can be deleted or repaired
+with `memix-store --store-root /tmp/memix-store expose`; a refresh failure
+warns without rolling back the committed ingest. Searching this surface is
+untracked exploration. Turn useful paths into quests with `find --covers`,
+`define`, or `build` so selection and subsequent consumption remain tracked.
 
 <details>
 <summary><b>🔍 Manual smoke check</b> (against the real default store root)</summary>

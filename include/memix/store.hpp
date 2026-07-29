@@ -180,6 +180,7 @@ struct FileIngestResult {
   std::optional<std::string> previous_generation;
   MemoryObjectType type = MemoryObjectType::Documents;
   fs::path context_path;
+  std::optional<std::string> projection_warning;
 };
 
 struct StoreFile {
@@ -203,6 +204,15 @@ struct StoreCatalogEntry {
   std::uintmax_t total_size_bytes = 0;
   std::string latest_created_at;
   std::string blob_id;
+};
+
+struct ExposeTypeReport {
+  MemoryObjectType type = MemoryObjectType::Documents;
+  std::size_t file_count = 0;
+};
+
+struct ExposeReport {
+  std::vector<ExposeTypeReport> files_by_type;
 };
 
 class Store {
@@ -239,6 +249,8 @@ public:
 
   [[nodiscard]] StoreResult<std::vector<StoreCatalogEntry>>
   catalog(const StoreCatalogOptions &options = {}) const;
+
+  [[nodiscard]] StoreResult<ExposeReport> expose() const;
 
   [[nodiscard]] StoreResult<std::optional<std::string>>
   read_ref(std::string_view ref_name) const;

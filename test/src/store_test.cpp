@@ -84,11 +84,38 @@ public:
     REQUIRE(fs::create_directories(path_));
   }
 
-  ~TemporaryDirectory() { static_cast<void>(fs::remove_all(path_)); }
+  ~TemporaryDirectory() {
+    make_tree_writable();
+    static_cast<void>(fs::remove_all(path_));
+  }
 
   [[nodiscard]] const fs::path &path() const noexcept { return path_; }
 
 private:
+  void make_tree_writable() const noexcept {
+    std::error_code error;
+    std::filesystem::permissions(path_, std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::add, error);
+    error.clear();
+    const std::filesystem::recursive_directory_iterator end;
+    std::filesystem::recursive_directory_iterator iterator{
+        path_, std::filesystem::directory_options::skip_permission_denied,
+        error};
+    while (!error && iterator != end) {
+      const std::filesystem::file_status status =
+          iterator->symlink_status(error);
+      if (!error && std::filesystem::is_directory(status)) {
+        std::filesystem::permissions(iterator->path(),
+                                     std::filesystem::perms::owner_all,
+                                     std::filesystem::perm_options::add, error);
+      }
+      if (error) {
+        error.clear();
+      }
+      iterator.increment(error);
+    }
+  }
+
   fs::path path_;
 };
 
@@ -130,6 +157,65 @@ void make_object_mutable_for_corruption(const fs::path &object_dir) {
   REQUIRE(fs::permissions(object_dir, fs::perms::owner_all));
   REQUIRE(fs::permissions(object_dir / "object", fs::perms::owner_all));
   REQUIRE(fs::permissions(object_dir / "metadata.json", fs::perms::owner_all));
+}
+
+void make_directory_tree_writable(const fs::path &root) {
+  REQUIRE(fs::permissions(root, fs::perms::owner_all));
+  std::error_code iterator_error;
+  const fs::recursive_directory_iterator end;
+  for (fs::recursive_directory_iterator iterator{root, iterator_error};
+       !iterator_error && iterator != end; iterator.increment(iterator_error)) {
+    const fs::directory_entry &entry = *iterator;
+    std::error_code entry_error;
+    if (entry.is_directory(entry_error)) {
+      REQUIRE(fs::permissions(entry.path(), fs::perms::owner_all));
+    }
+    REQUIRE_FALSE(entry_error);
+  }
+  REQUIRE_FALSE(iterator_error);
+}
+
+std::string shell_quote(std::string_view value) {
+  std::string quoted{"'"};
+  for (const char character : value) {
+    if (character == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted.push_back(character);
+    }
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
+struct CliResult {
+  int status = 0;
+  std::string output;
+  std::string error;
+};
+
+CliResult run_cli(const fs::path &directory, const fs::path &store_root,
+                  const std::vector<std::string> &arguments) {
+  const fs::path output_path = directory / "store-cli-stdout.txt";
+  const fs::path error_path = directory / "store-cli-stderr.txt";
+  std::string command = shell_quote(MEMIX_STORE_TEST_BINARY);
+  command += " --store-root ";
+  command += shell_quote(store_root.string());
+  for (const std::string &argument : arguments) {
+    command.push_back(' ');
+    command += shell_quote(argument);
+  }
+  command += " >";
+  command += shell_quote(output_path.string());
+  command += " 2>";
+  command += shell_quote(error_path.string());
+  // Arguments and redirect paths are individually single-quoted above.
+  const int status = std::system(command.c_str()); // NOLINT(cert-env33-c)
+  return CliResult{
+      .status = status,
+      .output = read_file(output_path),
+      .error = read_file(error_path),
+  };
 }
 
 } // namespace
@@ -946,4 +1032,239 @@ TEST_CASE("list fails loudly when metadata is invalid", "[store]") {
   write_file(result->object.object_dir / "metadata.json", "{not json");
 
   REQUIRE_FALSE(store.list(memix::MemoryObjectType::Documents).has_value());
+}
+
+TEST_CASE("context ingests maintain a read-only hardlink projection",
+          "[store][expose]") {
+  TemporaryDirectory directory("latest-projection");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path carried_source = directory.path() / "carried.md";
+  const fs::path replacement_source = directory.path() / "replacement.md";
+  const fs::path blob_only_source = directory.path() / "untracked.md";
+  write_file(first_source, "first memory\n");
+  write_file(carried_source, "carried memory\n");
+  write_file(replacement_source, "updated memory\n");
+  write_file(blob_only_source, "blob only\n");
+
+  const memix::Store store(directory.path() / "store");
+  const auto first = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = first_source,
+      .context_path = "repo/nested/AGENTS.md",
+      .message = "first",
+  });
+  REQUIRE(first);
+  REQUIRE_FALSE(first->projection_warning.has_value());
+  const fs::path projected =
+      store.root() / "latest" / "rules" / "repo" / "nested" / "AGENTS.md";
+  REQUIRE(path_is_regular_file(projected));
+  REQUIRE(read_file(projected) == "first memory\n");
+
+  const memix::FsResult<fs::file_status> projected_status =
+      fs::status(projected);
+  REQUIRE(projected_status);
+  REQUIRE((projected_status->permissions() & fs::perms::owner_write)
+          == fs::perms::none);
+  std::error_code hard_link_error;
+  const std::uintmax_t hard_link_count =
+      std::filesystem::hard_link_count(projected, hard_link_error);
+  REQUIRE_FALSE(hard_link_error);
+  REQUIRE(hard_link_count >= 2);
+
+  const auto carried = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = carried_source,
+      .context_path = "repo/carried.md",
+      .message = "carried",
+  });
+  REQUIRE(carried);
+  REQUIRE_FALSE(carried->projection_warning.has_value());
+  REQUIRE(read_file(projected) == "first memory\n");
+  REQUIRE(read_file(store.root() / "latest" / "rules" / "repo" / "carried.md")
+          == "carried memory\n");
+
+  const auto replacement = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = replacement_source,
+      .context_path = "repo/nested/AGENTS.md",
+      .message = "replace",
+  });
+  REQUIRE(replacement);
+  REQUIRE_FALSE(replacement->projection_warning.has_value());
+  REQUIRE(read_file(projected) == "updated memory\n");
+  REQUIRE(read_file(store.root() / "latest" / "rules" / "repo" / "carried.md")
+          == "carried memory\n");
+
+  const auto blob_only =
+      store.ingest(memix::MemoryObjectType::Documents, blob_only_source);
+  REQUIRE(blob_only);
+  REQUIRE_FALSE(path_exists(store.root() / "latest" / "documents"
+                            / "untracked.md"));
+}
+
+TEST_CASE("expose rebuilds every type and is idempotent",
+          "[store][expose]") {
+  TemporaryDirectory directory("expose-rebuild");
+  const fs::path rule = directory.path() / "AGENTS.md";
+  const fs::path chat = directory.path() / "session.txt";
+  const fs::path document = directory.path() / "design.md";
+  write_file(rule, "rule projection\n");
+  write_file(chat, "chat projection\n");
+  write_file(document, "document projection\n");
+
+  const memix::Store store(directory.path() / "store");
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = rule,
+      .context_path = "repo/AGENTS.md",
+  }));
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Chat,
+      .source_path = chat,
+      .context_path = "sessions/2026/session.txt",
+  }));
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Documents,
+      .source_path = document,
+      .context_path = "notes/design.md",
+  }));
+
+  const fs::path latest = store.root() / "latest";
+  make_directory_tree_writable(latest);
+  REQUIRE(fs::remove_all(latest));
+  REQUIRE_FALSE(path_exists(latest));
+
+  const auto rebuilt = store.expose();
+  REQUIRE(rebuilt);
+  REQUIRE(rebuilt->files_by_type.size() == 3);
+  REQUIRE(rebuilt->files_by_type[0].type == memix::MemoryObjectType::Rules);
+  REQUIRE(rebuilt->files_by_type[0].file_count == 1);
+  REQUIRE(rebuilt->files_by_type[1].type == memix::MemoryObjectType::Chat);
+  REQUIRE(rebuilt->files_by_type[1].file_count == 1);
+  REQUIRE(rebuilt->files_by_type[2].type
+          == memix::MemoryObjectType::Documents);
+  REQUIRE(rebuilt->files_by_type[2].file_count == 1);
+  REQUIRE(read_file(latest / "rules" / "repo" / "AGENTS.md")
+          == "rule projection\n");
+  REQUIRE(read_file(latest / "chat" / "sessions" / "2026" / "session.txt")
+          == "chat projection\n");
+  REQUIRE(read_file(latest / "documents" / "notes" / "design.md")
+          == "document projection\n");
+
+  const auto repeated = store.expose();
+  REQUIRE(repeated);
+  REQUIRE(repeated->files_by_type.size() == 3);
+  REQUIRE(repeated->files_by_type[0].file_count == 1);
+  REQUIRE(repeated->files_by_type[1].file_count == 1);
+  REQUIRE(repeated->files_by_type[2].file_count == 1);
+
+  const memix::Store empty_store(directory.path() / "empty-store");
+  const auto empty = empty_store.expose();
+  REQUIRE(empty);
+  REQUIRE(empty->files_by_type.size() == 3);
+  for (const memix::ExposeTypeReport &report : empty->files_by_type) {
+    REQUIRE(report.file_count == 0);
+  }
+  const fs::path empty_latest = empty_store.root() / "latest";
+  REQUIRE(fs::is_directory(empty_latest).value_or(false));
+  const memix::FsResult<fs::file_status> empty_status =
+      fs::status(empty_latest);
+  REQUIRE(empty_status);
+  REQUIRE((empty_status->permissions() & fs::perms::owner_write)
+          == fs::perms::none);
+}
+
+TEST_CASE("memix-store expose reports plain and JSON counts",
+          "[store][expose][cli]") {
+  TemporaryDirectory directory("expose-cli");
+  const fs::path rule = directory.path() / "AGENTS.md";
+  const fs::path document = directory.path() / "design.md";
+  write_file(rule, "rule\n");
+  write_file(document, "document\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = rule,
+      .context_path = "repo/AGENTS.md",
+  }));
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Documents,
+      .source_path = document,
+      .context_path = "notes/design.md",
+  }));
+
+  make_directory_tree_writable(store_root / "latest");
+  REQUIRE(fs::remove_all(store_root / "latest"));
+  const CliResult plain =
+      run_cli(directory.path(), store_root, {"expose"});
+  INFO(plain.error);
+  REQUIRE(plain.status == 0);
+  REQUIRE(plain.output
+          == "rules: 1 file\nchat: 0 files\ndocuments: 1 file\n");
+
+  make_directory_tree_writable(store_root / "latest");
+  REQUIRE(fs::remove_all(store_root / "latest"));
+  const CliResult json =
+      run_cli(directory.path(), store_root, {"expose", "--json"});
+  INFO(json.error);
+  REQUIRE(json.status == 0);
+  REQUIRE(json.output
+          == R"([{"type":"rules","files":1},{"type":"chat","files":0},{"type":"documents","files":1}])"
+             "\n");
+}
+
+TEST_CASE("projection refresh failures warn without failing ingest",
+          "[store][expose][cli]") {
+  TemporaryDirectory directory("projection-warning");
+  const fs::path first_source = directory.path() / "first.md";
+  const fs::path second_source = directory.path() / "second.md";
+  const fs::path third_source = directory.path() / "third.md";
+  write_file(first_source, "first\n");
+  write_file(second_source, "second\n");
+  write_file(third_source, "third\n");
+  const fs::path store_root = directory.path() / "store";
+  const memix::Store store(store_root);
+  const auto first = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = first_source,
+      .context_path = "repo/first.md",
+  });
+  REQUIRE(first);
+
+  make_directory_tree_writable(store_root / "latest");
+  REQUIRE(fs::remove_all(store_root / "latest" / "rules"));
+  write_file(store_root / "latest" / "rules", "corrupt projection\n");
+  const auto second = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = second_source,
+      .context_path = "repo/second.md",
+  });
+  REQUIRE(second);
+  REQUIRE(second->projection_warning.has_value());
+  REQUIRE(second->projection_warning->contains("memix-store expose"));
+  const auto latest_after_warning = store.read_ref("rules/latest");
+  REQUIRE(latest_after_warning);
+  REQUIRE(latest_after_warning->has_value());
+  REQUIRE(**latest_after_warning == second->generation.id);
+  const auto files_after_warning =
+      store.list_files(memix::MemoryObjectType::Rules);
+  REQUIRE(files_after_warning);
+  REQUIRE(files_after_warning->size() == 2);
+
+  REQUIRE(store.expose());
+  make_directory_tree_writable(store_root / "latest");
+  REQUIRE(fs::remove_all(store_root / "latest" / "rules"));
+  write_file(store_root / "latest" / "rules", "corrupt again\n");
+  const CliResult cli =
+      run_cli(directory.path(), store_root,
+              {"ingest", "--type", "rules", third_source.string(), "--dest",
+               "repo/third.md"});
+  INFO(cli.error);
+  REQUIRE(cli.status == 0);
+  REQUIRE(cli.error.contains("[warning]"));
+  REQUIRE(cli.error.contains("memix-store expose"));
+  const auto files_after_cli = store.list_files(memix::MemoryObjectType::Rules);
+  REQUIRE(files_after_cli);
+  REQUIRE(files_after_cli->size() == 3);
 }

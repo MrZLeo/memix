@@ -46,6 +46,7 @@ enum class StoreCommand : std::uint8_t {
   Ingest,
   Cat,
   Tree,
+  Expose,
   Rules,
   RulesCat,
   RulesTree,
@@ -69,6 +70,7 @@ struct StoreCliOptions {
   std::optional<std::size_t> tree_depth;
   bool tree_all = false;
   bool tree_json = false;
+  bool expose_json = false;
 };
 
 std::string supported_types_message() {
@@ -158,6 +160,11 @@ struct StoreCatalogEntryJson {
   std::string blob;
 };
 
+struct ExposeTypeReportJson {
+  std::string type;
+  std::size_t files = 0;
+};
+
 template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
                 const StoreCatalogEntryJson &entry) {
@@ -176,6 +183,16 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
       entry.latest_created_at);
   builder.append_comma();
   builder.template append_key_value<"blob">(entry.blob);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const ExposeTypeReportJson &report) {
+  builder.start_object();
+  builder.template append_key_value<"type">(report.type);
+  builder.append_comma();
+  builder.template append_key_value<"files">(report.files);
   builder.end_object();
 }
 
@@ -277,6 +294,28 @@ print_catalog_json(const std::vector<memix::StoreCatalogEntry> &entries) {
     return memix::cli_detail::unexpected_error(formatted.error());
   }
   std::println("{}", *formatted);
+  return {};
+}
+
+memix::cli_detail::VoidResult
+print_expose_json(const memix::ExposeReport &report) {
+  const std::vector<ExposeTypeReportJson> values =
+      report.files_by_type
+      | std::views::transform([](const memix::ExposeTypeReport &type_report) {
+          return ExposeTypeReportJson{
+              .type = std::string(memix::to_string(type_report.type)),
+              .files = type_report.file_count,
+          };
+        })
+      | std::ranges::to<std::vector>();
+  simdjson::builder::string_builder builder;
+  builder.append(values);
+  const memix::detail::CommonResult<std::string> json =
+      memix::detail::json_from_builder(builder);
+  if (!json) {
+    return memix::cli_detail::unexpected_error(json.error().message);
+  }
+  std::println("{}", *json);
   return {};
 }
 
@@ -390,6 +429,9 @@ run_ingest(const StoreCliOptions &options,
                  memix::to_string(result->blob.object.type),
                  result->blob.object.id, result->blob.object.filename,
                  result->context_path.generic_string(), result->generation.id);
+    if (result->projection_warning.has_value()) {
+      logger->warn("{}", *result->projection_warning);
+    }
     return {};
   }
 
@@ -408,6 +450,26 @@ run_ingest(const StoreCliOptions &options,
                  result->inserted ? "ingested" : "exists",
                  memix::to_string(result->object.type), result->object.id,
                  result->object.filename);
+  }
+  return {};
+}
+
+memix::cli_detail::VoidResult run_expose(const StoreCliOptions &options) {
+  const memix::cli_detail::Result<memix::Store> store = make_store(options);
+  if (!store) {
+    return std::unexpected(store.error());
+  }
+  const memix::StoreResult<memix::ExposeReport> report = store->expose();
+  if (!report) {
+    return memix::cli_detail::unexpected_error(report.error());
+  }
+  if (options.expose_json) {
+    return print_expose_json(*report);
+  }
+  for (const memix::ExposeTypeReport &type_report : report->files_by_type) {
+    std::println("{}: {} file{}", memix::to_string(type_report.type),
+                 type_report.file_count,
+                 type_report.file_count == 1 ? "" : "s");
   }
   return {};
 }
@@ -611,6 +673,12 @@ void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
                         "latest ref.");
 }
 
+void add_expose_command(Argum::Parser &parser, StoreCliOptions &options) {
+  parser.add(Argum::Option("--json")
+                 .help("Emit per-type projection file counts as JSON.")
+                 .handler([&options]() { options.expose_json = true; }));
+}
+
 void add_rules_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
   options.cat_type_name =
       std::string(memix::to_string(memix::MemoryObjectType::Rules));
@@ -658,7 +726,7 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: list, ingest, cat, tree, or rules.")
+          .help("Subcommand: list, ingest, cat, tree, expose, or rules.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "list") {
@@ -681,13 +749,18 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
               add_tree_command(parser, options);
               return {};
             }
+            if (value == "expose") {
+              options.command = StoreCommand::Expose;
+              add_expose_command(parser, options);
+              return {};
+            }
             if (value == "rules") {
               add_rules_commands(parser, options);
               return {};
             }
             return memix::cli_detail::argum_validation_error(
                 std::format("unsupported command `{}`; expected "
-                            "list|ingest|cat|tree|rules",
+                            "list|ingest|cat|tree|expose|rules",
                             value));
           }));
 }
@@ -732,6 +805,14 @@ void print_tree_help() {
   std::print("{}", parser.formatHelp("memix-store tree"));
 }
 
+void print_expose_help() {
+  Argum::Parser parser;
+  StoreCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_expose_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-store expose"));
+}
+
 void print_rules_help() {
   Argum::Parser parser;
   StoreCliOptions options;
@@ -770,6 +851,9 @@ void print_selected_help(StoreCommand command) {
   case StoreCommand::Tree:
     print_tree_help();
     return;
+  case StoreCommand::Expose:
+    print_expose_help();
+    return;
   case StoreCommand::Rules:
     print_rules_help();
     return;
@@ -799,6 +883,8 @@ dispatch(const StoreCliOptions &options,
   case StoreCommand::Tree:
   case StoreCommand::RulesTree:
     return run_tree(options);
+  case StoreCommand::Expose:
+    return run_expose(options);
   case StoreCommand::Rules:
     return memix::cli_detail::unexpected_error(
         "rules requires a subcommand: cat|tree");

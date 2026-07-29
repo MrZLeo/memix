@@ -11,6 +11,7 @@ Treat Memix as a Nix-inspired, provenance-aware build system for agent context, 
 
 - Treat stored blobs as immutable evidence. Raw ingest without `--dest` creates blob objects only; ingest with `--dest` also creates a new logical-tree generation. Ingest changed content again instead of editing files inside the store directly.
 - Treat logical trees and generation objects as immutable history, and refs such as `latest` as movable version selectors. Use `latest` intentionally, and pin a generation when replay, auditability, or reproducibility matters.
+- Treat `<store-root>/latest/` as a derived, read-only hardlink projection for ordinary filesystem discovery. It is rebuildable with `memix-store expose`, never a source of truth, and blob-only ingests do not appear there.
 - Treat views as first-class reproducible derived objects, not as new sources of truth or store object types. A view environment may be inspected, referenced by another view, mounted below a path, and composed transitively. Reuse an existing environment instead of copying or modifying its output.
 - Treat movable refs and profile `current` pointers as the small mutable control layer. Profiles record numbered generations and switch one `current` pointer; workspaces attach through a symlink (or a disposable copy) and never edit memory in place.
 - Preserve provenance without inventing visibility. The environment ID is the durable reference to a view: retain it from `build` or `list` for later composition, `activate`, or inspection. Retain profile generation numbers from `activate` or `generations` for `rollback`, which does not accept an environment ID. Environment JSON exposes binding and transitive closure IDs; `tree` and `cat` expose the derived file surface. Full locator-to-generation provenance remains in the derivation manifest.
@@ -26,10 +27,12 @@ For recall or load requests, follow the quest mechanism flow:
 
 1. Find the standing query with `memix-view find <task-terms> --json`, adding `--covers <type/path>` when the requested logical path is known. Use `memix-view quests --json` only as the broader public catalog; do not scan `memix-view list` for discovery.
 2. Before reusing its latest environment, run `memix-view freshness <quest> --json`. If fresh, inspect/read the listed latest environment with `tree` and `cat`; if stale, run `memix-view resolve <quest>` first and use the returned environment.
-3. If no quest fits, explore the store broadly once with `memix-store tree --all --depth 2 --json`. Narrow only promising areas with `--type`, `--path`, and `--depth`; use store `cat` only after a candidate path is identified.
-4. Prefer an existing environment when it already covers the request. If it is close, compose it with `build --view`; add `--source` only for missing context. Build directly from sources only when no reusable view fits.
-5. Activate only when the task benefits from a workspace attachment, repeated multi-file reads, or tools that need a directory. For one or two reads, use view `tree`/`cat` without changing the active profile.
-6. When materially different selections remain plausible after exploration, escalate to a structured user choice (see Structured User Choice). Do not ask the user to manually enumerate sources that the inventories can resolve.
+3. If no quest fits, search content and quest metadata with `rg -i "term" <store-root>/latest <store-root>/views/quests`, then use `memix-store tree --all --depth 2 --json` only as needed to inspect or narrow the hits. A projection hit at `latest/<type>/<logical-path>` maps directly to locator `<type>/<logical-path>`: check `memix-view find --covers <locator>`, then `define --intent ...` or `build --intent ...` so the relevance decision survives this session. Run `memix-store expose` if the projection is missing or a prior ingest warned that it is stale. Activate only when the task benefits from a workspace attachment. Escalate materially different remaining selections through Structured User Choice.
+
+Keep `memix-view find` as the fast metadata-first path; filesystem search is
+untracked exploration used when intent/name metadata is insufficient. Text
+tools such as `rg` and `grep` search text payloads directly. Binary payloads
+such as PDFs still require their normal format-specific extractors.
 
 Use an exploration budget unless the user asks for an exhaustive audit:
 

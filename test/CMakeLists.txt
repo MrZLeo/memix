@@ -93,6 +93,15 @@ foreach(file ${test_sources})
     )
   endif()
 
+  if(test_name STREQUAL "store_test")
+    add_dependencies(${test_name}_Tests ${CMAKE_PROJECT_NAME}_memix-store)
+    target_compile_definitions(
+      ${test_name}_Tests
+      PRIVATE
+        MEMIX_STORE_TEST_BINARY="$<TARGET_FILE:${CMAKE_PROJECT_NAME}_memix-store>"
+    )
+  endif()
+
   catch_discover_tests(${test_name}_Tests)
 endforeach()
 
