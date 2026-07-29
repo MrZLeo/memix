@@ -47,11 +47,38 @@ public:
     REQUIRE(fs::create_directories(path_));
   }
 
-  ~TemporaryDirectory() { static_cast<void>(fs::remove_all(path_)); }
+  ~TemporaryDirectory() {
+    make_tree_writable();
+    static_cast<void>(fs::remove_all(path_));
+  }
 
   [[nodiscard]] const fs::path &path() const noexcept { return path_; }
 
 private:
+  void make_tree_writable() const noexcept {
+    std::error_code error;
+    std::filesystem::permissions(path_, std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::add, error);
+    error.clear();
+    const std::filesystem::recursive_directory_iterator end;
+    std::filesystem::recursive_directory_iterator iterator{
+        path_, std::filesystem::directory_options::skip_permission_denied,
+        error};
+    while (!error && iterator != end) {
+      const std::filesystem::file_status status =
+          iterator->symlink_status(error);
+      if (!error && std::filesystem::is_directory(status)) {
+        std::filesystem::permissions(iterator->path(),
+                                     std::filesystem::perms::owner_all,
+                                     std::filesystem::perm_options::add, error);
+      }
+      if (error) {
+        error.clear();
+      }
+      iterator.increment(error);
+    }
+  }
+
   fs::path path_;
 };
 

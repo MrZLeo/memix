@@ -27,6 +27,7 @@ set(headers
 set(test_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/activation_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/hash_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/src/quest_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/store_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/view_test.cpp
 )

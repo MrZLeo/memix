@@ -250,6 +250,53 @@ struct ViewEnvironmentInfo {
   std::size_t upstream_environment_count = 0;
 };
 
+struct QuestInfo {
+  std::string ir_hash;
+  std::string intent;
+  std::string name;
+  std::string created_at;
+  std::size_t resolution_count = 0;
+  std::string last_resolved_at;
+  std::string latest_derivation_id;
+  std::string latest_environment_id;
+};
+
+struct QuestDefinition {
+  std::string ir_hash;
+  fs::path quest_dir;
+  bool existed = false;
+};
+
+struct QuestFreshnessInput {
+  std::string locator;
+  std::string recorded_generation;
+  // Empty for pinned inputs and when a followed ref no longer exists. Use
+  // `pinned` and `fresh` to distinguish those cases.
+  std::optional<std::string> current_generation;
+  bool pinned = false;
+  bool fresh = true;
+};
+
+struct QuestFreshness {
+  std::string ir_hash;
+  std::string derivation_id;
+  std::string resolved_at;
+  // Contains context/ref inputs only. Composed environment inputs are omitted:
+  // their resolved environment IDs are content-pinned and cannot drift.
+  std::vector<QuestFreshnessInput> inputs;
+  bool stale = false;
+};
+
+struct QuestDefinitionOptions {
+  std::optional<std::string> intent;
+  std::optional<std::string> name;
+};
+
+struct BuildOptions {
+  std::string intent;
+  std::string name;
+};
+
 // Profiles are the only mutable layer: a named sequence of generations with
 // a switchable `current` pointer, Nix-profile style.
 
@@ -330,6 +377,30 @@ public:
 
   [[nodiscard]] ViewResult<ViewEnvironment>
   build(const AuthoredViewExpression &expression) const;
+
+  [[nodiscard]] ViewResult<ViewEnvironment>
+  build(const AuthoredViewExpression &expression,
+        const BuildOptions &options) const;
+
+  [[nodiscard]] ViewResult<QuestDefinition>
+  define_quest(const AuthoredViewExpression &expression,
+               std::string_view intent, std::string_view name) const;
+
+  [[nodiscard]] ViewResult<QuestDefinition>
+  define_quest(const AuthoredViewExpression &expression,
+               const QuestDefinitionOptions &options) const;
+
+  [[nodiscard]] ViewResult<std::vector<QuestInfo>> list_quests() const;
+
+  [[nodiscard]] ViewResult<std::vector<QuestInfo>>
+  find_quests(std::vector<std::string> terms,
+              std::optional<fs::path> covers = std::nullopt) const;
+
+  [[nodiscard]] ViewResult<ViewEnvironment>
+  resolve_quest(std::string_view quest_prefix) const;
+
+  [[nodiscard]] ViewResult<QuestFreshness>
+  quest_freshness(std::string_view quest_prefix) const;
 
   [[nodiscard]] ViewResult<ViewEnvironment>
   resolve_environment(std::string_view environment_prefix) const;

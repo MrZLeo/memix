@@ -133,17 +133,38 @@ read memory with ordinary file tools, roll back with `rollback`, and inspect
 the attachment with `status`:
 
 ```bash
-ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store build --source rules/README.md | head -n1 | awk '{print $2}')
+QUEST=$(./build/bin/Release/memix-view --store-root /tmp/memix-store define --source rules/README.md --intent "repository documentation" --name "README context" | head -n1 | awk '{print $2}')
+./build/bin/Release/memix-view --store-root /tmp/memix-store quests
+./build/bin/Release/memix-view --store-root /tmp/memix-store find repository --covers rules/README.md
+ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
+./build/bin/Release/memix-view --store-root /tmp/memix-store freshness "$QUEST"
 ./build/bin/Release/memix-view --store-root /tmp/memix-store list --json
 ./build/bin/Release/memix-view --store-root /tmp/memix-store tree "$ENV" --depth 2
 ./build/bin/Release/memix-view --store-root /tmp/memix-store cat "$ENV" rules/README.md
-./build/bin/Release/memix-view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md
+./build/bin/Release/memix-view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md --intent "README with prior context" --name "composed README"
 ./build/bin/Release/memix-view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
 cat ./.memory/rules/README.md
 ./build/bin/Release/memix-view --store-root /tmp/memix-store generations --into ./.memory
 ./build/bin/Release/memix-view --store-root /tmp/memix-store status --into ./.memory
 ./build/bin/Release/memix-view --store-root /tmp/memix-store deactivate --into ./.memory
 ```
+
+Every `build` persists its canonical query as a quest and records the resulting
+derivation/environment resolution. `define` creates or annotates that quest
+without building; `find` searches intent/name text or uses `--covers` for
+structural path lookup; `quests` lists the public quest catalog; `freshness`
+compares the latest resolution with the refs it followed; and `resolve`
+re-runs a quest against current refs. `build --intent TEXT --name TEXT`
+upserts the same annotations while building. The older `list` command remains
+available for low-level environment debugging.
+
+The plain `quests` and `find` tables shorten long intent/name cells with `...`
+so columns stay separate; their `--json` forms always retain the complete
+strings. Freshness reports only context inputs that can follow refs. Composed
+`--view` inputs are omitted because their resolved environment IDs are
+content-pinned; therefore a quest containing only view inputs reports an empty
+input list and `stale: false`. A deleted followed ref is reported with
+`pinned: false`, `current_generation: null`, and `fresh: false`.
 
 `memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
 then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,

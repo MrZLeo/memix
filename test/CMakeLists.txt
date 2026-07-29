@@ -84,6 +84,15 @@ foreach(file ${test_sources})
       ${CMAKE_SOURCE_DIR}/src
   )
 
+  if(test_name STREQUAL "quest_test")
+    add_dependencies(${test_name}_Tests ${CMAKE_PROJECT_NAME}_memix-view)
+    target_compile_definitions(
+      ${test_name}_Tests
+      PRIVATE
+        MEMIX_VIEW_TEST_BINARY="$<TARGET_FILE:${CMAKE_PROJECT_NAME}_memix-view>"
+    )
+  endif()
+
   catch_discover_tests(${test_name}_Tests)
 endforeach()
 

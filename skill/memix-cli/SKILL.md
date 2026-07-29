@@ -22,11 +22,11 @@ Treat Memix as a Nix-inspired, provenance-aware build system for agent context, 
 
 Treat a clear request to recall, load, use, inspect, or save durable memory as sufficient reason to use Memix. Do not require the user to mention `$memix-cli`, request `build` or `activate`, or supply an environment ID. Match the user's intent, not the presence of the word "memory"; do not trigger this workflow for RAM, memory leaks, allocators, or programming-language memory models.
 
-For recall or load requests, follow this discovery ladder:
+For recall or load requests, follow the quest mechanism flow:
 
-1. Check the expected attachment with `memix-view status --into ./.memory`. If it is active and contains the requested context, read through `./.memory`.
-2. Discover reusable views with `memix-view list --json`. Inspect promising ones with `memix-view tree <environment> --depth 2 --json`, then use `memix-view cat <environment> <path>` for the few files whose logical paths match the request.
-3. If no existing view covers the request, explore the store broadly once with `memix-store tree --all --depth 2 --json`. Narrow only promising areas with `--type`, `--path`, and `--depth`; use store `cat` only after a candidate path is identified.
+1. Find the standing query with `memix-view find <task-terms> --json`, adding `--covers <type/path>` when the requested logical path is known. Use `memix-view quests --json` only as the broader public catalog; do not scan `memix-view list` for discovery.
+2. Before reusing its latest environment, run `memix-view freshness <quest> --json`. If fresh, inspect/read the listed latest environment with `tree` and `cat`; if stale, run `memix-view resolve <quest>` first and use the returned environment.
+3. If no quest fits, explore the store broadly once with `memix-store tree --all --depth 2 --json`. Narrow only promising areas with `--type`, `--path`, and `--depth`; use store `cat` only after a candidate path is identified.
 4. Prefer an existing environment when it already covers the request. If it is close, compose it with `build --view`; add `--source` only for missing context. Build directly from sources only when no reusable view fits.
 5. Activate only when the task benefits from a workspace attachment, repeated multi-file reads, or tools that need a directory. For one or two reads, use view `tree`/`cat` without changing the active profile.
 6. When materially different selections remain plausible after exploration, escalate to a structured user choice (see Structured User Choice). Do not ask the user to manually enumerate sources that the inventories can resolve.
@@ -156,7 +156,29 @@ Use `memix-view build` to create a file-tree view environment from logical store
 
 ```text
 memix-view --store-root "<store-root>" build --source rules/repo/AGENTS.md --source chat/task/2026-05-20/
+memix-view --store-root "<store-root>" build --source rules/repo/AGENTS.md --intent "repository instructions" --name "repo rules"
 ```
+
+Builds automatically persist the canonical IR as a quest and append a
+resolution record. Use `define` to create the same quest without resolving it,
+`find` or `quests` to discover it, `freshness` before reusing its latest
+environment, and `resolve` when followed refs have moved:
+
+```text
+memix-view --store-root "<store-root>" define --source rules/repo/AGENTS.md --intent "repository instructions"
+memix-view --store-root "<store-root>" find repository instructions --json
+memix-view --store-root "<store-root>" freshness 9a41c0de12ab --json
+memix-view --store-root "<store-root>" resolve 9a41c0de12ab
+memix-view --store-root "<store-root>" quests --json
+```
+
+Plain `quests` and `find` tables truncate long intent/name cells with `...`;
+use `--json` whenever full annotation text is required. Freshness lists
+ref-following context inputs only. It skips composed `--view` inputs because
+their resolved environment IDs are content-pinned, so a view-only quest has
+`inputs: []` and `stale: false`. For a followed ref that has been deleted,
+freshness reports `pinned: false`, `current_generation: null`, and
+`fresh: false`.
 
 Compose existing view environments directly:
 
@@ -228,7 +250,9 @@ By default, activation never replaces foreign paths: if the `--into` path holds 
 
 ## Inspect View Environments
 
-List reusable environments with full IDs, derivation IDs, file/byte counts, and transitive upstream counts:
+Use `quests`/`find` for public discovery. `list` is retained as a low-level
+debugging inventory of environments with full IDs, derivation IDs, file/byte
+counts, and transitive upstream counts:
 
 ```text
 memix-view --store-root "<store-root>" list

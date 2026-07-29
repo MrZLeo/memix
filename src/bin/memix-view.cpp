@@ -8,6 +8,7 @@
 #include "memix/fs.hpp"
 #include "memix/store.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +40,11 @@ enum class ViewCommand : std::uint8_t {
   Tree,
   Cat,
   Build,
+  Define,
+  Find,
+  Resolve,
+  Freshness,
+  Quests,
   Show,
   Activate,
   Generations,
@@ -51,6 +57,11 @@ struct ViewCliOptions {
   std::optional<std::size_t> tree_depth;
   std::vector<std::string> sources;
   std::vector<std::string> view_sources;
+  std::vector<std::string> find_terms;
+  std::optional<fs::path> covers;
+  std::string intent;
+  std::string name;
+  std::string quest_id;
   std::string tree_environment_id;
   fs::path tree_path;
   std::string cat_environment_id;
@@ -67,6 +78,13 @@ struct ViewCliOptions {
   bool list_json = false;
   bool tree_json = false;
   bool build_json = false;
+  bool define_json = false;
+  bool find_json = false;
+  bool resolve_json = false;
+  bool freshness_json = false;
+  bool quests_json = false;
+  bool intent_provided = false;
+  bool name_provided = false;
   bool show_json = false;
   bool force = false;
   bool wipe_profile = false;
@@ -86,6 +104,41 @@ struct ViewCatalogEntryJson {
   std::size_t file_count = 0;
   std::uintmax_t size_bytes = 0;
   std::string blob;
+};
+
+struct QuestInfoJson {
+  std::string ir_hash;
+  std::string intent;
+  std::string name;
+  std::string created_at;
+  std::size_t resolution_count = 0;
+  std::string last_resolved_at;
+  std::string latest_derivation_id;
+  std::string latest_environment_id;
+};
+
+struct QuestDefinitionJson {
+  std::string ir_hash;
+  std::string intent;
+  std::string name;
+  std::string created_at;
+  bool existed = false;
+};
+
+struct QuestFreshnessInputJson {
+  std::string locator;
+  std::string recorded_generation;
+  std::optional<std::string> current_generation;
+  bool pinned = false;
+  bool fresh = true;
+};
+
+struct QuestFreshnessJson {
+  std::string ir_hash;
+  std::string derivation_id;
+  std::string resolved_at;
+  std::vector<QuestFreshnessInputJson> inputs;
+  bool stale = false;
 };
 
 template <typename Builder>
@@ -121,6 +174,80 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.end_object();
 }
 
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestInfoJson &quest) {
+  builder.start_object();
+  builder.template append_key_value<"ir_hash">(quest.ir_hash);
+  builder.append_comma();
+  builder.template append_key_value<"intent">(quest.intent);
+  builder.append_comma();
+  builder.template append_key_value<"name">(quest.name);
+  builder.append_comma();
+  builder.template append_key_value<"created_at">(quest.created_at);
+  builder.append_comma();
+  builder.template append_key_value<"resolution_count">(quest.resolution_count);
+  builder.append_comma();
+  builder.template append_key_value<"last_resolved_at">(quest.last_resolved_at);
+  builder.append_comma();
+  builder.template append_key_value<"latest_derivation_id">(
+      quest.latest_derivation_id);
+  builder.append_comma();
+  builder.template append_key_value<"latest_environment_id">(
+      quest.latest_environment_id);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestDefinitionJson &quest) {
+  builder.start_object();
+  builder.template append_key_value<"ir_hash">(quest.ir_hash);
+  builder.append_comma();
+  builder.template append_key_value<"intent">(quest.intent);
+  builder.append_comma();
+  builder.template append_key_value<"name">(quest.name);
+  builder.append_comma();
+  builder.template append_key_value<"created_at">(quest.created_at);
+  builder.append_comma();
+  builder.template append_key_value<"existed">(quest.existed);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestFreshnessInputJson &input) {
+  builder.start_object();
+  builder.template append_key_value<"locator">(input.locator);
+  builder.append_comma();
+  builder.template append_key_value<"recorded_generation">(
+      input.recorded_generation);
+  builder.append_comma();
+  builder.template append_key_value<"current_generation">(
+      input.current_generation);
+  builder.append_comma();
+  builder.template append_key_value<"pinned">(input.pinned);
+  builder.append_comma();
+  builder.template append_key_value<"fresh">(input.fresh);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestFreshnessJson &freshness) {
+  builder.start_object();
+  builder.template append_key_value<"ir_hash">(freshness.ir_hash);
+  builder.append_comma();
+  builder.template append_key_value<"derivation_id">(freshness.derivation_id);
+  builder.append_comma();
+  builder.template append_key_value<"resolved_at">(freshness.resolved_at);
+  builder.append_comma();
+  builder.template append_key_value<"inputs">(freshness.inputs);
+  builder.append_comma();
+  builder.template append_key_value<"stale">(freshness.stale);
+  builder.end_object();
+}
+
 memix::cli_detail::Result<memix::ViewService>
 make_service(const ViewCliOptions &options) {
   const memix::cli_detail::Result<fs::path> root =
@@ -152,6 +279,113 @@ memix::cli_detail::VoidResult print_json(const Values &values) {
     return memix::cli_detail::unexpected_error(json.error().message);
   }
   std::println("{}", *json);
+  return {};
+}
+
+QuestInfoJson quest_info_json_for(const memix::QuestInfo &info) {
+  return QuestInfoJson{
+      .ir_hash = info.ir_hash,
+      .intent = info.intent,
+      .name = info.name,
+      .created_at = info.created_at,
+      .resolution_count = info.resolution_count,
+      .last_resolved_at = info.last_resolved_at,
+      .latest_derivation_id = info.latest_derivation_id,
+      .latest_environment_id = info.latest_environment_id,
+  };
+}
+
+memix::cli_detail::Result<memix::AuthoredViewExpression>
+expression_from_cli(const memix::ViewService &service,
+                    const ViewCliOptions &options,
+                    memix::ViewTargetKind target) {
+  memix::ViewResult<memix::AuthoredViewExpression> expression =
+      service.expression_from_sources(options.sources, target);
+  if (options.view_sources.empty()) {
+    if (!expression) {
+      return memix::cli_detail::unexpected_error(expression.error());
+    }
+    return std::move(*expression);
+  }
+  std::vector<memix::AuthoredViewInput> inputs;
+  inputs.reserve(options.sources.size() + options.view_sources.size());
+  for (const std::string &source : options.sources) {
+    inputs.push_back(memix::AuthoredViewInput{
+        .kind = memix::ViewInputKind::Context,
+        .locator = source,
+        .environment_id = {},
+        .output_role = "file_tree",
+        .mount = {},
+    });
+  }
+  for (const std::string &view_source : options.view_sources) {
+    const std::size_t separator = view_source.find('=');
+    const std::string environment = view_source.substr(0, separator);
+    if (environment.empty()) {
+      return memix::cli_detail::unexpected_error(
+          "--view expects ENVIRONMENT[=MOUNT]");
+    }
+    const fs::path mount = separator == std::string::npos
+                             ? fs::path{}
+                             : fs::path(view_source.substr(separator + 1));
+    inputs.push_back(memix::AuthoredViewInput{
+        .kind = memix::ViewInputKind::Environment,
+        .locator = {},
+        .environment_id = environment,
+        .output_role = "file_tree",
+        .mount = mount,
+    });
+  }
+  expression = service.expression_from_inputs(std::move(inputs), target);
+  if (!expression) {
+    return memix::cli_detail::unexpected_error(expression.error());
+  }
+  return std::move(*expression);
+}
+
+std::string truncate_table_cell(std::string_view value, std::size_t width) {
+  constexpr std::string_view ellipsis = "...";
+  constexpr unsigned char utf8_continuation_mask = 0xC0U;
+  constexpr unsigned char utf8_continuation = 0x80U;
+  if (value.size() <= width) {
+    return std::string(value);
+  }
+  std::size_t prefix_size = width - ellipsis.size();
+  while (prefix_size > 0
+         && (static_cast<unsigned char>(value[prefix_size])
+             & utf8_continuation_mask)
+                == utf8_continuation) {
+    --prefix_size;
+  }
+  return std::format("{}{}", value.substr(0, prefix_size), ellipsis);
+}
+
+void print_quest_table(const std::vector<memix::QuestInfo> &quests) {
+  constexpr std::size_t intent_width = 28;
+  constexpr std::size_t name_width = 24;
+  std::println("{:<66}  {:<28}  {:<24}  {:>12}  {:<22}  {:<15}", "QUEST",
+               "INTENT", "NAME", "RESOLUTIONS", "LAST_RESOLVED",
+               "ENVIRONMENT");
+  for (const memix::QuestInfo &quest : quests) {
+    std::println("{:<66}  {:<28}  {:<24}  {:>12}  {:<22}  {:<15}",
+                 quest.ir_hash,
+                 truncate_table_cell(quest.intent, intent_width),
+                 truncate_table_cell(quest.name, name_width),
+                 quest.resolution_count, quest.last_resolved_at,
+                 memix::cli_detail::short_id(quest.latest_environment_id));
+  }
+}
+
+memix::cli_detail::VoidResult
+print_quests(const std::vector<memix::QuestInfo> &quests, bool json) {
+  if (json) {
+    const std::vector<QuestInfoJson> values =
+        quests
+        | std::views::transform(quest_info_json_for)
+        | std::ranges::to<std::vector>();
+    return print_json(values);
+  }
+  print_quest_table(quests);
   return {};
 }
 
@@ -292,45 +526,16 @@ memix::cli_detail::VoidResult run_build(const ViewCliOptions &options) {
   if (!service) {
     return std::unexpected(service.error());
   }
-  memix::ViewResult<memix::AuthoredViewExpression> expression =
-      service->expression_from_sources(options.sources, *target);
-  if (!options.view_sources.empty()) {
-    std::vector<memix::AuthoredViewInput> inputs;
-    inputs.reserve(options.sources.size() + options.view_sources.size());
-    for (const std::string &source : options.sources) {
-      inputs.push_back(memix::AuthoredViewInput{
-          .kind = memix::ViewInputKind::Context,
-          .locator = source,
-          .environment_id = {},
-          .output_role = "file_tree",
-          .mount = {},
-      });
-    }
-    for (const std::string &view_source : options.view_sources) {
-      const std::size_t separator = view_source.find('=');
-      const std::string environment = view_source.substr(0, separator);
-      if (environment.empty()) {
-        return memix::cli_detail::unexpected_error(
-            "--view expects ENVIRONMENT[=MOUNT]");
-      }
-      const fs::path mount = separator == std::string::npos
-                               ? fs::path{}
-                               : fs::path(view_source.substr(separator + 1));
-      inputs.push_back(memix::AuthoredViewInput{
-          .kind = memix::ViewInputKind::Environment,
-          .locator = {},
-          .environment_id = environment,
-          .output_role = "file_tree",
-          .mount = mount,
-      });
-    }
-    expression = service->expression_from_inputs(std::move(inputs), *target);
-  }
+  const memix::cli_detail::Result<memix::AuthoredViewExpression> expression =
+      expression_from_cli(*service, options, *target);
   if (!expression) {
-    return memix::cli_detail::unexpected_error(expression.error());
+    return std::unexpected(expression.error());
   }
   const memix::ViewResult<memix::ViewEnvironment> environment =
-      service->build(*expression);
+      service->build(*expression, memix::BuildOptions{
+                                      .intent = options.intent,
+                                      .name = options.name,
+                                  });
   if (!environment) {
     return memix::cli_detail::unexpected_error(environment.error());
   }
@@ -344,6 +549,172 @@ memix::cli_detail::VoidResult run_build(const ViewCliOptions &options) {
     return {};
   }
   print_view_environment_summary(*environment);
+  std::println("quest: {}", environment->derivation.ir_hash);
+  return {};
+}
+
+memix::cli_detail::VoidResult run_define(const ViewCliOptions &options) {
+  const memix::cli_detail::Result<memix::ViewService> service =
+      make_service(options);
+  if (!service) {
+    return std::unexpected(service.error());
+  }
+  const memix::cli_detail::Result<memix::AuthoredViewExpression> expression =
+      expression_from_cli(*service, options, memix::ViewTargetKind::FileTree);
+  if (!expression) {
+    return std::unexpected(expression.error());
+  }
+  const memix::ViewResult<memix::QuestDefinition> definition =
+      service->define_quest(
+          *expression,
+          memix::QuestDefinitionOptions{
+              .intent = options.intent_provided
+                          ? std::optional<std::string>{options.intent}
+                          : std::nullopt,
+              .name = options.name_provided
+                        ? std::optional<std::string>{options.name}
+                        : std::nullopt,
+          });
+  if (!definition) {
+    return memix::cli_detail::unexpected_error(definition.error());
+  }
+  const memix::ViewResult<std::vector<memix::QuestInfo>> quests =
+      service->list_quests();
+  if (!quests) {
+    return memix::cli_detail::unexpected_error(quests.error());
+  }
+  const auto info = std::ranges::find(*quests, definition->ir_hash,
+                                      &memix::QuestInfo::ir_hash);
+  if (info == quests->end()) {
+    return memix::cli_detail::unexpected_error(
+        "defined quest is missing from the quest listing");
+  }
+  if (options.define_json) {
+    return print_json(QuestDefinitionJson{
+        .ir_hash = info->ir_hash,
+        .intent = info->intent,
+        .name = info->name,
+        .created_at = info->created_at,
+        .existed = definition->existed,
+    });
+  }
+  std::println("quest: {}", info->ir_hash);
+  std::println("intent: {}", info->intent);
+  std::println("existed: {}", definition->existed ? "true" : "false");
+  return {};
+}
+
+memix::cli_detail::VoidResult run_quests(const ViewCliOptions &options) {
+  const memix::cli_detail::Result<memix::ViewService> service =
+      make_service(options);
+  if (!service) {
+    return std::unexpected(service.error());
+  }
+  const memix::ViewResult<std::vector<memix::QuestInfo>> quests =
+      service->list_quests();
+  if (!quests) {
+    return memix::cli_detail::unexpected_error(quests.error());
+  }
+  return print_quests(*quests, options.quests_json);
+}
+
+memix::cli_detail::VoidResult run_find(const ViewCliOptions &options) {
+  if (options.find_terms.empty() && !options.covers.has_value()) {
+    return memix::cli_detail::unexpected_error(
+        "find requires at least one term or --covers");
+  }
+  const memix::cli_detail::Result<memix::ViewService> service =
+      make_service(options);
+  if (!service) {
+    return std::unexpected(service.error());
+  }
+  const memix::ViewResult<std::vector<memix::QuestInfo>> quests =
+      service->find_quests(options.find_terms, options.covers);
+  if (!quests) {
+    return memix::cli_detail::unexpected_error(quests.error());
+  }
+  return print_quests(*quests, options.find_json);
+}
+
+memix::cli_detail::VoidResult run_resolve(const ViewCliOptions &options) {
+  if (options.quest_id.empty()) {
+    return memix::cli_detail::unexpected_error("resolve expects a quest id");
+  }
+  const memix::cli_detail::Result<memix::ViewService> service =
+      make_service(options);
+  if (!service) {
+    return std::unexpected(service.error());
+  }
+  const memix::ViewResult<memix::ViewEnvironment> environment =
+      service->resolve_quest(options.quest_id);
+  if (!environment) {
+    return memix::cli_detail::unexpected_error(environment.error());
+  }
+  if (options.resolve_json) {
+    const memix::cli_detail::Result<std::string> contents =
+        memix::cli_detail::read_file_contents(environment->manifest_path);
+    if (!contents) {
+      return std::unexpected(contents.error());
+    }
+    std::println("{}", *contents);
+    return {};
+  }
+  print_view_environment_summary(*environment);
+  std::println("quest: {}", environment->derivation.ir_hash);
+  return {};
+}
+
+memix::cli_detail::VoidResult run_freshness(const ViewCliOptions &options) {
+  if (options.quest_id.empty()) {
+    return memix::cli_detail::unexpected_error("freshness expects a quest id");
+  }
+  const memix::cli_detail::Result<memix::ViewService> service =
+      make_service(options);
+  if (!service) {
+    return std::unexpected(service.error());
+  }
+  const memix::ViewResult<memix::QuestFreshness> freshness =
+      service->quest_freshness(options.quest_id);
+  if (!freshness) {
+    return memix::cli_detail::unexpected_error(freshness.error());
+  }
+  if (options.freshness_json) {
+    const std::vector<QuestFreshnessInputJson> inputs =
+        freshness->inputs
+        | std::views::transform([](const memix::QuestFreshnessInput &input) {
+            return QuestFreshnessInputJson{
+                .locator = input.locator,
+                .recorded_generation = input.recorded_generation,
+                .current_generation = input.current_generation,
+                .pinned = input.pinned,
+                .fresh = input.fresh,
+            };
+          })
+        | std::ranges::to<std::vector>();
+    return print_json(QuestFreshnessJson{
+        .ir_hash = freshness->ir_hash,
+        .derivation_id = freshness->derivation_id,
+        .resolved_at = freshness->resolved_at,
+        .inputs = inputs,
+        .stale = freshness->stale,
+    });
+  }
+  for (const memix::QuestFreshnessInput &input : freshness->inputs) {
+    std::string_view state = "stale";
+    if (input.pinned) {
+      state = "pinned";
+    } else if (input.fresh) {
+      state = "fresh";
+    }
+    const std::string current =
+        input.current_generation.has_value()
+            ? memix::cli_detail::short_id(*input.current_generation)
+            : "-";
+    std::println("{}  {}  recorded={} current={}", state, input.locator,
+                 memix::cli_detail::short_id(input.recorded_generation),
+                 current);
+  }
+  std::println("stale: {}", freshness->stale ? "true" : "false");
   return {};
 }
 
@@ -616,7 +987,7 @@ void add_cat_command(Argum::Parser &parser, ViewCliOptions &options) {
                  }));
 }
 
-void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
+void add_view_inputs(Argum::Parser &parser, ViewCliOptions &options) {
   parser.add(Argum::Option("--source")
                  .argName("TEXT")
                  .help("View locator, for example rules/repo/AGENTS.md or "
@@ -632,15 +1003,92 @@ void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
           .handler([&options](std::string_view value) {
             options.view_sources.emplace_back(value);
           }));
+}
+
+void add_quest_metadata(Argum::Parser &parser, ViewCliOptions &options) {
+  parser.add(Argum::Option("--intent")
+                 .argName("TEXT")
+                 .help("Semantic intent used to find this quest.")
+                 .handler([&options](std::string_view value) {
+                   options.intent = value;
+                   options.intent_provided = true;
+                 }));
+  parser.add(Argum::Option("--name")
+                 .argName("TEXT")
+                 .help("Optional comment-style quest name.")
+                 .handler([&options](std::string_view value) {
+                   options.name = value;
+                   options.name_provided = true;
+                 }));
+}
+
+void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
+  add_view_inputs(parser, options);
   parser.add(Argum::Option("--target")
                  .argName("TEXT")
                  .help("Build target. Only file_tree is supported.")
                  .handler([&options](std::string_view value) {
                    options.target_name = value;
                  }));
+  add_quest_metadata(parser, options);
   parser.add(Argum::Option("--json")
                  .help("Emit the view environment manifest JSON.")
                  .handler([&options]() { options.build_json = true; }));
+}
+
+void add_define_command(Argum::Parser &parser, ViewCliOptions &options) {
+  add_view_inputs(parser, options);
+  add_quest_metadata(parser, options);
+  parser.add(Argum::Option("--json")
+                 .help("Emit the quest definition as JSON.")
+                 .handler([&options]() { options.define_json = true; }));
+}
+
+void add_quests_command(Argum::Parser &parser, ViewCliOptions &options) {
+  parser.add(Argum::Option("--json")
+                 .help("Emit quest summaries as JSON.")
+                 .handler([&options]() { options.quests_json = true; }));
+}
+
+void add_find_command(Argum::Parser &parser, ViewCliOptions &options) {
+  parser.add(Argum::Positional("terms")
+                 .help("Case-insensitive intent/name search terms.")
+                 .occurs(Argum::zeroOrMoreTimes)
+                 .handler([&options](std::string_view value) {
+                   options.find_terms.emplace_back(value);
+                 }));
+  parser.add(Argum::Option("--covers")
+                 .argName("PATH")
+                 .help("Find quests structurally covering a logical path.")
+                 .handler([&options](std::string_view value) {
+                   options.covers = fs::path(value);
+                 }));
+  parser.add(Argum::Option("--json")
+                 .help("Emit matching quest summaries as JSON.")
+                 .handler([&options]() { options.find_json = true; }));
+}
+
+void add_quest_id_command(Argum::Parser &parser, ViewCliOptions &options,
+                          std::string_view help, bool &json) {
+  parser.add(Argum::Positional("quest-id")
+                 .help(std::string(help))
+                 .occurs(Argum::neverOrOnce)
+                 .handler([&options](std::string_view value) {
+                   options.quest_id = value;
+                 }));
+  parser.add(Argum::Option("--json")
+                 .help("Emit structured JSON output.")
+                 .handler([&json]() { json = true; }));
+}
+
+void add_resolve_command(Argum::Parser &parser, ViewCliOptions &options) {
+  add_quest_id_command(parser, options, "Quest id or unique prefix.",
+                       options.resolve_json);
+}
+
+void add_freshness_command(Argum::Parser &parser, ViewCliOptions &options) {
+  add_quest_id_command(parser, options, "Quest id or unique prefix.",
+                       options.freshness_json);
 }
 
 void add_show_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -727,12 +1175,14 @@ void add_status_command(Argum::Parser &parser, ViewCliOptions &options) {
   add_into_option(parser, options);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: list, tree, cat, build, show, activate, "
-                "generations, rollback, deactivate, or status.")
+          .help("Subcommand: define, find, resolve, freshness, quests, list, "
+                "tree, cat, build, show, activate, generations, "
+                "rollback, deactivate, or status.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "list") {
@@ -753,6 +1203,31 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
             if (value == "build") {
               options.command = ViewCommand::Build;
               add_build_command(parser, options);
+              return {};
+            }
+            if (value == "define") {
+              options.command = ViewCommand::Define;
+              add_define_command(parser, options);
+              return {};
+            }
+            if (value == "find") {
+              options.command = ViewCommand::Find;
+              add_find_command(parser, options);
+              return {};
+            }
+            if (value == "resolve") {
+              options.command = ViewCommand::Resolve;
+              add_resolve_command(parser, options);
+              return {};
+            }
+            if (value == "freshness") {
+              options.command = ViewCommand::Freshness;
+              add_freshness_command(parser, options);
+              return {};
+            }
+            if (value == "quests") {
+              options.command = ViewCommand::Quests;
+              add_quests_command(parser, options);
               return {};
             }
             if (value == "show") {
@@ -787,8 +1262,8 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
             }
             return memix::cli_detail::argum_validation_error(std::format(
                 "unsupported command `{}`; expected "
-                "list|tree|cat|build|show|activate|generations|rollback|"
-                "deactivate|status",
+                "define|find|resolve|freshness|quests|list|tree|cat|"
+                "build|show|activate|generations|rollback|deactivate|status",
                 value));
           }));
 }
@@ -831,6 +1306,46 @@ void print_build_help() {
   memix::cli_detail::add_common_options(parser, options.common);
   add_build_command(parser, options);
   std::print("{}", parser.formatHelp("memix-view build"));
+}
+
+void print_define_help() {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_define_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-view define"));
+}
+
+void print_find_help() {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_find_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-view find"));
+}
+
+void print_resolve_help() {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_resolve_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-view resolve"));
+}
+
+void print_freshness_help() {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_freshness_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-view freshness"));
+}
+
+void print_quests_help() {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_quests_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-view quests"));
 }
 
 void print_show_help() {
@@ -895,6 +1410,21 @@ void print_selected_help(ViewCommand command) {
   case ViewCommand::Build:
     print_build_help();
     return;
+  case ViewCommand::Define:
+    print_define_help();
+    return;
+  case ViewCommand::Find:
+    print_find_help();
+    return;
+  case ViewCommand::Resolve:
+    print_resolve_help();
+    return;
+  case ViewCommand::Freshness:
+    print_freshness_help();
+    return;
+  case ViewCommand::Quests:
+    print_quests_help();
+    return;
   case ViewCommand::Show:
     print_show_help();
     return;
@@ -929,6 +1459,16 @@ memix::cli_detail::VoidResult dispatch(const ViewCliOptions &options) {
     return run_cat(options);
   case ViewCommand::Build:
     return run_build(options);
+  case ViewCommand::Define:
+    return run_define(options);
+  case ViewCommand::Find:
+    return run_find(options);
+  case ViewCommand::Resolve:
+    return run_resolve(options);
+  case ViewCommand::Freshness:
+    return run_freshness(options);
+  case ViewCommand::Quests:
+    return run_quests(options);
   case ViewCommand::Show:
     return run_show(options);
   case ViewCommand::Activate:
