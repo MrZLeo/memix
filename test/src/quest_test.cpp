@@ -1,5 +1,6 @@
 #include "memix/view.hpp"
 
+#include "detail/file_lock.hpp"
 #include "detail/hash.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -12,6 +13,8 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <random>
 #include <string>
 #include <string_view>
@@ -1583,6 +1586,106 @@ TEST_CASE("receipt scans tolerate unknown operations and missing optionals",
       quest_with_hash(*listed, environment->derivation.ir_hash);
   REQUIRE(quest.read_count == 1);
   REQUIRE(quest.activation_count == 1);
+}
+
+TEST_CASE("file locks serialize local threads and remain reusable",
+          "[quest][lock]") {
+  constexpr int thread_count = 16;
+  constexpr int acquisitions_per_thread = 100;
+  TemporaryDirectory directory("file-lock-stress");
+  const fs::path lock_path = directory.path() / ".quest-store.lock";
+
+  std::atomic<int> ready = 0;
+  std::atomic<bool> start = false;
+  std::atomic<int> inside = 0;
+  std::atomic<int> acquisitions = 0;
+  std::atomic<bool> overlapped = false;
+  std::mutex error_mutex;
+  std::string first_error;
+  std::vector<std::thread> threads;
+  threads.reserve(thread_count);
+  for (int thread_index = 0; thread_index < thread_count; ++thread_index) {
+    threads.emplace_back([&]() {
+      ready.fetch_add(1, std::memory_order_acq_rel);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      for (int acquisition = 0; acquisition < acquisitions_per_thread;
+           ++acquisition) {
+        memix::FsResult<memix::detail::FileLockGuard> lock =
+            memix::detail::FileLockGuard::acquire(
+                lock_path, memix::detail::FileLockGuard::Clock::now()
+                               + std::chrono::seconds(10));
+        if (!lock) {
+          const std::lock_guard error_lock(error_mutex);
+          if (first_error.empty()) {
+            first_error = lock.error().message;
+          }
+          return;
+        }
+        if (inside.fetch_add(1, std::memory_order_acq_rel) != 0) {
+          overlapped.store(true, std::memory_order_release);
+        }
+        std::this_thread::yield();
+        inside.fetch_sub(1, std::memory_order_acq_rel);
+        acquisitions.fetch_add(1, std::memory_order_acq_rel);
+      }
+    });
+  }
+  while (ready.load(std::memory_order_acquire) != thread_count) {
+    std::this_thread::yield();
+  }
+  start.store(true, std::memory_order_release);
+  for (std::thread &thread : threads) {
+    thread.join();
+  }
+
+  INFO(first_error);
+  REQUIRE(first_error.empty());
+  REQUIRE_FALSE(overlapped.load(std::memory_order_acquire));
+  REQUIRE(inside.load(std::memory_order_acquire) == 0);
+  REQUIRE(acquisitions.load(std::memory_order_acquire)
+          == thread_count * acquisitions_per_thread);
+  const memix::FsResult<bool> lock_is_file = fs::is_regular_file(lock_path);
+  REQUIRE(lock_is_file);
+  REQUIRE(*lock_is_file);
+  const auto reused = memix::detail::FileLockGuard::acquire(
+      lock_path,
+      memix::detail::FileLockGuard::Clock::now() + std::chrono::seconds(1));
+  REQUIRE(reused);
+}
+
+TEST_CASE("file lock contention times out and releases with its guard",
+          "[quest][lock]") {
+  TemporaryDirectory directory("file-lock-timeout");
+  const fs::path lock_path = directory.path() / ".quest-store.lock";
+
+  {
+    const auto held = memix::detail::FileLockGuard::acquire(
+        lock_path,
+        memix::detail::FileLockGuard::Clock::now() + std::chrono::seconds(1));
+    REQUIRE(held);
+    bool unexpectedly_acquired = false;
+    std::optional<memix::FsError> contention_error;
+    std::thread contender([&]() {
+      auto contended = memix::detail::FileLockGuard::acquire(
+          lock_path, memix::detail::FileLockGuard::Clock::now()
+                         + std::chrono::milliseconds(50));
+      unexpectedly_acquired = contended.has_value();
+      if (!contended) {
+        contention_error = contended.error();
+      }
+    });
+    contender.join();
+    REQUIRE_FALSE(unexpectedly_acquired);
+    REQUIRE(contention_error.has_value());
+    REQUIRE(contention_error->code == std::errc::timed_out);
+  }
+
+  const auto reacquired = memix::detail::FileLockGuard::acquire(
+      lock_path,
+      memix::detail::FileLockGuard::Clock::now() + std::chrono::seconds(1));
+  REQUIRE(reacquired);
 }
 
 TEST_CASE("concurrent quest definitions atomically publish complete metadata",

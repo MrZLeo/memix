@@ -1,5 +1,6 @@
 set(sources
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/file_lock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/hash.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/store.cpp
@@ -8,6 +9,7 @@ set(sources
 
 set(private_headers
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/error.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/file_lock.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/hash.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/json.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/detail/scope_exit.hpp

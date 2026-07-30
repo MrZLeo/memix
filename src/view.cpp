@@ -5,6 +5,7 @@
 #include "memix/store.hpp"
 
 #include "detail/error.hpp"
+#include "detail/file_lock.hpp"
 #include "detail/hash.hpp"
 #include "detail/json.hpp"
 #include "detail/scope_exit.hpp"
@@ -29,7 +30,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -60,7 +60,7 @@ constexpr std::string_view kQuestIrFilename = "ir.json";
 constexpr std::string_view kQuestManifestFilename = "quest.json";
 constexpr std::string_view kQuestHistoryFilename = "history.jsonl";
 constexpr std::string_view kQuestReceiptsFilename = "receipts.jsonl";
-constexpr std::string_view kQuestWriteLockName = "metadata.lock";
+constexpr std::string_view kQuestStoreLockFilename = ".quest-store.lock";
 constexpr std::string_view kLatestVersion = "latest";
 constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
 constexpr std::string_view kFileTreeOperatorVersionV2 = "file-tree-v2";
@@ -76,8 +76,7 @@ constexpr std::string_view kWorkspaceProfilePrefix = "ws-";
 constexpr std::size_t kWorkspaceProfileHashLength = 16;
 constexpr std::size_t kMaxProfileNameLength = 64;
 constexpr std::size_t kTimestampBufferBytes = 32;
-constexpr std::size_t kQuestLockAcquireAttempts = 1000;
-constexpr auto kQuestLockRetryDelay = std::chrono::milliseconds(1);
+constexpr auto kQuestLockTimeout = std::chrono::seconds(1);
 
 template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
@@ -2985,7 +2984,7 @@ quest_from_json(std::string_view text, const fs::path &path) {
 }
 
 ViewResult<QuestRecord>
-read_quest_record(const fs::path &root, std::string_view ir_hash) {
+read_quest_record_unlocked(const fs::path &root, std::string_view ir_hash) {
   const fs::path path =
       quest_dir_for(root, ir_hash) / std::string(kQuestManifestFilename);
   memix::FsResult<std::string> text = fs::read_text_file(path, "quest");
@@ -3005,54 +3004,44 @@ read_quest_record(const fs::path &root, std::string_view ir_hash) {
   return quest;
 }
 
-bool quest_lock_is_contended(const std::error_code &error) {
-#ifdef _WIN32
-  return error == std::errc::file_exists
-      || error == std::errc::permission_denied
-      || error == std::errc::device_or_resource_busy
-      || error == std::errc::resource_unavailable_try_again;
-#else
-  return error == std::errc::file_exists;
-#endif
-}
-
-ViewResult<fs::path> acquire_quest_write_lock(const fs::path &quest_dir) {
-  fs::path lock = quest_dir / std::string(kQuestWriteLockName);
-  for (std::size_t attempt = 0; attempt < kQuestLockAcquireAttempts;
-       ++attempt) {
-    const memix::FsResult<bool> acquired = fs::create_directory(lock);
-    if (!acquired) {
-      if (!quest_lock_is_contended(acquired.error().code)) {
-        return view_error(acquired.error());
-      }
-    } else if (*acquired) {
-      return lock;
-    }
-    if (attempt + 1 < kQuestLockAcquireAttempts) {
-      std::this_thread::sleep_for(kQuestLockRetryDelay);
-    }
+ViewResult<memix::detail::FileLockGuard>
+acquire_quest_store_lock(const fs::path &root) {
+  const fs::path lock =
+      quests_dir_for(root) / std::string(kQuestStoreLockFilename);
+  memix::FsResult<memix::detail::FileLockGuard> acquired =
+      memix::detail::FileLockGuard::acquire(
+          lock, memix::detail::FileLockGuard::Clock::now() + kQuestLockTimeout);
+  if (acquired) {
+    return std::move(*acquired);
   }
-  return view_error(
-      memix::ErrorKind::Locked,
-      std::format("quest `{}` is locked by another memix process; "
-                  "remove `{}` if the lock is stale",
-                  quest_dir.filename().string(), lock.string()));
-}
-
-ViewResult<QuestRecord>
-read_locked_quest_record(const fs::path &root, std::string_view ir_hash) {
-  ViewResult<fs::path> write_lock =
-      acquire_quest_write_lock(quest_dir_for(root, ir_hash));
-  if (!write_lock) {
-    return std::unexpected(write_lock.error());
+  if (acquired.error().code == std::errc::timed_out) {
+    return view_error(
+        memix::ErrorKind::Locked,
+        std::format("quest store `{}` is locked by another memix operation",
+                    quests_dir_for(root).string()));
   }
-  const memix::scope_exit release_write_lock(
-      [lock = *write_lock] { std::ignore = fs::remove(lock); });
-  return read_quest_record(root, ir_hash);
+  return view_error(std::move(acquired.error()));
 }
 
-ViewVoid
-write_mutable_quest_record(const fs::path &root, const QuestRecord &quest) {
+ViewResult<std::optional<memix::detail::FileLockGuard>>
+acquire_existing_quest_store_lock(const fs::path &root) {
+  const memix::FsResult<bool> exists = fs::exists(quests_dir_for(root));
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (!*exists) {
+    return std::optional<memix::detail::FileLockGuard>{};
+  }
+  ViewResult<memix::detail::FileLockGuard> acquired =
+      acquire_quest_store_lock(root);
+  if (!acquired) {
+    return std::unexpected(acquired.error());
+  }
+  return std::optional<memix::detail::FileLockGuard>{std::move(*acquired)};
+}
+
+ViewVoid write_mutable_quest_record_unlocked(const fs::path &root,
+                                             const QuestRecord &quest) {
   ViewResult<std::string> json = quest_json_for(quest);
   if (!json) {
     return std::unexpected(json.error());
@@ -3096,6 +3085,11 @@ upsert_quest( // NOLINT(readability-function-cognitive-complexity)
   const ViewVoid quests_created = ensure_directory(quests_dir);
   if (!quests_created) {
     return std::unexpected(quests_created.error());
+  }
+  const ViewResult<memix::detail::FileLockGuard> store_lock =
+      acquire_quest_store_lock(root);
+  if (!store_lock) {
+    return std::unexpected(store_lock.error());
   }
   const fs::path quest_dir = quest_dir_for(root, ir_hash);
   const memix::FsResult<bool> exists = fs::exists(quest_dir);
@@ -3201,13 +3195,7 @@ upsert_quest( // NOLINT(readability-function-cognitive-complexity)
         .existed = true,
     };
   }
-  ViewResult<fs::path> write_lock = acquire_quest_write_lock(quest_dir);
-  if (!write_lock) {
-    return std::unexpected(write_lock.error());
-  }
-  const memix::scope_exit release_write_lock(
-      [lock = *write_lock] { std::ignore = fs::remove(lock); });
-  ViewResult<QuestRecord> quest = read_quest_record(root, ir_hash);
+  ViewResult<QuestRecord> quest = read_quest_record_unlocked(root, ir_hash);
   if (!quest) {
     return std::unexpected(quest.error());
   }
@@ -3221,7 +3209,7 @@ upsert_quest( // NOLINT(readability-function-cognitive-complexity)
     changed = true;
   }
   if (changed) {
-    const ViewVoid written = write_mutable_quest_record(root, *quest);
+    const ViewVoid written = write_mutable_quest_record_unlocked(root, *quest);
     if (!written) {
       return std::unexpected(written.error());
     }
@@ -3284,7 +3272,7 @@ quest_history_entry_from_json(std::string_view text, const fs::path &path) {
 }
 
 ViewResult<std::vector<QuestHistoryEntry>>
-read_quest_history(const fs::path &root, std::string_view ir_hash) {
+read_quest_history_unlocked(const fs::path &root, std::string_view ir_hash) {
   const fs::path path =
       quest_dir_for(root, ir_hash) / std::string(kQuestHistoryFilename);
   const memix::FsResult<bool> exists = fs::exists(path);
@@ -3337,13 +3325,11 @@ record_resolution(const fs::path &root, const memix::ViewDerivation &derivation,
   }
   const fs::path path = quest_dir_for(root, derivation.ir_hash)
                       / std::string(kQuestHistoryFilename);
-  ViewResult<fs::path> write_lock =
-      acquire_quest_write_lock(path.parent_path());
-  if (!write_lock) {
-    return std::unexpected(write_lock.error());
+  const ViewResult<memix::detail::FileLockGuard> store_lock =
+      acquire_quest_store_lock(root);
+  if (!store_lock) {
+    return std::unexpected(store_lock.error());
   }
-  const memix::scope_exit release_write_lock(
-      [lock = *write_lock] { std::ignore = fs::remove(lock); });
   std::ofstream output(path, std::ios::binary | std::ios::app);
   if (!output) {
     return view_error(
@@ -3360,6 +3346,11 @@ record_resolution(const fs::path &root, const memix::ViewDerivation &derivation,
   if (!output) {
     return view_error(
         std::format("failed to append quest history `{}`", path.string()));
+  }
+  output.flush();
+  if (!output) {
+    return view_error(
+        std::format("failed to flush quest history `{}`", path.string()));
   }
   return {};
 }
@@ -3451,7 +3442,8 @@ quest_receipt_from_json(std::string_view text, const fs::path &path) {
 }
 
 ViewResult<QuestReceiptSummary>
-read_quest_receipt_summary(const fs::path &root, std::string_view ir_hash) {
+read_quest_receipt_summary_unlocked(const fs::path &root,
+                                    std::string_view ir_hash) {
   const fs::path path =
       quest_dir_for(root, ir_hash) / std::string(kQuestReceiptsFilename);
   const memix::FsResult<bool> exists = fs::exists(path);
@@ -3505,12 +3497,11 @@ void record_quest_receipt_best_effort(const fs::path &root,
   if (!json) {
     return;
   }
-  ViewResult<fs::path> write_lock = acquire_quest_write_lock(quest_dir);
-  if (!write_lock) {
+  const ViewResult<memix::detail::FileLockGuard> store_lock =
+      acquire_quest_store_lock(root);
+  if (!store_lock) {
     return;
   }
-  const memix::scope_exit release_write_lock(
-      [lock = *write_lock] { std::ignore = fs::remove(lock); });
   const fs::path path = quest_dir / std::string(kQuestReceiptsFilename);
   std::ofstream output(path, std::ios::binary | std::ios::app);
   if (!output) {
@@ -3523,6 +3514,7 @@ void record_quest_receipt_best_effort(const fs::path &root,
     return;
   }
   output.write(line.data(), static_cast<std::streamsize>(line.size()));
+  output.flush();
 }
 
 memix::QuestInfo quest_info_from_record(const QuestRecord &quest) {
@@ -3542,9 +3534,9 @@ memix::QuestInfo quest_info_from_record(const QuestRecord &quest) {
   };
 }
 
-void enrich_quest_info(const fs::path &root, memix::QuestInfo &info) {
+void enrich_quest_info_unlocked(const fs::path &root, memix::QuestInfo &info) {
   ViewResult<std::vector<QuestHistoryEntry>> history =
-      read_quest_history(root, info.ir_hash);
+      read_quest_history_unlocked(root, info.ir_hash);
   if (history) {
     info.resolution_count = history->size();
     if (!history->empty()) {
@@ -3555,7 +3547,7 @@ void enrich_quest_info(const fs::path &root, memix::QuestInfo &info) {
     }
   }
   ViewResult<QuestReceiptSummary> receipts =
-      read_quest_receipt_summary(root, info.ir_hash);
+      read_quest_receipt_summary_unlocked(root, info.ir_hash);
   if (receipts) {
     info.read_count = receipts->read_count;
     info.last_read_at = receipts->last_read_at;
@@ -3565,7 +3557,7 @@ void enrich_quest_info(const fs::path &root, memix::QuestInfo &info) {
 }
 
 ViewResult<std::vector<memix::QuestInfo>>
-scan_quest_metadata(const fs::path &root) {
+scan_quest_metadata_unlocked(const fs::path &root) {
   const fs::path quests_dir = quests_dir_for(root);
   const memix::FsResult<bool> exists = fs::exists(quests_dir);
   if (!exists) {
@@ -3592,7 +3584,7 @@ scan_quest_metadata(const fs::path &root) {
     if (!memix::detail::is_lower_hex_sha256(ir_hash)) {
       continue;
     }
-    ViewResult<QuestRecord> quest = read_locked_quest_record(root, ir_hash);
+    ViewResult<QuestRecord> quest = read_quest_record_unlocked(root, ir_hash);
     if (!quest) {
       return std::unexpected(quest.error());
     }
@@ -5466,13 +5458,21 @@ ViewService::define_quest(const AuthoredViewExpression &expression,
 }
 
 ViewResult<std::vector<QuestInfo>> ViewService::list_quests() const {
+  const ViewResult<std::optional<memix::detail::FileLockGuard>> store_lock =
+      acquire_existing_quest_store_lock(store_.root());
+  if (!store_lock) {
+    return std::unexpected(store_lock.error());
+  }
+  if (!store_lock->has_value()) {
+    return std::vector<QuestInfo>{};
+  }
   ViewResult<std::vector<QuestInfo>> quests =
-      scan_quest_metadata(store_.root());
+      scan_quest_metadata_unlocked(store_.root());
   if (!quests) {
     return std::unexpected(quests.error());
   }
   for (QuestInfo &quest : *quests) {
-    enrich_quest_info(store_.root(), quest);
+    enrich_quest_info_unlocked(store_.root(), quest);
   }
   return quests;
 }
@@ -5519,8 +5519,16 @@ ViewService::find_quests(std::vector<std::string> terms,
     cover_path = std::move(*valid_cover);
   }
 
+  const ViewResult<std::optional<memix::detail::FileLockGuard>> store_lock =
+      acquire_existing_quest_store_lock(store_.root());
+  if (!store_lock) {
+    return std::unexpected(store_lock.error());
+  }
+  if (!store_lock->has_value()) {
+    return std::vector<QuestInfo>{};
+  }
   ViewResult<std::vector<QuestInfo>> metadata =
-      scan_quest_metadata(store_.root());
+      scan_quest_metadata_unlocked(store_.root());
   if (!metadata) {
     return std::unexpected(metadata.error());
   }
@@ -5557,7 +5565,7 @@ ViewService::find_quests(std::vector<std::string> terms,
     matches.push_back(std::move(quest));
   }
   for (QuestInfo &quest : matches) {
-    enrich_quest_info(store_.root(), quest);
+    enrich_quest_info_unlocked(store_.root(), quest);
   }
   return matches;
 }
@@ -5597,16 +5605,24 @@ ViewService::quest_freshness(std::string_view quest_prefix) const {
   if (!ir_hash) {
     return std::unexpected(ir_hash.error());
   }
-  ViewResult<std::vector<QuestHistoryEntry>> history =
-      read_quest_history(store_.root(), *ir_hash);
-  if (!history) {
-    return std::unexpected(history.error());
+  QuestHistoryEntry latest;
+  {
+    const ViewResult<memix::detail::FileLockGuard> store_lock =
+        acquire_quest_store_lock(store_.root());
+    if (!store_lock) {
+      return std::unexpected(store_lock.error());
+    }
+    ViewResult<std::vector<QuestHistoryEntry>> history =
+        read_quest_history_unlocked(store_.root(), *ir_hash);
+    if (!history) {
+      return std::unexpected(history.error());
+    }
+    if (history->empty()) {
+      return view_error(ErrorKind::NotFound,
+                        std::format("quest `{}` has no resolutions", *ir_hash));
+    }
+    latest = history->back();
   }
-  if (history->empty()) {
-    return view_error(ErrorKind::NotFound,
-                      std::format("quest `{}` has no resolutions", *ir_hash));
-  }
-  const QuestHistoryEntry &latest = history->back();
   ViewResult<ViewDerivation> derivation =
       resolve_derivation(store_, latest.derivation_id);
   if (!derivation) {
@@ -5655,8 +5671,13 @@ ViewService::quest_stats(std::string_view quest_prefix) const {
   if (!ir_hash) {
     return std::unexpected(ir_hash.error());
   }
+  const ViewResult<memix::detail::FileLockGuard> store_lock =
+      acquire_quest_store_lock(store_.root());
+  if (!store_lock) {
+    return std::unexpected(store_lock.error());
+  }
   const ViewResult<QuestRecord> quest =
-      read_locked_quest_record(store_.root(), *ir_hash);
+      read_quest_record_unlocked(store_.root(), *ir_hash);
   if (!quest) {
     return std::unexpected(quest.error());
   }
@@ -5676,7 +5697,7 @@ ViewService::quest_stats(std::string_view quest_prefix) const {
       .reads_by_environment = {},
   };
   ViewResult<std::vector<QuestHistoryEntry>> history =
-      read_quest_history(store_.root(), *ir_hash);
+      read_quest_history_unlocked(store_.root(), *ir_hash);
   if (history) {
     stats.resolution_count = history->size();
     if (!history->empty()) {
@@ -5684,7 +5705,7 @@ ViewService::quest_stats(std::string_view quest_prefix) const {
     }
   }
   ViewResult<QuestReceiptSummary> receipts =
-      read_quest_receipt_summary(store_.root(), *ir_hash);
+      read_quest_receipt_summary_unlocked(store_.root(), *ir_hash);
   if (!receipts) {
     return stats;
   }
