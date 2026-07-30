@@ -141,6 +141,8 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        export MEMIX_STORE_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix-store"
+        export MEMIX_VIEW_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix-view"
         for test_binary in compatibility/*_Tests; do
           "$test_binary"
         done

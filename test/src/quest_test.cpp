@@ -256,7 +256,13 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
                   const std::vector<std::string> &arguments) {
   const fs::path output_path = directory / "cli-stdout.txt";
   const fs::path error_path = directory / "cli-stderr.txt";
-  std::string command = shell_quote(MEMIX_VIEW_TEST_BINARY);
+  std::string_view binary = MEMIX_VIEW_TEST_BINARY;
+  if (const char *override_binary =
+          std::getenv("MEMIX_VIEW_TEST_BINARY_OVERRIDE");
+      override_binary != nullptr && override_binary[0] != '\0') {
+    binary = override_binary;
+  }
+  std::string command = shell_quote(binary);
   command += " --store-root ";
   command += shell_quote(store_root.string());
   for (const std::string &argument : arguments) {
@@ -267,7 +273,10 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
   command += shell_quote(output_path.string());
   command += " 2>";
   command += shell_quote(error_path.string());
-  // Arguments and redirect paths are individually single-quoted above.
+#ifdef _WIN32
+  command.insert(command.begin(), '"');
+  command.push_back('"');
+#endif
   const int status = std::system(command.c_str()); // NOLINT(cert-env33-c)
   return CliResult{
       .status = status,

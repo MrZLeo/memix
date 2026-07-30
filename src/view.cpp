@@ -3005,13 +3005,24 @@ read_quest_record(const fs::path &root, std::string_view ir_hash) {
   return quest;
 }
 
+bool quest_lock_is_contended(const std::error_code &error) {
+#ifdef _WIN32
+  return error == std::errc::file_exists
+      || error == std::errc::permission_denied
+      || error == std::errc::device_or_resource_busy
+      || error == std::errc::resource_unavailable_try_again;
+#else
+  return error == std::errc::file_exists;
+#endif
+}
+
 ViewResult<fs::path> acquire_quest_write_lock(const fs::path &quest_dir) {
   fs::path lock = quest_dir / std::string(kQuestWriteLockName);
   for (std::size_t attempt = 0; attempt < kQuestLockAcquireAttempts;
        ++attempt) {
     const memix::FsResult<bool> acquired = fs::create_directory(lock);
     if (!acquired) {
-      if (acquired.error().code != std::errc::file_exists) {
+      if (!quest_lock_is_contended(acquired.error().code)) {
         return view_error(acquired.error());
       }
     } else if (*acquired) {
@@ -3026,6 +3037,18 @@ ViewResult<fs::path> acquire_quest_write_lock(const fs::path &quest_dir) {
       std::format("quest `{}` is locked by another memix process; "
                   "remove `{}` if the lock is stale",
                   quest_dir.filename().string(), lock.string()));
+}
+
+ViewResult<QuestRecord>
+read_locked_quest_record(const fs::path &root, std::string_view ir_hash) {
+  ViewResult<fs::path> write_lock =
+      acquire_quest_write_lock(quest_dir_for(root, ir_hash));
+  if (!write_lock) {
+    return std::unexpected(write_lock.error());
+  }
+  const memix::scope_exit release_write_lock(
+      [lock = *write_lock] { std::ignore = fs::remove(lock); });
+  return read_quest_record(root, ir_hash);
 }
 
 ViewVoid
@@ -3569,7 +3592,7 @@ scan_quest_metadata(const fs::path &root) {
     if (!memix::detail::is_lower_hex_sha256(ir_hash)) {
       continue;
     }
-    ViewResult<QuestRecord> quest = read_quest_record(root, ir_hash);
+    ViewResult<QuestRecord> quest = read_locked_quest_record(root, ir_hash);
     if (!quest) {
       return std::unexpected(quest.error());
     }
@@ -5633,7 +5656,7 @@ ViewService::quest_stats(std::string_view quest_prefix) const {
     return std::unexpected(ir_hash.error());
   }
   const ViewResult<QuestRecord> quest =
-      read_quest_record(store_.root(), *ir_hash);
+      read_locked_quest_record(store_.root(), *ir_hash);
   if (!quest) {
     return std::unexpected(quest.error());
   }
