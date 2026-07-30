@@ -47,7 +47,7 @@ block in `memix.rb` with a tag and immutable revision:
 
 ```ruby
 url "https://github.com/MrZLeo/memix.git",
-    tag: "v0.2.0",
+    tag: "v0.3.0",
     revision: "<tag commit sha>"
 ```
 
