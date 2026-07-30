@@ -479,11 +479,10 @@ public:
   deactivate(const fs::path &into, bool wipe_profile = false) const;
 
 private:
-  void record_activation(const ViewEnvironment &environment,
-                         const ViewActivation &activation,
-                         ActivationMode mode,
-                         std::optional<std::string_view> via = std::nullopt)
-      const;
+  void
+  record_activation(const ViewEnvironment &environment,
+                    const ViewActivation &activation, ActivationMode mode,
+                    std::optional<std::string_view> via = std::nullopt) const;
 
   Store store_;
 };
