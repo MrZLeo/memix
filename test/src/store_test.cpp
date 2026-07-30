@@ -176,6 +176,17 @@ void make_directory_tree_writable(const fs::path &root) {
 }
 
 std::string shell_quote(std::string_view value) {
+#ifdef _WIN32
+  std::string quoted{"\""};
+  for (const char character : value) {
+    if (character == '"') {
+      quoted += "\\\"";
+    } else {
+      quoted.push_back(character);
+    }
+  }
+  quoted.push_back('"');
+#else
   std::string quoted{"'"};
   for (const char character : value) {
     if (character == '\'') {
@@ -185,6 +196,7 @@ std::string shell_quote(std::string_view value) {
     }
   }
   quoted.push_back('\'');
+#endif
   return quoted;
 }
 

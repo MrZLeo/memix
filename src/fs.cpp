@@ -13,6 +13,15 @@
 #include <string_view>
 #include <system_error>
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
+#include <thread>
 #include <tuple>
 #include <utility>
 #endif
@@ -24,6 +33,10 @@ namespace memix::fs {
 namespace {
 
 constexpr int kTempDirAttempts = 32;
+#ifdef _WIN32
+constexpr int kReplaceFileAttempts = 1000;
+constexpr auto kReplaceFileRetryDelay = std::chrono::milliseconds(1);
+#endif
 
 template <typename Value, typename... Paths>
 FsResult<Value> fs_result(Value value, const std::error_code &error,
@@ -147,6 +160,31 @@ FsVoid rename(const path &source, const path &destination) {
   std::error_code error;
   std_fs::rename(source, destination, error);
   return fs_void(error, "failed to rename", source, destination);
+}
+
+FsVoid replace_file(const path &source, const path &destination) {
+#ifndef _WIN32
+  return memix::fs::rename(source, destination);
+#else
+  for (int attempt = 0; attempt < kReplaceFileAttempts; ++attempt) {
+    if (MoveFileExW(source.c_str(), destination.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+        != 0) {
+      return {};
+    }
+    const DWORD native_error = GetLastError();
+    const bool retryable = native_error == ERROR_ACCESS_DENIED
+                        || native_error == ERROR_SHARING_VIOLATION;
+    if (!retryable || attempt + 1 == kReplaceFileAttempts) {
+      return fs_error("failed to replace file",
+                      std::error_code(static_cast<int>(native_error),
+                                      std::system_category()),
+                      source, destination);
+    }
+    std::this_thread::sleep_for(kReplaceFileRetryDelay);
+  }
+  return fs_error("failed to replace file");
+#endif
 }
 
 FsVoid replace_directory_symlink(const path &source, const path &destination) {

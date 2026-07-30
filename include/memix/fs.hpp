@@ -106,6 +106,9 @@ FsResult<path> read_symlink(const path &path);
 FsResult<path> relative(const path &target, const path &base);
 FsResult<path> weakly_canonical(const path &path);
 FsVoid rename(const path &source, const path &destination);
+// Atomically installs `source` at `destination`, replacing an existing file.
+// Windows retries transient sharing violations caused by concurrent readers.
+FsVoid replace_file(const path &source, const path &destination);
 // Installs a prepared directory symlink at `destination`. POSIX uses one
 // atomic rename; Windows uses a recoverable handoff because it cannot replace
 // an existing directory symlink with rename.

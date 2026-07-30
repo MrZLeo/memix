@@ -60,7 +60,7 @@ constexpr std::string_view kQuestIrFilename = "ir.json";
 constexpr std::string_view kQuestManifestFilename = "quest.json";
 constexpr std::string_view kQuestHistoryFilename = "history.jsonl";
 constexpr std::string_view kQuestReceiptsFilename = "receipts.jsonl";
-constexpr std::string_view kQuestMetadataLockName = "metadata.lock";
+constexpr std::string_view kQuestWriteLockName = "metadata.lock";
 constexpr std::string_view kLatestVersion = "latest";
 constexpr std::string_view kFileTreeOperatorVersion = "file-tree-v1";
 constexpr std::string_view kFileTreeOperatorVersionV2 = "file-tree-v2";
@@ -3005,16 +3005,16 @@ read_quest_record(const fs::path &root, std::string_view ir_hash) {
   return quest;
 }
 
-ViewResult<fs::path>
-acquire_quest_metadata_lock(const fs::path &quest_dir) {
-  fs::path lock = quest_dir / std::string(kQuestMetadataLockName);
+ViewResult<fs::path> acquire_quest_write_lock(const fs::path &quest_dir) {
+  fs::path lock = quest_dir / std::string(kQuestWriteLockName);
   for (std::size_t attempt = 0; attempt < kQuestLockAcquireAttempts;
        ++attempt) {
     const memix::FsResult<bool> acquired = fs::create_directory(lock);
     if (!acquired) {
-      return view_error(acquired.error());
-    }
-    if (*acquired) {
+      if (acquired.error().code != std::errc::file_exists) {
+        return view_error(acquired.error());
+      }
+    } else if (*acquired) {
       return lock;
     }
     if (attempt + 1 < kQuestLockAcquireAttempts) {
@@ -3023,7 +3023,7 @@ acquire_quest_metadata_lock(const fs::path &quest_dir) {
   }
   return view_error(
       memix::ErrorKind::Locked,
-      std::format("quest `{}` metadata is locked by another memix process; "
+      std::format("quest `{}` is locked by another memix process; "
                   "remove `{}` if the lock is stale",
                   quest_dir.filename().string(), lock.string()));
 }
@@ -3047,7 +3047,7 @@ write_mutable_quest_record(const fs::path &root, const QuestRecord &quest) {
   if (!written) {
     return view_error(written.error());
   }
-  const memix::FsVoid published = fs::rename(*temp, path);
+  const memix::FsVoid published = fs::replace_file(*temp, path);
   if (!published) {
     return view_error(published.error());
   }
@@ -3178,13 +3178,12 @@ upsert_quest( // NOLINT(readability-function-cognitive-complexity)
         .existed = true,
     };
   }
-  ViewResult<fs::path> metadata_lock =
-      acquire_quest_metadata_lock(quest_dir);
-  if (!metadata_lock) {
-    return std::unexpected(metadata_lock.error());
+  ViewResult<fs::path> write_lock = acquire_quest_write_lock(quest_dir);
+  if (!write_lock) {
+    return std::unexpected(write_lock.error());
   }
-  const memix::scope_exit release_metadata_lock(
-      [lock = *metadata_lock] { std::ignore = fs::remove(lock); });
+  const memix::scope_exit release_write_lock(
+      [lock = *write_lock] { std::ignore = fs::remove(lock); });
   ViewResult<QuestRecord> quest = read_quest_record(root, ir_hash);
   if (!quest) {
     return std::unexpected(quest.error());
@@ -3315,6 +3314,13 @@ record_resolution(const fs::path &root, const memix::ViewDerivation &derivation,
   }
   const fs::path path = quest_dir_for(root, derivation.ir_hash)
                       / std::string(kQuestHistoryFilename);
+  ViewResult<fs::path> write_lock =
+      acquire_quest_write_lock(path.parent_path());
+  if (!write_lock) {
+    return std::unexpected(write_lock.error());
+  }
+  const memix::scope_exit release_write_lock(
+      [lock = *write_lock] { std::ignore = fs::remove(lock); });
   std::ofstream output(path, std::ios::binary | std::ios::app);
   if (!output) {
     return view_error(
@@ -3476,6 +3482,12 @@ void record_quest_receipt_best_effort(const fs::path &root,
   if (!json) {
     return;
   }
+  ViewResult<fs::path> write_lock = acquire_quest_write_lock(quest_dir);
+  if (!write_lock) {
+    return;
+  }
+  const memix::scope_exit release_write_lock(
+      [lock = *write_lock] { std::ignore = fs::remove(lock); });
   const fs::path path = quest_dir / std::string(kQuestReceiptsFilename);
   std::ofstream output(path, std::ios::binary | std::ios::app);
   if (!output) {

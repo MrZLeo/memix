@@ -222,6 +222,17 @@ quest_with_hash(const std::vector<memix::QuestInfo> &quests,
 }
 
 std::string shell_quote(std::string_view value) {
+#ifdef _WIN32
+  std::string quoted{"\""};
+  for (const char character : value) {
+    if (character == '"') {
+      quoted += "\\\"";
+    } else {
+      quoted.push_back(character);
+    }
+  }
+  quoted.push_back('"');
+#else
   std::string quoted{"'"};
   for (const char character : value) {
     if (character == '\'') {
@@ -231,6 +242,7 @@ std::string shell_quote(std::string_view value) {
     }
   }
   quoted.push_back('\'');
+#endif
   return quoted;
 }
 
@@ -1293,25 +1305,19 @@ TEST_CASE("legacy reads and receipt append failures remain successful",
   const auto read_only_environment =
       read_only_views.build(*read_only_expression);
   REQUIRE(read_only_environment);
-  const fs::path read_only_quest_dir =
-      read_only_store_root
-      / "views"
-      / "quests"
-      / read_only_environment->derivation.ir_hash;
-  const memix::FsVoid made_read_only = fs::permissions(
-      read_only_quest_dir, fs::perms::owner_read | fs::perms::owner_exec);
-  REQUIRE(made_read_only);
+  const fs::path blocked_receipt_log = receipts_path(
+      read_only_store_root, read_only_environment->derivation.ir_hash);
+  const memix::FsResult<bool> blocked =
+      fs::create_directory(blocked_receipt_log);
+  REQUIRE(blocked);
+  REQUIRE(*blocked);
   const auto read_only_result = read_only_views.read_environment_file(
       read_only_environment->id, "rules/repo/AGENTS.md");
-  const memix::FsResult<bool> read_only_receipts_exist =
-      fs::exists(receipts_path(read_only_store_root,
-                               read_only_environment->derivation.ir_hash));
-  const memix::FsVoid restored =
-      fs::permissions(read_only_quest_dir, fs::perms::owner_all);
-  REQUIRE(restored);
+  const memix::FsResult<bool> receipt_is_file =
+      fs::is_regular_file(blocked_receipt_log);
   REQUIRE(read_only_result);
-  REQUIRE(read_only_receipts_exist);
-  REQUIRE_FALSE(*read_only_receipts_exist);
+  REQUIRE(receipt_is_file);
+  REQUIRE_FALSE(*receipt_is_file);
 }
 
 TEST_CASE("quest listings summarize receipts and tolerate corrupt logs",
