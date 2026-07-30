@@ -98,6 +98,15 @@ std::string read_file(const fs::path &path) {
   };
 }
 
+std::string read_cli_text_file(const fs::path &path) {
+  std::ifstream input(path);
+  REQUIRE(input);
+  return {
+      std::istreambuf_iterator<char>(input),
+      std::istreambuf_iterator<char>(),
+  };
+}
+
 memix::FileIngestResult
 ingest_context_file(const memix::Store &store, const fs::path &source,
                     const fs::path &context_path, std::string_view message) {
@@ -280,8 +289,8 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
   const int status = std::system(command.c_str()); // NOLINT(cert-env33-c)
   return CliResult{
       .status = status,
-      .output = read_file(output_path),
-      .error = read_file(error_path),
+      .output = read_cli_text_file(output_path),
+      .error = read_cli_text_file(error_path),
   };
 }
 

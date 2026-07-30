@@ -133,6 +133,13 @@ std::string read_file(const fs::path &path) {
           std::istreambuf_iterator<char>()};
 }
 
+std::string read_cli_text_file(const fs::path &path) {
+  std::ifstream input(path);
+  REQUIRE(input);
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
+}
+
 bool path_exists(const fs::path &path) {
   const memix::FsResult<bool> exists = fs::exists(path);
   REQUIRE(exists);
@@ -234,8 +241,8 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
   const int status = std::system(command.c_str()); // NOLINT(cert-env33-c)
   return CliResult{
       .status = status,
-      .output = read_file(output_path),
-      .error = read_file(error_path),
+      .output = read_cli_text_file(output_path),
+      .error = read_cli_text_file(error_path),
   };
 }
 
