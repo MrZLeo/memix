@@ -1,6 +1,6 @@
 ---
 name: memix-cli
-description: "Recall, load, inspect, compose, or save durable user and project memory with Memix. Use when users ask to remember something; recover or use prior decisions, notes, chats, rules, documents, or context without necessarily naming Memix; ask what was stored previously; or need memix-store, memix-view, view discovery/composition, activation, generations, rollbacks, profiles, or workspace attachments. Do not use for RAM, memory leaks, allocators, programming-language memory models, or information already available in the current conversation unless the user wants it persisted."
+description: "Recall, inspect, compose, activate, or save durable user and project memory with Memix. Use when the user asks to remember something, retrieve prior decisions, notes, chats, rules, documents, or context, or manage Memix views, generations, profiles, and rollbacks. Do not use for RAM, memory leaks, allocators, programming-language memory models, or information already present in this conversation unless the user wants it persisted."
 ---
 
 # Memix CLI
@@ -47,7 +47,7 @@ After automatic composition or activation, briefly report reused environment IDs
 
 ## Structured User Choice
 
-When a decision genuinely belongs to the user, prefer the host's interactive question or selection tool (such as Claude Code's `AskUserQuestion` or Codex's `request_user_input`) over an open-ended plain-text question. If the host has no such tool, fall back to a short numbered list plus one focused question. Memix itself never prompts: its CLI must stay scriptable and never block on stdin, so all interactivity lives in the host.
+When a decision genuinely belongs to the user, prefer the host's interactive question or selection tool (such as Claude Code's `AskUserQuestion`, Codex's `request_user_input`, or DeepSeek Harness's `ask_user_question`) over an open-ended plain-text question. If the host has no such tool, fall back to a short numbered list plus one focused question. Memix itself never prompts: its CLI must stay scriptable and never block on stdin, so all interactivity lives in the host.
 
 Escalate to a structured choice only when:
 

@@ -24,7 +24,7 @@ repository or release is not public. Keep the resolved tag for the skill step
 below. If no published release can be resolved, stop and report that memix is
 not available for prebuilt installation yet.
 
-Download both platform assets and the platform-independent Codex skill archive
+Download both platform assets and the platform-independent agent skill archive
 from that exact release:
 
 ```text
@@ -75,6 +75,10 @@ the current agent:
 - Claude Code: use `$HOME/.claude/skills` for a user-wide installation.
   When the user asked for a project-local installation, use
   `.claude/skills` at the project root instead.
+- DeepSeek Harness (DSH): use `$DSH_HOME/skills` when `DSH_HOME` is set,
+  otherwise `$HOME/.dsh/skills`, for a user-wide installation. When the user
+  asked for a project-local installation, use `.dsh/skills` at the project
+  root instead.
 
 The resulting paths must be `<skill-root>/memix-cli/SKILL.md` and
 `<skill-root>/memix-cli/agents/openai.yaml`. Do not flatten the directory or
@@ -82,9 +86,9 @@ create an extra nested `memix-cli/memix-cli` directory. If a destination named
 `memix-cli` already exists but is not a previous installation of this skill,
 stop instead of overwriting it.
 
-If the current agent is neither Codex, pi, nor Claude Code, keep the
-extracted skill in a temporary location rather than guessing an installation
-directory.
+If the current agent is neither Codex, pi, Claude Code, nor DeepSeek Harness,
+keep the extracted skill in a temporary location rather than guessing an
+installation directory.
 
 Read the entire extracted `SKILL.md` in the current session before running
 memix for the user; a newly installed skill might only be discovered
