@@ -580,6 +580,292 @@ TEST_CASE("replacing a rule file leaves prior tree readable", "[store]") {
                                      first->blob.object.id)));
 }
 
+TEST_CASE("removing a rule file creates a generation and preserves history",
+          "[store]") {
+  TemporaryDirectory directory("rule-remove-file");
+  const fs::path python_source = directory.path() / "python.md";
+  const fs::path rust_source = directory.path() / "rust.md";
+  write_file(python_source, "python rules\n");
+  write_file(rust_source, "rust rules\n");
+
+  const memix::Store store(directory.path() / "store");
+  const auto first = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = python_source,
+      .context_path = "lang/python/AGENTS.md",
+      .message = "add python",
+  });
+  REQUIRE(first.has_value());
+  const auto second = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = rust_source,
+      .context_path = "lang/rust/AGENTS.md",
+      .message = "add rust",
+  });
+  REQUIRE(second.has_value());
+
+  const auto removed = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "lang/python/AGENTS.md",
+  });
+  REQUIRE(removed.has_value());
+  REQUIRE(removed->type == memix::MemoryObjectType::Rules);
+  REQUIRE(removed->context_path == fs::path("lang/python/AGENTS.md"));
+  REQUIRE(removed->previous_generation == second->generation.id);
+  REQUIRE(removed->generation.parent == second->generation.id);
+  REQUIRE(removed->generation.message == "remove lang/python/AGENTS.md");
+  REQUIRE_FALSE(removed->projection_warning.has_value());
+
+  const auto latest = store.read_ref("rules/latest");
+  REQUIRE(latest.has_value());
+  REQUIRE(latest->has_value());
+  REQUIRE(**latest == removed->generation.id);
+  const auto third_generation_ref = store.read_ref("rules/generations/000003");
+  REQUIRE(third_generation_ref.has_value());
+  REQUIRE(third_generation_ref->has_value());
+  REQUIRE(**third_generation_ref == removed->generation.id);
+
+  const auto missing =
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md");
+  REQUIRE_FALSE(missing.has_value());
+  REQUIRE(missing.error().kind == memix::ErrorKind::ContextPathNotFound);
+
+  const auto files = store.list_files(memix::MemoryObjectType::Rules);
+  REQUIRE(files.has_value());
+  REQUIRE(files->size() == 1);
+  REQUIRE((*files)[0].context_path == fs::path("lang/rust/AGENTS.md"));
+
+  const auto old_file =
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md",
+                      std::optional<std::string_view>{second->generation.id});
+  REQUIRE(old_file.has_value());
+  REQUIRE(read_file(old_file->object_dir / old_file->content_path)
+          == "python rules\n");
+  REQUIRE(path_exists(object_dir_for(store, memix::MemoryObjectType::Rules,
+                                     first->blob.object.id)));
+}
+
+TEST_CASE("removing the last file prunes empty trees down to an empty root",
+          "[store]") {
+  TemporaryDirectory directory("rule-remove-last");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "only rules\n");
+
+  const memix::Store store(directory.path() / "store");
+  const auto ingest = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "lang/python/AGENTS.md",
+      .message = "add python",
+  });
+  REQUIRE(ingest.has_value());
+
+  const auto removed = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "lang/python/AGENTS.md",
+      .message = "drop python",
+  });
+  REQUIRE(removed.has_value());
+  REQUIRE(removed->generation.message == "drop python");
+
+  const auto root_tree = store.read_tree(memix::MemoryObjectType::Rules,
+                                         removed->generation.root_tree);
+  REQUIRE(root_tree.has_value());
+  REQUIRE(root_tree->entries.empty());
+
+  const auto files = store.list_files(memix::MemoryObjectType::Rules);
+  REQUIRE(files.has_value());
+  REQUIRE(files->empty());
+  const auto missing_lang =
+      store.read_file(memix::MemoryObjectType::Rules, "lang/python/AGENTS.md");
+  REQUIRE_FALSE(missing_lang.has_value());
+  REQUIRE(missing_lang.error().kind == memix::ErrorKind::ContextPathNotFound);
+}
+
+TEST_CASE("removing a directory removes its subtree recursively", "[store]") {
+  TemporaryDirectory directory("document-remove-tree");
+  const fs::path design = directory.path() / "design.md";
+  const fs::path decisions = directory.path() / "decisions.md";
+  const fs::path notes = directory.path() / "notes.md";
+  write_file(design, "design\n");
+  write_file(decisions, "decisions\n");
+  write_file(notes, "notes\n");
+
+  const memix::Store store(directory.path() / "store");
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Documents,
+                  .source_path = design,
+                  .context_path = "repo/design.md",
+              })
+              .has_value());
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Documents,
+                  .source_path = decisions,
+                  .context_path = "repo/arch/decisions.md",
+              })
+              .has_value());
+  const auto keeper = store.ingest_file({
+      .type = memix::MemoryObjectType::Documents,
+      .source_path = notes,
+      .context_path = "notes.md",
+  });
+  REQUIRE(keeper.has_value());
+
+  const auto removed = store.remove_file({
+      .type = memix::MemoryObjectType::Documents,
+      .context_path = "repo",
+  });
+  REQUIRE(removed.has_value());
+  REQUIRE(removed->previous_generation == keeper->generation.id);
+
+  const auto files = store.list_files(memix::MemoryObjectType::Documents);
+  REQUIRE(files.has_value());
+  REQUIRE(files->size() == 1);
+  REQUIRE((*files)[0].context_path == fs::path("notes.md"));
+  const auto missing_dir =
+      store.read_file(memix::MemoryObjectType::Documents, "repo/design.md");
+  REQUIRE_FALSE(missing_dir.has_value());
+  REQUIRE(missing_dir.error().kind == memix::ErrorKind::ContextPathNotFound);
+
+  const auto old_files =
+      store.list_files(memix::MemoryObjectType::Documents,
+                       std::optional<std::string_view>{keeper->generation.id});
+  REQUIRE(old_files.has_value());
+  REQUIRE(old_files->size() == 3);
+
+  REQUIRE_FALSE(path_exists(store.root() / "latest" / "documents" / "repo"));
+  REQUIRE(read_file(store.root() / "latest" / "documents" / "notes.md")
+          == "notes\n");
+}
+
+TEST_CASE("removing a file keeps the projection in sync", "[store][expose]") {
+  TemporaryDirectory directory("latest-projection-remove");
+  const fs::path nested_source = directory.path() / "nested.md";
+  const fs::path carried_source = directory.path() / "carried.md";
+  write_file(nested_source, "nested memory\n");
+  write_file(carried_source, "carried memory\n");
+
+  const memix::Store store(directory.path() / "store");
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Rules,
+                  .source_path = nested_source,
+                  .context_path = "repo/nested/AGENTS.md",
+              })
+              .has_value());
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Rules,
+                  .source_path = carried_source,
+                  .context_path = "repo/carried.md",
+              })
+              .has_value());
+
+  const fs::path projected_nested =
+      store.root() / "latest" / "rules" / "repo" / "nested" / "AGENTS.md";
+  REQUIRE(path_is_regular_file(projected_nested));
+
+  const auto removed = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "repo/nested/AGENTS.md",
+  });
+  REQUIRE(removed.has_value());
+  REQUIRE_FALSE(removed->projection_warning.has_value());
+
+  REQUIRE_FALSE(path_exists(projected_nested));
+  REQUIRE_FALSE(path_exists(store.root() / "latest" / "rules" / "repo"
+                            / "nested"));
+  REQUIRE(read_file(store.root() / "latest" / "rules" / "repo" / "carried.md")
+          == "carried memory\n");
+
+  const auto report = store.expose();
+  REQUIRE(report.has_value());
+  REQUIRE(read_file(store.root() / "latest" / "rules" / "repo" / "carried.md")
+          == "carried memory\n");
+}
+
+TEST_CASE("remove rejects missing paths and empty histories", "[store]") {
+  TemporaryDirectory directory("rule-remove-missing");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+
+  const memix::Store store(directory.path() / "store");
+
+  const auto empty_store = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "a.md",
+  });
+  REQUIRE_FALSE(empty_store.has_value());
+  REQUIRE(empty_store.error().kind == memix::ErrorKind::ContextPathNotFound);
+
+  const auto ingest = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "a.md",
+  });
+  REQUIRE(ingest.has_value());
+
+  const auto missing = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "b.md",
+  });
+  REQUIRE_FALSE(missing.has_value());
+  REQUIRE(missing.error().kind == memix::ErrorKind::ContextPathNotFound);
+
+  const auto through_file = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "a.md/b.md",
+  });
+  REQUIRE_FALSE(through_file.has_value());
+  REQUIRE(through_file.error().kind == memix::ErrorKind::InvalidArgument);
+
+  const auto latest = store.read_ref("rules/latest");
+  REQUIRE(latest.has_value());
+  REQUIRE(latest->has_value());
+  REQUIRE(**latest == ingest->generation.id);
+  const auto second_generation_ref = store.read_ref("rules/generations/000002");
+  REQUIRE(second_generation_ref.has_value());
+  REQUIRE_FALSE(second_generation_ref->has_value());
+  const auto files = store.list_files(memix::MemoryObjectType::Rules);
+  REQUIRE(files.has_value());
+  REQUIRE(files->size() == 1);
+}
+
+TEST_CASE("remove rejects unsafe paths", "[store]") {
+  TemporaryDirectory directory("rule-remove-invalid-paths");
+  const fs::path source = directory.path() / "AGENTS.md";
+  write_file(source, "rules\n");
+
+  const memix::Store store(directory.path() / "store");
+  REQUIRE(store
+              .ingest_file({
+                  .type = memix::MemoryObjectType::Rules,
+                  .source_path = source,
+                  .context_path = "a.md",
+              })
+              .has_value());
+
+  const auto expect_invalid = [&store](const fs::path &path) {
+    const auto result = store.remove_file({
+        .type = memix::MemoryObjectType::Rules,
+        .context_path = path,
+    });
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind == memix::ErrorKind::InvalidArgument);
+  };
+  expect_invalid("");
+  expect_invalid("/abs/AGENTS.md");
+  expect_invalid("lang/../python/AGENTS.md");
+  expect_invalid("lang/python/");
+  expect_invalid("lang\\python\\AGENTS.md");
+
+  const auto files = store.list_files(memix::MemoryObjectType::Rules);
+  REQUIRE(files.has_value());
+  REQUIRE(files->size() == 1);
+}
+
 TEST_CASE("documents can be ingested into a canonical context tree",
           "[store]") {
   TemporaryDirectory directory("document-context-ingest");

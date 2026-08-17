@@ -11,6 +11,7 @@ Treat Memix as a Nix-inspired, provenance-aware build system for agent context, 
 
 - Treat stored blobs as immutable evidence. Raw ingest without `--dest` creates blob objects only; ingest with `--dest` also creates a new logical-tree generation. Ingest changed content again instead of editing files inside the store directly.
 - Treat logical trees and generation objects as immutable history, and refs such as `latest` as movable version selectors. Use `latest` intentionally, and pin a generation when replay, auditability, or reproducibility matters.
+- Use `memix-store rm` to retract a logical file or directory subtree. Removal commits a new generation whose tree no longer contains the path; it never erases blobs or history, so pinned generations keep resolving and `list` still shows the blob.
 - Treat `<store-root>/latest/` as a derived, read-only hardlink projection for ordinary filesystem discovery. It is rebuildable with `memix-store expose`, never a source of truth, and blob-only ingests do not appear there.
 - Treat views as first-class reproducible derived objects, not as new sources of truth or store object types. A view environment may be inspected, referenced by another view, mounted below a path, and composed transitively. Reuse an existing environment instead of copying or modifying its output.
 - Treat movable refs and profile `current` pointers as the small mutable control layer. Profiles record numbered generations and switch one `current` pointer; workspaces attach through a symlink (or a disposable copy) and never edit memory in place.
@@ -109,6 +110,15 @@ Remember these constraints:
 - `--message` is valid only with `--dest`.
 - A successful `--dest` ingest logs the full generation ID. Retain it when a later view must pin the exact input rather than use a numbered ref.
 - Logical paths are relative paths inside the chosen type, such as `repo/AGENTS.md`, `sessions/root.json`, or `notes/design.md`.
+
+Remove a logical file or a whole directory subtree from a type's latest tree:
+
+```text
+memix-store --store-root "<store-root>" rm --type documents notes/design.md
+memix-store --store-root "<store-root>" rm --type chat sessions/2026-05-20 --message "prune old session"
+```
+
+Removal commits a new generation and advances the type's latest ref; earlier generations and blobs stay intact, so pinned locators still resolve and `cat --generation` replays history. `--type` is required, the path must exist in the latest tree, and `--message` works like the ingest one.
 
 ## Inspect Store Contents
 

@@ -47,6 +47,7 @@ enum class StoreCommand : std::uint8_t {
   Cat,
   Tree,
   Expose,
+  Rm,
   Rules,
   RulesCat,
   RulesTree,
@@ -64,6 +65,9 @@ struct StoreCliOptions {
   std::string cat_type_name;
   fs::path cat_path;
   std::string cat_generation;
+  std::string rm_type_name;
+  fs::path rm_path;
+  std::string rm_message;
   std::string tree_type_name;
   std::string tree_generation;
   fs::path tree_path;
@@ -454,6 +458,41 @@ run_ingest(const StoreCliOptions &options,
   return {};
 }
 
+memix::cli_detail::VoidResult run_rm(const StoreCliOptions &options,
+                                     const std::shared_ptr<spdlog::logger> &logger) {
+  const memix::cli_detail::Result<memix::MemoryObjectType> type =
+      require_command_type(CommandTypeRequest{
+          .command_name = "rm",
+          .type_name = options.rm_type_name,
+      });
+  if (!type) {
+    return std::unexpected(type.error());
+  }
+  if (options.rm_path.empty()) {
+    return memix::cli_detail::unexpected_error("rm expects a logical path");
+  }
+  const memix::cli_detail::Result<memix::Store> store = make_store(options);
+  if (!store) {
+    return std::unexpected(store.error());
+  }
+  const memix::StoreResult<memix::FileRemoveResult> result =
+      store->remove_file({
+          .type = *type,
+          .context_path = options.rm_path,
+          .message = options.rm_message,
+      });
+  if (!result) {
+    return memix::cli_detail::unexpected_error(result.error());
+  }
+  logger->info("removed type={} path={} generation={}",
+               memix::to_string(result->type),
+               result->context_path.generic_string(), result->generation.id);
+  if (result->projection_warning.has_value()) {
+    logger->warn("{}", *result->projection_warning);
+  }
+  return {};
+}
+
 memix::cli_detail::VoidResult run_expose(const StoreCliOptions &options) {
   const memix::cli_detail::Result<memix::Store> store = make_store(options);
   if (!store) {
@@ -637,6 +676,24 @@ void add_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
                         "latest ref.");
 }
 
+void add_rm_command(Argum::Parser &parser, StoreCliOptions &options) {
+  add_type_option(parser, options.rm_type_name);
+  parser.add(Argum::Positional("path")
+                 .help("Logical file or directory path to remove from the "
+                       "selected type's context tree. Removing a directory "
+                       "removes its whole subtree.")
+                 .occurs(Argum::neverOrOnce)
+                 .handler([&options](std::string_view value) {
+                   options.rm_path = fs::path(value);
+                 }));
+  parser.add(Argum::Option("--message")
+                 .argName("TEXT")
+                 .help("Context generation message for the removal.")
+                 .handler([&options](std::string_view value) {
+                   options.rm_message = value;
+                 }));
+}
+
 void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
   add_type_option(parser, options.tree_type_name);
   parser.add(Argum::Option("--all")
@@ -726,7 +783,7 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: list, ingest, cat, tree, expose, or rules.")
+          .help("Subcommand: list, ingest, cat, tree, expose, rm, or rules.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "list") {
@@ -754,13 +811,18 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
               add_expose_command(parser, options);
               return {};
             }
+            if (value == "rm") {
+              options.command = StoreCommand::Rm;
+              add_rm_command(parser, options);
+              return {};
+            }
             if (value == "rules") {
               add_rules_commands(parser, options);
               return {};
             }
             return memix::cli_detail::argum_validation_error(
                 std::format("unsupported command `{}`; expected "
-                            "list|ingest|cat|tree|expose|rules",
+                            "list|ingest|cat|tree|expose|rm|rules",
                             value));
           }));
 }
@@ -813,6 +875,14 @@ void print_expose_help() {
   std::print("{}", parser.formatHelp("memix-store expose"));
 }
 
+void print_rm_help() {
+  Argum::Parser parser;
+  StoreCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_rm_command(parser, options);
+  std::print("{}", parser.formatHelp("memix-store rm"));
+}
+
 void print_rules_help() {
   Argum::Parser parser;
   StoreCliOptions options;
@@ -854,6 +924,9 @@ void print_selected_help(StoreCommand command) {
   case StoreCommand::Expose:
     print_expose_help();
     return;
+  case StoreCommand::Rm:
+    print_rm_help();
+    return;
   case StoreCommand::Rules:
     print_rules_help();
     return;
@@ -885,6 +958,8 @@ dispatch(const StoreCliOptions &options,
     return run_tree(options);
   case StoreCommand::Expose:
     return run_expose(options);
+  case StoreCommand::Rm:
+    return run_rm(options, logger);
   case StoreCommand::Rules:
     return memix::cli_detail::unexpected_error(
         "rules requires a subcommand: cat|tree");

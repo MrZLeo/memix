@@ -1641,6 +1641,89 @@ attach_blob_to_context_tree(const fs::path &root, memix::MemoryObjectType type,
   return child_id;
 }
 
+StoreResult<std::string>
+detach_path_from_context_tree(const fs::path &root, memix::MemoryObjectType type,
+                              std::string_view root_tree_id,
+                              std::span<const std::string> path_components,
+                              const fs::path &context_path) {
+  if (path_components.empty()) {
+    return store_error(
+        memix::ErrorKind::InvalidArgument,
+        std::format("{} path must contain at least one component",
+                    context_label(type)));
+  }
+
+  std::string current_tree_id = std::string(root_tree_id);
+  std::vector<ContextTreeRewriteFrame> frames;
+  for (auto component = path_components.begin();
+       component != path_components.end(); ++component) {
+    StoreResult<memix::ContextTree> tree =
+        read_context_tree_object(root, type, current_tree_id);
+    if (!tree) {
+      return std::unexpected(tree.error());
+    }
+    const std::string_view name = *component;
+    const auto entry = find_context_tree_entry(tree->entries, name);
+    if (entry == tree->entries.end()) {
+      return store_error(memix::ErrorKind::ContextPathNotFound,
+                         std::format("{} path does not exist `{}`",
+                                     context_label(type),
+                                     context_path.generic_string()));
+    }
+    const bool is_leaf = std::next(component) == path_components.end();
+    if (!is_leaf && entry->kind != memix::ContextTreeEntryKind::Tree) {
+      return store_error(memix::ErrorKind::InvalidArgument,
+                         std::format("{} path component `{}` is not a tree",
+                                     context_label(type), name));
+    }
+    std::string next_tree_id;
+    if (!is_leaf) {
+      next_tree_id = entry->id;
+    }
+    frames.push_back(ContextTreeRewriteFrame{
+        .name = std::string(name),
+        .entries = std::move(tree->entries),
+    });
+    current_tree_id = std::move(next_tree_id);
+  }
+
+  // Rewrite the tree chain bottom-up. The deepest frame erases the removed
+  // entry; every other frame either upserts the rewritten child tree or, when
+  // the child subtree lost its last entry, drops the child entry entirely. The
+  // root frame is always written, even when it becomes the empty tree.
+  std::optional<std::string> child_id;
+  for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+    if (child_id.has_value()) {
+      upsert_context_tree_entry(frame->entries,
+                                memix::ContextTreeEntry{
+                                    .kind = memix::ContextTreeEntryKind::Tree,
+                                    .name = frame->name,
+                                    .id = *child_id,
+                                });
+    } else {
+      const auto target = find_context_tree_entry(frame->entries, frame->name);
+      if (target != frame->entries.end()) {
+        frame->entries.erase(target);
+      }
+    }
+    const bool is_root = std::next(frame) == frames.rend();
+    if (!is_root && frame->entries.empty()) {
+      child_id = std::nullopt;
+      continue;
+    }
+    StoreResult<memix::ContextTree> new_tree =
+        write_context_tree_object(root, type, std::move(frame->entries));
+    if (!new_tree) {
+      return std::unexpected(new_tree.error());
+    }
+    child_id = new_tree->id;
+  }
+  if (!child_id.has_value()) {
+    return store_error("context tree removal produced no root tree");
+  }
+  return *child_id;
+}
+
 StoreResult<fs::path>
 ref_path_for(const fs::path &root, std::string_view ref_name) {
   return ref_name_components(ref_name).transform(
@@ -2626,6 +2709,111 @@ Store::ingest_file(const FileIngestRequest &request) const {
   std::optional<std::string> previous_generation_result = *previous_generation;
   return FileIngestResult{
       .blob = std::move(*blob),
+      .generation = std::move(*generation),
+      .previous_generation = std::move(previous_generation_result),
+      .type = request.type,
+      .context_path = components->path(),
+      .projection_warning = std::move(projection_warning),
+  };
+}
+
+StoreResult<FileRemoveResult>
+Store::remove_file(const FileRemoveRequest &request) const {
+  const StoreResult<LogicalPathComponents> components =
+      context_path_components(request.type, request.context_path);
+  if (!components) {
+    return std::unexpected(components.error());
+  }
+
+  const fs::path update_lock_path =
+      locks_dir_for(root_) / update_lock_name(request.type);
+  const StoreVoid update_lock = acquire_directory_lock(
+      update_lock_path,
+      std::format("{} update", memix::to_string(request.type)));
+  if (!update_lock) {
+    return std::unexpected(update_lock.error());
+  }
+  const memix::scope_exit update_lock_cleanup(
+      [update_lock_path] { std::ignore = fs::remove_all(update_lock_path); });
+
+  const std::string latest_ref = latest_ref_name(request.type);
+  StoreResult<std::optional<std::string>> previous_generation =
+      read_ref_value(root_, latest_ref);
+  if (!previous_generation) {
+    return std::unexpected(previous_generation.error());
+  }
+  if (!previous_generation->has_value()) {
+    return store_error(memix::ErrorKind::ContextPathNotFound,
+                       std::format("{} path does not exist `{}`",
+                                   context_label(request.type),
+                                   components->path().generic_string()));
+  }
+
+  StoreResult<ContextGeneration> parent = read_context_generation_object(
+      root_, request.type, **previous_generation);
+  if (!parent) {
+    return std::unexpected(parent.error());
+  }
+
+  StoreResult<std::string> root_tree =
+      detach_path_from_context_tree(root_, request.type, parent->root_tree,
+                                    components->as_span(), components->path());
+  if (!root_tree) {
+    return std::unexpected(root_tree.error());
+  }
+
+  const std::string default_message =
+      std::format("remove {}", components->path().generic_string());
+  const std::string_view generation_message =
+      request.message.empty() ? std::string_view(default_message)
+                              : std::string_view(request.message);
+  const std::optional<std::string_view> parent_generation =
+      previous_generation->transform(
+          [](std::string_view value) { return value; });
+  StoreResult<ContextGeneration> generation = write_context_generation_object(
+      root_, request.type, *root_tree, parent_generation, generation_message);
+  if (!generation) {
+    return std::unexpected(generation.error());
+  }
+
+  StoreResult<std::string> generation_ref =
+      next_generation_ref_name(root_, request.type);
+  if (!generation_ref) {
+    return std::unexpected(generation_ref.error());
+  }
+  const StoreVoid generation_ref_updated =
+      update_ref_unlocked(root_, *generation_ref, std::nullopt, generation->id);
+  if (!generation_ref_updated) {
+    return std::unexpected(generation_ref_updated.error());
+  }
+
+  const StoreVoid ref_updated =
+      update_ref_unlocked(root_, latest_ref, parent_generation, generation->id);
+  if (!ref_updated) {
+    const StoreError &ref_error = ref_updated.error();
+    const StoreVoid rollback = remove_ref_unlocked(root_, *generation_ref);
+    if (!rollback) {
+      return store_error(std::format(
+          "{}; additionally failed to roll back `{}`: {}", ref_error.message,
+          *generation_ref, rollback.error().message));
+    }
+    return std::unexpected(ref_error);
+  }
+
+  std::optional<std::string> projection_warning;
+  const StoreVoid projection_refreshed =
+      refresh_projection_for_type(root_, request.type, parent->root_tree,
+                                  *root_tree);
+  if (!projection_refreshed) {
+    projection_warning = std::format(
+        "failed to refresh latest/{} projection: {}; run `memix-store expose` "
+        "to rebuild it",
+        memix::to_string(request.type),
+        projection_refreshed.error().message);
+  }
+
+  std::optional<std::string> previous_generation_result = *previous_generation;
+  return FileRemoveResult{
       .generation = std::move(*generation),
       .previous_generation = std::move(previous_generation_result),
       .type = request.type,

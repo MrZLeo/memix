@@ -192,7 +192,11 @@ then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,
 and `documents`. Stored bytes live as immutable SHA-256 blobs under each
 type's `blobs/` directory; when ingest uses `--dest`, memix also records the
 blob in that type's canonical context tree and advances the type's latest
-generation ref.
+generation ref. `memix-store rm --type <type> <path>` retracts a logical file
+or directory subtree by committing a new generation whose tree no longer
+contains the path. Removal is logical and history-preserving: blobs and prior
+generations remain immutable and readable, so pinned generation locators keep
+resolving.
 
 ### Discovery surface
 
@@ -207,7 +211,8 @@ grep -R -i "search terms" /tmp/memix-store/latest
 ```
 
 An ingest with `--dest` refreshes the affected type after committing its new
-generation. Blob-only ingests have no logical path and do not appear. The
+generation, and `rm` refreshes it the same way after a removal. Blob-only
+ingests have no logical path and do not appear. The
 projection contains no source-of-truth state and can be deleted or repaired
 with `memix-store --store-root /tmp/memix-store expose`; a refresh failure
 warns without rolling back the committed ingest. Searching this surface is

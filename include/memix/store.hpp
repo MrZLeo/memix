@@ -183,6 +183,20 @@ struct FileIngestResult {
   std::optional<std::string> projection_warning;
 };
 
+struct FileRemoveRequest {
+  MemoryObjectType type = MemoryObjectType::Documents;
+  fs::path context_path;
+  std::string_view message;
+};
+
+struct FileRemoveResult {
+  ContextGeneration generation;
+  std::optional<std::string> previous_generation;
+  MemoryObjectType type = MemoryObjectType::Documents;
+  fs::path context_path;
+  std::optional<std::string> projection_warning;
+};
+
 struct StoreFile {
   MemoryObjectType type = MemoryObjectType::Documents;
   fs::path context_path;
@@ -229,6 +243,9 @@ public:
 
   [[nodiscard]] StoreResult<FileIngestResult>
   ingest_file(const FileIngestRequest &request) const;
+
+  [[nodiscard]] StoreResult<FileRemoveResult>
+  remove_file(const FileRemoveRequest &request) const;
 
   [[nodiscard]] StoreResult<StoredObject>
   read_blob(MemoryObjectType type, std::string_view object_id) const;
