@@ -163,6 +163,10 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
       endif()
     endif()
 
+    if(bin_name STREQUAL "memix-tui")
+      target_link_libraries(${bin_target} PRIVATE ftxui::component)
+    endif()
+
     list(APPEND bin_targets ${bin_target})
   endforeach()
 endif()
@@ -262,6 +266,16 @@ target_include_directories(
 # Identify and link with the specific "packages" the project uses
 if(${PROJECT_NAME}_BUILD_EXECUTABLE)
   CPMAddPackage(
+    NAME FTXUI
+    GITHUB_REPOSITORY ArthurSonzogni/FTXUI
+    VERSION 7.0.2
+    OPTIONS
+      "FTXUI_BUILD_DOCS OFF"
+      "FTXUI_BUILD_EXAMPLES OFF"
+      "FTXUI_BUILD_TESTS OFF"
+      "FTXUI_ENABLE_INSTALL OFF"
+  )
+  CPMAddPackage(
     NAME argum
     GITHUB_REPOSITORY gershnik/argum
     GIT_TAG v2.8
@@ -287,6 +301,25 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
   if(NOT TARGET spdlog::spdlog)
     find_package(spdlog CONFIG REQUIRED)
   endif()
+
+  function(project_mark_dependency_includes_system target)
+    if(NOT TARGET ${target})
+      return()
+    endif()
+
+    get_target_property(dependency_includes ${target} INTERFACE_INCLUDE_DIRECTORIES)
+    if(dependency_includes)
+      set_target_properties(
+        ${target}
+        PROPERTIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${dependency_includes}"
+      )
+    endif()
+  endfunction()
+
+  foreach(dependency_target IN ITEMS screen dom component)
+    project_mark_dependency_includes_system(${dependency_target})
+  endforeach()
 
   foreach(bin_target IN LISTS bin_targets)
     target_include_directories(

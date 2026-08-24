@@ -35,6 +35,7 @@ simdjson::dom::element JsonDocument::root() const noexcept { return root_; }
 simdjson::dom::object JsonDocument::root_object() const noexcept {
   simdjson::dom::object object;
   [[maybe_unused]] const simdjson::error_code error = root_.get(object);
+  // NOLINTNEXTLINE(cert-dcl03-c, hicpp-static-assert, misc-static-assert): runtime error check, not a constant condition
   assert(error == simdjson::SUCCESS);
   return object;
 }

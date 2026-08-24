@@ -29,6 +29,11 @@ class Memix < Formula
     sha256 "d8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744"
   end
 
+  resource "ftxui" do
+    url "https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v7.0.2.tar.gz"
+    sha256 "28da2c3389440af869f8781679b537c4a3d5b4df42aeab54eb1564d1b61af864"
+  end
+
   def install
     cpm_cache = buildpath/".cpm-cache"
 
@@ -39,6 +44,7 @@ class Memix < Formula
     resource("simdjson").stage cpm_cache/"simdjson/4924"
     resource("argum").stage cpm_cache/"argum/e544"
     resource("spdlog").stage cpm_cache/"spdlog/7d8f"
+    resource("ftxui").stage cpm_cache/"ftxui/7e12"
 
     args = std_cmake_args + %W[
       -DCPM_SOURCE_CACHE=#{cpm_cache}
