@@ -40,7 +40,8 @@ jobs:
     - name: show clang-tidy
       shell: bash
       run: |
-        clang_tidy="$(brew --prefix llvm@20)/bin/clang-tidy"
+        brew install llvm
+        clang_tidy="$(brew --prefix llvm)/bin/clang-tidy"
         clang_tidy_cxx_include="$(xcrun --sdk macosx --show-sdk-path)/usr/include/c++/v1"
         test -x "$clang_tidy"
         test -d "$clang_tidy_cxx_include"
