@@ -46,9 +46,9 @@ jobs:
           path: ${{ env.CPM_SOURCE_CACHE }}
           key: ${{ matrix.config.os }}-${{ matrix.config.asset }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
 
-      - name: select Xcode Command Line Tools
+      - name: select Xcode for the SwiftUI Inspector build
         if: runner.os == 'macOS'
-        run: sudo xcode-select --switch /Library/Developer/CommandLineTools
+        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 
       - name: set up MSVC environment
         if: runner.os == 'Windows'
@@ -87,7 +87,8 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
             -Dmemix_STATIC_LINK=ON \
-            -Dmemix_ENABLE_LTO=ON
+            -Dmemix_ENABLE_LTO=ON \
+            -Dmemix_BUILD_MACOS_INSPECTOR=ON
 
       - name: build
         run: cmake --build build --parallel 4
@@ -139,6 +140,20 @@ jobs:
               exit 1
             fi
           done
+
+      - name: verify and package the Memix Inspector app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="build/macos/MemixInspector/memix-inspector.app"
+          test -d "$app"
+          xcrun vtool -show-build "$app/Contents/MacOS/memix-inspector"
+          # Ad-hoc signature: the release has no Developer ID identity, but a
+          # signature keeps Gatekeeper diagnostics and zip metadata sane.
+          codesign --force --sign - "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/MemixInspector-${{ matrix.config.asset }}.zip"
+          ls -lh "dist/MemixInspector-${{ matrix.config.asset }}.zip"
 
       - name: verify static Windows runtime
         if: runner.os == 'Windows'

@@ -91,7 +91,7 @@ assets:
 | Platform | Assets |
 | -------- | ------ |
 | Linux x86_64 | `memix-store-linux-x86_64`, `memix-view-linux-x86_64`, `memix-tui-linux-x86_64` |
-| macOS arm64 | `memix-store-macos-arm64`, `memix-view-macos-arm64`, `memix-tui-macos-arm64` |
+| macOS arm64 | `memix-store-macos-arm64`, `memix-view-macos-arm64`, `memix-tui-macos-arm64`, `MemixInspector-macos-arm64.zip` |
 | Windows x86_64 | `memix-store-windows-x86_64.exe`, `memix-view-windows-x86_64.exe`, `memix-tui-windows-x86_64.exe` |
 | Any | `memix-cli-skill.tar.gz` (platform-independent) |
 
