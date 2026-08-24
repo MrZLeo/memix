@@ -75,7 +75,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        for binary in build/bin/Release/memix-store build/bin/Release/memix-view; do
+        for binary in build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
           build_info="$(xcrun vtool -show-build "$binary")"
           printf '%s\n' "$build_info"
           if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
@@ -94,6 +94,7 @@ jobs:
         mkdir compatibility
         cp build/bin/Release/memix-store compatibility/
         cp build/bin/Release/memix-view compatibility/
+        cp build/bin/Release/memix-tui compatibility/
         cp build/test/*_Tests compatibility/
 
     - name: upload macOS 14 compatibility tests
@@ -154,10 +155,13 @@ jobs:
         set -euo pipefail
         store="compatibility/memix-store"
         view="compatibility/memix-view"
+        inspect="compatibility/memix-tui"
 
         store_version="$("$store" --version)"
         view_version="$("$view" --version)"
+        inspect_version="$("$inspect" --version)"
         test "$store_version" = "$view_version"
+        test "$store_version" = "$inspect_version"
         case "$store_version" in
           'memix '*) ;;
           *)
@@ -168,9 +172,45 @@ jobs:
 
         grep -Fq 'Usage: memix-store' <<<"$("$store" --help)"
         grep -Fq 'Usage: memix-view' <<<"$("$view" --help)"
+        grep -Fq 'Usage: memix-tui' <<<"$("$inspect" --help)"
 
         smoke_root="$(mktemp -d "$RUNNER_TEMP/memix-readonly-smoke.XXXXXX")"
         rmdir "$smoke_root"
         test "$("$store" --store-root "$smoke_root/store" list --json)" = '[]'
         test "$("$view" --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
         test ! -e "$smoke_root"
+
+  inspector:
+    name: Build the Memix Inspector app
+    runs-on: macos-26
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: cache CPM downloads
+      uses: actions/cache@v6
+      with:
+        path: ${{ env.CPM_SOURCE_CACHE }}
+        key: macos-26-arm64-inspector-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
+
+    - name: pin the active Xcode developer directory
+      run: |
+        developer_dir="$(xcode-select -p)"
+        echo "active developer dir: $developer_dir"
+        echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+        xcrun --find swiftc
+        xcrun --sdk macosx --show-sdk-path
+
+    - name: configure
+      run: |
+        cmake -G Ninja -S . -B build \
+          -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
+          -Dmemix_BUILD_MACOS_INSPECTOR=ON \
+          -DCMAKE_Swift_COMPILER="$(xcrun --find swiftc)" \
+          -DCMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)"
+
+    - name: build the app
+      run: cmake --build build --target memix-inspector --parallel 4

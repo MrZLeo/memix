@@ -46,9 +46,9 @@ jobs:
           path: ${{ env.CPM_SOURCE_CACHE }}
           key: ${{ matrix.config.os }}-${{ matrix.config.asset }}-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
 
-      - name: select Xcode for the SwiftUI Inspector build
+      - name: select Xcode Command Line Tools
         if: runner.os == 'macOS'
-        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        run: sudo xcode-select --switch /Library/Developer/CommandLineTools
 
       - name: set up MSVC environment
         if: runner.os == 'Windows'
@@ -82,19 +82,12 @@ jobs:
           CC: ${{ matrix.config.cc }}
           CXX: ${{ matrix.config.cxx }}
         run: |
-          # CMake derives the Swift compiler from the C++ toolchain directory,
-          # which points at the Command Line Tools whose swiftc cannot build.
-          # Pin the compiler from the selected Xcode instead.
-          swift_compiler="$(xcrun --find swiftc)"
-          "$swift_compiler" --version
           cmake -G Ninja -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
             -Dmemix_STATIC_LINK=ON \
-            -Dmemix_ENABLE_LTO=ON \
-            -Dmemix_BUILD_MACOS_INSPECTOR=ON \
-            -DCMAKE_Swift_COMPILER="$swift_compiler"
+            -Dmemix_ENABLE_LTO=ON
 
       - name: build
         run: cmake --build build --parallel 4
@@ -147,20 +140,6 @@ jobs:
             fi
           done
 
-      - name: verify and package the Memix Inspector app
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="build/macos/MemixInspector/memix-inspector.app"
-          test -d "$app"
-          xcrun vtool -show-build "$app/Contents/MacOS/memix-inspector"
-          # Ad-hoc signature: the release has no Developer ID identity, but a
-          # signature keeps Gatekeeper diagnostics and zip metadata sane.
-          codesign --force --sign - "$app"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/MemixInspector-${{ matrix.config.asset }}.zip"
-          ls -lh "dist/MemixInspector-${{ matrix.config.asset }}.zip"
-
       - name: verify static Windows runtime
         if: runner.os == 'Windows'
         shell: pwsh
@@ -205,6 +184,70 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.config.asset }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  inspector:
+    name: Build and package Memix Inspector
+    runs-on: macos-26
+    permissions:
+      contents: read
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: cache CPM downloads
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: ${{ runner.os }}-inspector-cpm-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'test/**') }}
+
+      - name: pin the active Xcode developer directory
+        run: |
+          # Runner images pre-set DEVELOPER_DIR, which overrides the
+          # xcode-select database and can mix toolchains (an Xcode swiftc
+          # with a Command Line Tools SDK cannot load the Swift standard
+          # library). Export the resolved directory so xcrun, CMake, and
+          # swiftc all agree on one toolchain.
+          developer_dir="$(xcode-select -p)"
+          echo "active developer dir: $developer_dir"
+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+          xcrun --find swiftc
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: configure
+        run: |
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
+            -Dmemix_BUILD_MACOS_INSPECTOR=ON \
+            -DCMAKE_Swift_COMPILER="$(xcrun --find swiftc)" \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)"
+
+      - name: build the app
+        run: cmake --build build --target memix-inspector --parallel 4
+
+      - name: verify and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="build/macos/MemixInspector/memix-inspector.app"
+          test -d "$app"
+          xcrun vtool -show-build "$app/Contents/MacOS/memix-inspector"
+          # Ad-hoc signature: no Developer ID identity, but a signature
+          # keeps Gatekeeper diagnostics and zip metadata sane.
+          codesign --force --sign - "$app"
+          mkdir dist
+          ditto -c -k --sequesterRsrc --keepParent "$app" dist/MemixInspector-macos-arm64.zip
+          ls -lh dist
+
+      - name: upload app
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-arm64-inspector
           path: dist/*
           if-no-files-found: error
           compression-level: 0
@@ -287,7 +330,7 @@ jobs:
   release:
     name: Publish GitHub release
     runs-on: ubuntu-24.04
-    needs: [build, macos14]
+    needs: [build, macos14, inspector]
     permissions:
       actions: read
       contents: write
