@@ -66,8 +66,9 @@ struct CliParseResult {
 };
 
 CliParseResult parse_cli_args(int argc, char **argv) {
-  const char *program_name =
-      argc > 0 && *argv != nullptr ? *argv : "memix-tui";
+  // Fixed program name (not argv[0]) so help output matches the sibling
+  // CLIs and the release smoke tests regardless of the invocation path.
+  const char *program_name = "memix-tui";
   CliParseResult result;
   Argum::Parser parser;
   parser.add(
