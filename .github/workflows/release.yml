@@ -82,13 +82,19 @@ jobs:
           CC: ${{ matrix.config.cc }}
           CXX: ${{ matrix.config.cxx }}
         run: |
+          # CMake derives the Swift compiler from the C++ toolchain directory,
+          # which points at the Command Line Tools whose swiftc cannot build.
+          # Pin the compiler from the selected Xcode instead.
+          swift_compiler="$(xcrun --find swiftc)"
+          "$swift_compiler" --version
           cmake -G Ninja -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
             -Dmemix_STATIC_LINK=ON \
             -Dmemix_ENABLE_LTO=ON \
-            -Dmemix_BUILD_MACOS_INSPECTOR=ON
+            -Dmemix_BUILD_MACOS_INSPECTOR=ON \
+            -DCMAKE_Swift_COMPILER="$swift_compiler"
 
       - name: build
         run: cmake --build build --parallel 4
