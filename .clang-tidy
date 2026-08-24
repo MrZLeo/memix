@@ -1,5 +1,5 @@
 ---
-Checks: '*,-altera-*,-fuchsia-*,-google-*,-zircon-*,-abseil-*,-modernize-use-trailing-return-type,-llvm-*,-llvmlibc-*,-portability-avoid-pragma-once,-clang-analyzer-cplusplus.NewDeleteLeaks,-readability-braces-around-statements,-hicpp-braces-around-statements,-readability-identifier-length,-cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,-cppcoreguidelines-pro-bounds-constant-array-index'
+Checks: '*,-altera-*,-fuchsia-*,-google-*,-zircon-*,-abseil-*,-modernize-use-trailing-return-type,-llvm-*,-llvmlibc-*,-portability-template-virtual-member-function,-portability-avoid-pragma-once,-clang-analyzer-cplusplus.NewDeleteLeaks,-readability-braces-around-statements,-hicpp-braces-around-statements,-readability-identifier-length,-cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,-cppcoreguidelines-pro-bounds-constant-array-index'
 CheckOptions: [{ key: misc-non-private-member-variables-in-classes, value: IgnoreClassesWithAllMemberVariablesBeingPublic }]
 WarningsAsErrors: '*'
 HeaderFilterRegex: '(^|.*[/\\]memix[/\\])(include|src|test)[/\\].*'

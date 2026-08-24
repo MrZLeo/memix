@@ -503,7 +503,7 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
   REQUIRE_FALSE(truncated.binary);
   REQUIRE(truncated.truncated);
   REQUIRE(truncated.byte_count == oversized.size());
-  REQUIRE(truncated.lines.back() == tui::kTruncatedMarker);
+  REQUIRE(truncated.lines.back() == std::string(tui::kTruncatedMarker));
   REQUIRE(truncated.lines.front().size() == tui::kContentLimitBytes);
 
   std::string split_codepoint(tui::kContentLimitBytes - 1, 'x');
@@ -512,7 +512,7 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
       tui::decode_content(split_codepoint);
   REQUIRE(boundary.truncated);
   REQUIRE(boundary.lines.front().size() == tui::kContentLimitBytes - 1);
-  REQUIRE(boundary.lines.back() == tui::kTruncatedMarker);
+  REQUIRE(boundary.lines.back() == std::string(tui::kTruncatedMarker));
 
   REQUIRE(tui::bounded_content_read_size(12) == 12);
   REQUIRE(tui::bounded_content_read_size(tui::kContentLimitBytes + 100)
@@ -523,7 +523,7 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
   REQUIRE(bounded.byte_count == tui::kContentLimitBytes + 100);
   REQUIRE(bounded.truncated);
   REQUIRE(bounded.lines.front().size() == tui::kContentLimitBytes);
-  REQUIRE(bounded.lines.back() == tui::kTruncatedMarker);
+  REQUIRE(bounded.lines.back() == std::string(tui::kTruncatedMarker));
 
   std::string split_prefix(tui::kContentLimitBytes - 1, 'x');
   split_prefix += "\xE2";
@@ -533,7 +533,7 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
   REQUIRE(bounded_boundary.truncated);
   REQUIRE(bounded_boundary.lines.front().size()
           == tui::kContentLimitBytes - 1);
-  REQUIRE(bounded_boundary.lines.back() == tui::kTruncatedMarker);
+  REQUIRE(bounded_boundary.lines.back() == std::string(tui::kTruncatedMarker));
 }
 
 TEST_CASE("default edit messages identify the operation and logical path",
