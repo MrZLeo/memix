@@ -221,6 +221,9 @@ struct ViewDerivation {
   // Absent only for legacy manifests. New manifests contain one entry for
   // every context input, including inputs that resolved no files.
   std::optional<std::vector<ResolvedViewInputResolution>> input_resolutions;
+  // Frozen runtime instructions, included in the derivation identity.
+  // Absent only for legacy manifests; never filled from mutable quest metadata.
+  std::optional<std::string> runtime_quest;
 };
 
 struct ViewEnvironmentBinding {
@@ -479,6 +482,9 @@ public:
   deactivate(const fs::path &into, bool wipe_profile = false) const;
 
 private:
+  [[nodiscard]] ViewResult<ViewDerivation>
+  build_ir(const ViewIr &ir, const BuildOptions &options) const;
+
   void
   record_activation(const ViewEnvironment &environment,
                     const ViewActivation &activation, ActivationMode mode,

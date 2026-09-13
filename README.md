@@ -164,13 +164,18 @@ available for low-level environment debugging.
 `activate` includes a read-only `README.md` at the attachment root in both
 link and copy modes. It records the activated environment and derivation IDs,
 plus the corresponding quest's ID, name, intent, and canonical query definition.
-Each generation keeps its own README snapshot: re-activating after changing
-quest annotations creates a new generation, and rollback restores the earlier
-snapshot. Legacy environments without quest metadata still activate and report
-the missing metadata in the README. Existing generation links remain usable;
-their next activation creates a generation with a README. The original
-environment tree is unchanged. An environment with a root `README.md` entry
-cannot be activated because that path is reserved for the generated README.
+The runtime quest instructions are frozen in the derivation at build time and
+participate in its identity. Changing the quest's name, intent, or query and
+then rebuilding produces a new environment. Updating the quest catalog alone
+does not change an existing environment: repeated activation, activation in
+another workspace, and rollback reproduce the same README from its build
+snapshot, even if the quest has since been deleted.
+
+Legacy derivations without an instruction snapshot use a fixed missing-snapshot
+notice instead of current quest annotations. Older generation links and cached
+READMEs are upgraded on activation or rollback. The original environment tree
+is unchanged. An environment with a root `README.md` entry cannot be activated
+because that path is reserved for the generated README.
 
 The plain `quests` and `find` tables shorten long intent/name cells with `...`
 so columns stay separate; their `--json` forms always retain the complete

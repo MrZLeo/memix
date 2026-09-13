@@ -390,14 +390,16 @@ TEST_CASE("build auto-upserts quests and records every resolution", "[quest]") {
                                                    .name = {},
                                                });
   REQUIRE(second);
-  REQUIRE_FALSE(second->inserted);
-  REQUIRE(second->derivation.id == first->derivation.id);
+  REQUIRE(second->inserted);
+  REQUIRE(second->derivation.id != first->derivation.id);
+  REQUIRE(second->id != first->id);
+  REQUIRE(second->derivation.ir_hash == first->derivation.ir_hash);
   REQUIRE(history_line_count(store_root, first->derivation.ir_hash) == 2);
 
   const auto third = views.build(*expression);
   REQUIRE(third);
   REQUIRE_FALSE(third->inserted);
-  REQUIRE(third->derivation.id == first->derivation.id);
+  REQUIRE(third->derivation.id == second->derivation.id);
   REQUIRE(history_line_count(store_root, first->derivation.ir_hash) == 3);
 
   const auto quests = views.list_quests();
@@ -610,7 +612,11 @@ TEST_CASE("legacy freshness fallback never skips an absent locator",
   REQUIRE(environment);
 
   const fs::path manifest_path = environment->derivation.manifest_path;
-  std::string legacy_manifest = read_file(manifest_path);
+  memix::ViewDerivation legacy = environment->derivation;
+  legacy.runtime_quest.reset();
+  const auto legacy_json = memix::view_derivation_json(legacy);
+  REQUIRE(legacy_json);
+  std::string legacy_manifest = *legacy_json;
   erase_json_array_field(legacy_manifest, "input_resolutions");
   REQUIRE(fs::permissions(manifest_path.parent_path(), fs::perms::owner_all));
   REQUIRE(fs::permissions(manifest_path, fs::perms::owner_all));
@@ -965,7 +971,7 @@ TEST_CASE("composed quest builds persist timestamps history and freshness",
   REQUIRE(composed->derivation.environment_inputs.size() == 1);
   REQUIRE(history_line_count(store_root, composed->derivation.ir_hash) == 1);
   const std::string manifest = read_file(composed->derivation.manifest_path);
-  REQUIRE(manifest.contains(R"("schema":"memix.view.derivation.v2")"));
+  REQUIRE(manifest.contains(R"("schema":"memix.view.derivation.v3")"));
   REQUIRE(manifest.contains(R"("created_at":")"));
   REQUIRE(manifest.contains(R"("input_resolutions":[)"));
   REQUIRE(manifest.contains(R"("resolved_view_inputs":[)"));

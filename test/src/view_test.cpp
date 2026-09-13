@@ -359,7 +359,7 @@ TEST_CASE("view file tree environment records file and directory closure",
                             / "other.md"));
 
   const std::string manifest = read_file(first->derivation.manifest_path);
-  REQUIRE(manifest.find("\"schema\":\"memix.view.derivation.v1\"")
+  REQUIRE(manifest.find("\"schema\":\"memix.view.derivation.v3\"")
           != std::string::npos);
   REQUIRE(manifest.find("\"policy_snapshot\":null") != std::string::npos);
   REQUIRE(manifest.find("\"resolved_inputs\"") != std::string::npos);
@@ -502,7 +502,7 @@ TEST_CASE("views compose environments with mounts and transitive provenance",
           composed->derivation.tree_path / "documents" / "notes" / "design.md")
       == "design\n");
   REQUIRE(read_file(composed->derivation.manifest_path)
-              .find("\"schema\":\"memix.view.derivation.v2\"")
+              .find("\"schema\":\"memix.view.derivation.v3\"")
           != std::string::npos);
   REQUIRE(read_file(composed->derivation.manifest_path)
               .find("\"resolved_view_inputs\"")

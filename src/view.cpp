@@ -46,6 +46,7 @@ constexpr std::string_view kIrSchema = "memix.view.ir.v1";
 constexpr std::string_view kIrSchemaV2 = "memix.view.ir.v2";
 constexpr std::string_view kDerivationSchema = "memix.view.derivation.v1";
 constexpr std::string_view kDerivationSchemaV2 = "memix.view.derivation.v2";
+constexpr std::string_view kDerivationSchemaV3 = "memix.view.derivation.v3";
 constexpr std::string_view kEnvironmentSchema = "memix.view.environment.v1";
 constexpr std::string_view kEnvironmentSchemaV2 = "memix.view.environment.v2";
 constexpr std::string_view kViewsDir = "views";
@@ -1261,6 +1262,31 @@ std::vector<ResolvedEnvironmentInputJson> resolved_environment_input_json(
                };
              })
        | std::ranges::to<std::vector>();
+}
+
+ViewResult<std::string>
+derivation_basis_json_for(const memix::ViewDerivation &derivation) {
+  const std::vector<ResolvedInputJson> inputs =
+      resolved_input_json(derivation.resolved_files);
+  const std::vector<ResolvedEnvironmentInputJson> environment_inputs =
+      resolved_environment_input_json(derivation.environment_inputs);
+  ViewResult<std::string> materials =
+      environment_inputs.empty()
+          ? ir_basis_json_for(derivation.ir_hash, inputs, derivation.target)
+          : ir_basis_json_for_v2(derivation.ir_hash, inputs, environment_inputs,
+                                 derivation.target);
+  if (!materials || !derivation.runtime_quest.has_value()) {
+    return materials;
+  }
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"schema">("memix.view.derivation.basis.v3");
+  builder.append_comma();
+  builder.append_key_value<"materials">(*materials);
+  builder.append_comma();
+  builder.append_key_value<"runtime_quest">(*derivation.runtime_quest);
+  builder.end_object();
+  return json_from_builder(builder);
 }
 
 std::vector<OutputJson>
@@ -2577,7 +2603,8 @@ derivation_from_json(const memix::Store &store, std::string_view text,
     return std::unexpected(created_at.error());
   }
   const bool v2 = *schema == kDerivationSchemaV2;
-  if (*schema != kDerivationSchema && !v2) {
+  const bool v3 = *schema == kDerivationSchemaV3;
+  if (*schema != kDerivationSchema && !v2 && !v3) {
     return view_error(
         memix::ErrorKind::InvalidData,
         std::format("unsupported derivation schema `{}`", *schema));
@@ -2616,7 +2643,16 @@ derivation_from_json(const memix::Store &store, std::string_view text,
     return std::unexpected(environment_inputs.error());
   }
 
-  return memix::ViewDerivation{
+  ViewResult<std::optional<std::string>> runtime_quest =
+      optional_string(fields, "runtime_quest");
+  if (!runtime_quest) {
+    return std::unexpected(runtime_quest.error());
+  }
+  if (v3 != runtime_quest->has_value()) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      "runtime_quest must be present only in v3 derivations");
+  }
+  memix::ViewDerivation derivation{
       .id = std::move(*derivation_id),
       .ir_hash = std::move(*ir_hash),
       .target = *target,
@@ -2627,7 +2663,19 @@ derivation_from_json(const memix::Store &store, std::string_view text,
       .inserted = false,
       .environment_inputs = std::move(*environment_inputs),
       .input_resolutions = std::move(*input_resolutions),
+      .runtime_quest = std::move(*runtime_quest),
   };
+  if (v3) {
+    ViewResult<std::string> basis = derivation_basis_json_for(derivation);
+    if (!basis) {
+      return std::unexpected(basis.error());
+    }
+    if (sha256_text(*basis) != derivation.id) {
+      return view_error(memix::ErrorKind::InvalidData,
+                        "derivation contents do not match its identity");
+    }
+  }
+  return derivation;
 }
 
 ViewResult<memix::ViewDerivation>
@@ -3675,37 +3723,39 @@ load_quest_ir(const fs::path &root, std::string_view ir_hash) {
 }
 
 ViewResult<std::string>
-activation_readme(const fs::path &root,
-                  const memix::ViewEnvironment &environment) {
-  const std::string &ir_hash = environment.derivation.ir_hash;
-  std::string readme =
-      std::format("# Activated memory\n\n"
-                  "- Environment: `{}`\n- Derivation: `{}`\n\n"
-                  "## Quest\n\n- ID: `{}`\n",
-                  environment.id, environment.derivation.id, ir_hash);
-  const fs::path manifest =
-      quest_dir_for(root, ir_hash) / std::string(kQuestManifestFilename);
-  const memix::FsResult<bool> exists = fs::exists(manifest);
-  if (!exists) {
-    return view_error(exists.error());
+snapshot_runtime_quest(const fs::path &root, const memix::ViewIr &ir,
+                       const memix::BuildOptions &options) {
+  const QuestMetadataUpdate metadata{
+      .intent = options.intent.empty()
+                  ? std::nullopt
+                  : std::optional<std::string_view>{options.intent},
+      .name = options.name.empty()
+                ? std::nullopt
+                : std::optional<std::string_view>{options.name},
+  };
+  ViewResult<memix::QuestDefinition> definition =
+      upsert_quest(root, ir, metadata);
+  if (!definition) {
+    return std::unexpected(definition.error());
   }
-  if (!*exists) {
-    readme += "\nQuest metadata is unavailable for this legacy environment.\n";
-    return readme;
-  }
-  // Quest metadata is replaced atomically; its IR is immutable.
-  ViewResult<QuestRecord> quest = read_quest_record_unlocked(root, ir_hash);
+  ViewResult<QuestRecord> quest =
+      read_quest_record_unlocked(root, definition->ir_hash);
   if (!quest) {
     return std::unexpected(quest.error());
   }
-  ViewResult<memix::ViewIr> ir = load_quest_ir(root, ir_hash);
-  if (!ir) {
-    return std::unexpected(ir.error());
+  // Read one atomically published record. Explicit build options take
+  // precedence even if another writer updates the catalog concurrently.
+  if (metadata.name.has_value()) {
+    quest->name = *metadata.name;
   }
-  ViewResult<std::string> json = memix::view_ir_json(*ir);
+  if (metadata.intent.has_value()) {
+    quest->intent = *metadata.intent;
+  }
+  ViewResult<std::string> json = memix::view_ir_json(ir);
   if (!json) {
     return std::unexpected(json.error());
   }
+  std::string readme = std::format("## Quest\n\n- ID: `{}`\n", quest->ir_hash);
   if (!quest->name.empty()) {
     readme += std::format("\n### Name\n\n{}\n", quest->name);
   }
@@ -3713,6 +3763,21 @@ activation_readme(const fs::path &root,
     readme += std::format("\n### Intent\n\n{}\n", quest->intent);
   }
   readme += std::format("\n### Definition\n\n    {}\n", *json);
+  return readme;
+}
+
+std::string activation_readme(const memix::ViewEnvironment &environment) {
+  std::string readme = std::format(
+      "# Activated memory\n\n- Environment: `{}`\n- Derivation: `{}`\n\n",
+      environment.id, environment.derivation.id);
+  if (environment.derivation.runtime_quest.has_value()) {
+    readme += *environment.derivation.runtime_quest;
+  } else {
+    readme += std::format("## Quest\n\n- ID: `{}`\n\n"
+                          "Runtime Quest instructions were not recorded for "
+                          "this legacy environment.\n",
+                          environment.derivation.ir_hash);
+  }
   return readme;
 }
 
@@ -5062,6 +5127,45 @@ ensure_current_generation(const fs::path &profile_dir,
   };
 }
 
+ViewResult<bool>
+refresh_generation_tree(const fs::path &profile_dir,
+                        const GenerationMetadata &metadata,
+                        const memix::ViewEnvironment &environment) {
+  const std::string readme = activation_readme(environment);
+  const ViewResult<bool> matches =
+      generation_readme_matches(profile_dir, metadata.number, readme);
+  if (!matches) {
+    return std::unexpected(matches.error());
+  }
+  if (*matches) {
+    return false;
+  }
+  const fs::path generation = generation_path_for(profile_dir, metadata.number);
+  const memix::FsResult<fs::file_status> status =
+      fs::symlink_status(generation);
+  if (!status) {
+    return view_error(status.error());
+  }
+  ViewResult<fs::path> temp =
+      unique_temp_dir(generations_dir_for(profile_dir), "generation");
+  if (!temp) {
+    return std::unexpected(temp.error());
+  }
+  memix::scope_exit cleanup([&temp] { remove_tree_best_effort(*temp); });
+  const ViewVoid written =
+      write_activation_tree(environment.derivation, readme, *temp);
+  if (!written) {
+    return std::unexpected(written.error());
+  }
+  ViewResult<bool> installed = replace_existing_with_copy_tree(
+      *temp, generation, std::filesystem::is_directory(*status));
+  if (!installed) {
+    return std::unexpected(installed.error());
+  }
+  cleanup.release();
+  return *installed;
+}
+
 ViewResult<std::uint64_t>
 select_rollback_target(const std::vector<std::uint64_t> &existing,
                        std::uint64_t current,
@@ -5441,6 +5545,11 @@ ViewService::lower_to_ir(const AuthoredViewExpression &expression) const {
 }
 
 ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
+  return build_ir(ir, BuildOptions{});
+}
+
+ViewResult<ViewDerivation>
+ViewService::build_ir(const ViewIr &ir, const BuildOptions &options) const {
   if (ir.target.kind != ViewTargetKind::FileTree) {
     return view_error(ErrorKind::InvalidArgument,
                       "only file_tree target builds are supported in v1");
@@ -5454,39 +5563,39 @@ ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
   if (!resolved) {
     return std::unexpected(resolved.error());
   }
-  const std::vector<ResolvedInputJson> inputs =
-      resolved_input_json(resolved->files);
-  const std::vector<ResolvedEnvironmentInputJson> environment_inputs =
-      resolved_environment_input_json(resolved->environment_inputs);
-  ViewResult<std::string> basis =
-      environment_inputs.empty()
-          ? ir_basis_json_for(ir_hash, inputs, ir.target.kind)
-          : ir_basis_json_for_v2(ir_hash, inputs, environment_inputs,
-                                 ir.target.kind);
-  if (!basis) {
-    return std::unexpected(basis.error());
+  ViewResult<std::string> runtime_quest =
+      snapshot_runtime_quest(store_.root(), ir, options);
+  if (!runtime_quest) {
+    return std::unexpected(runtime_quest.error());
   }
-  std::string derivation_id = sha256_text(*basis);
-  ViewResult<std::vector<ViewDerivationOutput>> outputs =
-      outputs_for_derivation(derivation_id, ir.target.kind);
-  if (!outputs) {
-    return std::unexpected(outputs.error());
-  }
-
-  const fs::path derivation_dir =
-      derivation_dir_for(store_.root(), derivation_id);
   ViewDerivation derivation{
-      .id = std::move(derivation_id),
+      .id = {},
       .ir_hash = std::move(ir_hash),
       .target = ir.target.kind,
       .resolved_files = std::move(resolved->files),
-      .outputs = std::move(*outputs),
-      .manifest_path = derivation_dir / std::string(kManifestFilename),
-      .tree_path = derivation_dir / std::string(kTreeDir),
+      .outputs = {},
+      .manifest_path = {},
+      .tree_path = {},
       .inserted = false,
       .environment_inputs = std::move(resolved->environment_inputs),
       .input_resolutions = std::move(resolved->input_resolutions),
+      .runtime_quest = std::move(*runtime_quest),
   };
+  ViewResult<std::string> basis = derivation_basis_json_for(derivation);
+  if (!basis) {
+    return std::unexpected(basis.error());
+  }
+  derivation.id = sha256_text(*basis);
+  ViewResult<std::vector<ViewDerivationOutput>> outputs =
+      outputs_for_derivation(derivation.id, ir.target.kind);
+  if (!outputs) {
+    return std::unexpected(outputs.error());
+  }
+  derivation.outputs = std::move(*outputs);
+  const fs::path derivation_dir =
+      derivation_dir_for(store_.root(), derivation.id);
+  derivation.manifest_path = derivation_dir / std::string(kManifestFilename);
+  derivation.tree_path = derivation_dir / std::string(kTreeDir);
   const memix::FsResult<bool> derivation_exists = fs::exists(derivation_dir);
   if (!derivation_exists) {
     return view_error(derivation_exists.error());
@@ -5504,10 +5613,6 @@ ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
                                     "the requested IR",
                                     derivation.id));
     }
-    ViewResult<QuestDefinition> quest = upsert_quest(store_.root(), ir, {});
-    if (!quest) {
-      return std::unexpected(quest.error());
-    }
     return existing;
   }
   ViewResult<std::string> manifest = view_derivation_json(derivation);
@@ -5520,10 +5625,6 @@ ViewResult<ViewDerivation> ViewService::build_ir(const ViewIr &ir) const {
     return std::unexpected(inserted.error());
   }
   derivation.inserted = *inserted;
-  ViewResult<QuestDefinition> quest = upsert_quest(store_.root(), ir, {});
-  if (!quest) {
-    return std::unexpected(quest.error());
-  }
   return derivation;
 }
 
@@ -5539,24 +5640,9 @@ ViewService::build(const AuthoredViewExpression &expression,
   if (!ir) {
     return std::unexpected(ir.error());
   }
-  ViewResult<ViewDerivation> derivation = build_ir(*ir);
+  ViewResult<ViewDerivation> derivation = build_ir(*ir, options);
   if (!derivation) {
     return std::unexpected(derivation.error());
-  }
-  if (!options.intent.empty() || !options.name.empty()) {
-    const QuestMetadataUpdate metadata{
-        .intent = options.intent.empty()
-                    ? std::nullopt
-                    : std::optional<std::string_view>{options.intent},
-        .name = options.name.empty()
-                  ? std::nullopt
-                  : std::optional<std::string_view>{options.name},
-    };
-    ViewResult<QuestDefinition> quest =
-        upsert_quest(store_.root(), *ir, metadata);
-    if (!quest) {
-      return std::unexpected(quest.error());
-    }
   }
   ViewResult<ViewEnvironment> environment =
       environment_for_derivation(store_, std::move(*derivation));
@@ -6234,13 +6320,9 @@ ViewService::activate(std::string_view environment_prefix,
     return std::unexpected(link_target.error());
   }
 
-  ViewResult<std::string> readme =
-      activation_readme(store_.root(), *environment);
-  if (!readme) {
-    return std::unexpected(readme.error());
-  }
+  const std::string readme = activation_readme(*environment);
   ViewResult<CurrentGeneration> generation = ensure_current_generation(
-      profile_dir, *environment, options.mode, options.into, *readme);
+      profile_dir, *environment, options.mode, options.into, readme);
   if (!generation) {
     return std::unexpected(generation.error());
   }
@@ -6339,22 +6421,14 @@ ViewService::rollback(std::string_view profile,
   if (!metadata) {
     return std::unexpected(metadata.error());
   }
-  if (*target == **current) {
-    ViewActivation activation{
-        .profile = std::string(profile),
-        .generation = *target,
-        .environment_id = metadata->environment_id,
-        .derivation_id = metadata->derivation_id,
-        .workspace_path = fs::path(metadata->workspace),
-        .switched = false,
-        .materialized = false,
-    };
-    const ViewResult<ViewEnvironment> environment =
-        resolve_environment(activation.environment_id);
-    if (environment) {
-      record_activation(*environment, activation, metadata->mode, "rollback");
-    }
-    return activation;
+  const ViewResult<ViewEnvironment> environment =
+      resolve_environment(metadata->environment_id);
+  if (!environment) {
+    return std::unexpected(environment.error());
+  }
+  if (environment->derivation.id != metadata->derivation_id) {
+    return view_error(ErrorKind::InvalidData,
+                      "generation derivation does not match its environment");
   }
   std::optional<fs::path> workspace_lock;
   if (metadata->mode == ActivationMode::Copy && !metadata->workspace.empty()) {
@@ -6369,13 +6443,22 @@ ViewService::rollback(std::string_view profile,
       std::ignore = fs::remove(*workspace_lock);
     }
   });
-  const ViewVoid swapped = swap_current(profile_dir, *target);
-  if (!swapped) {
-    return std::unexpected(swapped.error());
+  const ViewResult<bool> refreshed =
+      refresh_generation_tree(profile_dir, *metadata, *environment);
+  if (!refreshed) {
+    return std::unexpected(refreshed.error());
+  }
+  const bool switched = *target != **current;
+  if (switched) {
+    const ViewVoid swapped = swap_current(profile_dir, *target);
+    if (!swapped) {
+      return std::unexpected(swapped.error());
+    }
   }
 
   ViewResult<bool> rematerialized =
-      rematerialize_copy_workspace(store_, *metadata);
+      switched || *refreshed ? rematerialize_copy_workspace(store_, *metadata)
+                             : ViewResult<bool>{false};
   if (!rematerialized) {
     return std::unexpected(restore_current_after_failure(
         profile_dir, *current, std::move(rematerialized.error())));
@@ -6386,14 +6469,11 @@ ViewService::rollback(std::string_view profile,
       .environment_id = metadata->environment_id,
       .derivation_id = metadata->derivation_id,
       .workspace_path = fs::path(metadata->workspace),
-      .switched = true,
-      .materialized = *rematerialized,
+      .switched = switched,
+      .materialized = *rematerialized
+                   || (*refreshed && metadata->mode == ActivationMode::Link),
   };
-  const ViewResult<ViewEnvironment> environment =
-      resolve_environment(activation.environment_id);
-  if (environment) {
-    record_activation(*environment, activation, metadata->mode, "rollback");
-  }
+  record_activation(*environment, activation, metadata->mode, "rollback");
   return activation;
 }
 
@@ -6623,11 +6703,17 @@ ViewResult<std::string> view_derivation_json(const ViewDerivation &derivation) {
 
     simdjson::builder::string_builder builder;
     builder.start_object();
-    builder.append_key_value<"schema">(kDerivationSchema);
+    builder.append_key_value<"schema">(derivation.runtime_quest.has_value()
+                                           ? kDerivationSchemaV3
+                                           : kDerivationSchema);
     builder.append_comma();
     builder.append_key_value<"derivation_id">(derivation.id);
     builder.append_comma();
     builder.append_key_value<"ir_hash">(derivation.ir_hash);
+    if (derivation.runtime_quest.has_value()) {
+      builder.append_comma();
+      builder.append_key_value<"runtime_quest">(*derivation.runtime_quest);
+    }
     builder.append_comma();
     builder.append_key_value<"created_at">(*created_at);
     builder.append_comma();
@@ -6666,11 +6752,17 @@ ViewResult<std::string> view_derivation_json(const ViewDerivation &derivation) {
 
   simdjson::builder::string_builder builder;
   builder.start_object();
-  builder.append_key_value<"schema">(kDerivationSchemaV2);
+  builder.append_key_value<"schema">(derivation.runtime_quest.has_value()
+                                         ? kDerivationSchemaV3
+                                         : kDerivationSchemaV2);
   builder.append_comma();
   builder.append_key_value<"derivation_id">(derivation.id);
   builder.append_comma();
   builder.append_key_value<"ir_hash">(derivation.ir_hash);
+  if (derivation.runtime_quest.has_value()) {
+    builder.append_comma();
+    builder.append_key_value<"runtime_quest">(*derivation.runtime_quest);
+  }
   builder.append_comma();
   builder.append_key_value<"created_at">(*created_at);
   builder.append_comma();
