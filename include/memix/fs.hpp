@@ -62,8 +62,8 @@ filesystem_error_message(std::string_view operation,
 
   std::string message{operation};
   std::string_view separator = " `";
-  const auto append_path = [&message, &separator](const path &path) {
-    message += std::format("{}{}`", separator, path.string());
+  const auto append_path = [&message, &separator](const path &entry_path) {
+    message += std::format("{}{}`", separator, entry_path.string());
     separator = " to `";
   };
   (append_path(paths), ...);
@@ -88,23 +88,23 @@ fs_error(std::string_view operation, const std::error_code &error,
   return fs_error(make_fs_error(operation, error, paths...));
 }
 
-FsResult<bool> exists(const path &path);
-FsResult<bool> is_directory(const path &path);
-FsResult<bool> is_regular_file(const path &path);
-FsResult<bool> is_symlink(const path &path);
-FsResult<file_status> status(const path &path);
-FsResult<file_status> symlink_status(const path &path);
-FsResult<std::uintmax_t> file_size(const path &path);
-FsResult<bool> create_directories(const path &path);
-FsResult<bool> create_directory(const path &path);
+FsResult<bool> exists(const path &entry_path);
+FsResult<bool> is_directory(const path &entry_path);
+FsResult<bool> is_regular_file(const path &entry_path);
+FsResult<bool> is_symlink(const path &entry_path);
+FsResult<file_status> status(const path &entry_path);
+FsResult<file_status> symlink_status(const path &entry_path);
+FsResult<std::uintmax_t> file_size(const path &entry_path);
+FsResult<bool> create_directories(const path &entry_path);
+FsResult<bool> create_directory(const path &entry_path);
 FsResult<bool> copy_file(const path &source, const path &destination,
                          copy_options options = copy_options::none);
 FsVoid create_symlink(const path &target, const path &link);
 FsVoid create_directory_symlink(const path &target, const path &link);
 FsVoid create_hard_link(const path &target, const path &link);
-FsResult<path> read_symlink(const path &path);
+FsResult<path> read_symlink(const path &entry_path);
 FsResult<path> relative(const path &target, const path &base);
-FsResult<path> weakly_canonical(const path &path);
+FsResult<path> weakly_canonical(const path &entry_path);
 FsVoid rename(const path &source, const path &destination);
 // Atomically installs `source` at `destination`, replacing an existing file.
 // Windows retries transient sharing violations caused by concurrent readers.
@@ -113,16 +113,16 @@ FsVoid replace_file(const path &source, const path &destination);
 // atomic rename; Windows uses a recoverable handoff because it cannot replace
 // an existing directory symlink with rename.
 FsVoid replace_directory_symlink(const path &source, const path &destination);
-FsResult<bool> remove(const path &path);
-FsResult<std::uintmax_t> remove_all(const path &path);
-FsVoid permissions(const path &path, perms permissions,
+FsResult<bool> remove(const path &entry_path);
+FsResult<std::uintmax_t> remove_all(const path &entry_path);
+FsVoid permissions(const path &entry_path, perms permissions,
                    perm_options options = perm_options::replace);
 FsResult<path> temp_directory_path();
 
-FsResult<std::string> read_text_file(const path &path);
+FsResult<std::string> read_text_file(const path &entry_path);
 FsResult<std::string>
-read_text_file(const path &path, std::string_view subject);
-FsVoid write_text_file(const path &path, std::string_view contents);
+read_text_file(const path &entry_path, std::string_view subject);
+FsVoid write_text_file(const path &entry_path, std::string_view contents);
 
 struct TempDirOptions {
   std::string_view prefix;
@@ -131,8 +131,8 @@ struct TempDirOptions {
 
 FsResult<path> unique_temp_dir(const path &parent, TempDirOptions options);
 
-FsVoid apply_read_only_file_permissions(const path &path);
-FsVoid apply_read_only_directory_permissions(const path &path);
-FsVoid apply_writable_directory_permissions(const path &path);
+FsVoid apply_read_only_file_permissions(const path &entry_path);
+FsVoid apply_read_only_directory_permissions(const path &entry_path);
+FsVoid apply_writable_directory_permissions(const path &entry_path);
 
 } // namespace memix::fs

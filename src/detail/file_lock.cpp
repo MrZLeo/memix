@@ -180,7 +180,11 @@ try_acquire_native_lock(const fs::path &path,
 
     const int native_error = errno;
     std::ignore = ::close(descriptor);
-    if (native_error != EWOULDBLOCK && native_error != EAGAIN) {
+    if (native_error != EWOULDBLOCK
+#if EAGAIN != EWOULDBLOCK
+        && native_error != EAGAIN
+#endif
+    ) {
       return fs::fs_error(
           "failed to acquire file lock",
           std::error_code(native_error, std::generic_category()), path);

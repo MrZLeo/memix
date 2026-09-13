@@ -607,6 +607,7 @@ TEST_CASE("removing a rule file creates a generation and preserves history",
   const auto removed = store.remove_file({
       .type = memix::MemoryObjectType::Rules,
       .context_path = "lang/python/AGENTS.md",
+      .message = {},
   });
   REQUIRE(removed.has_value());
   REQUIRE(removed->type == memix::MemoryObjectType::Rules);
@@ -697,6 +698,7 @@ TEST_CASE("removing a directory removes its subtree recursively", "[store]") {
                   .type = memix::MemoryObjectType::Documents,
                   .source_path = design,
                   .context_path = "repo/design.md",
+                  .message = {},
               })
               .has_value());
   REQUIRE(store
@@ -704,18 +706,21 @@ TEST_CASE("removing a directory removes its subtree recursively", "[store]") {
                   .type = memix::MemoryObjectType::Documents,
                   .source_path = decisions,
                   .context_path = "repo/arch/decisions.md",
+                  .message = {},
               })
               .has_value());
   const auto keeper = store.ingest_file({
       .type = memix::MemoryObjectType::Documents,
       .source_path = notes,
       .context_path = "notes.md",
+      .message = {},
   });
   REQUIRE(keeper.has_value());
 
   const auto removed = store.remove_file({
       .type = memix::MemoryObjectType::Documents,
       .context_path = "repo",
+      .message = {},
   });
   REQUIRE(removed.has_value());
   REQUIRE(removed->previous_generation == keeper->generation.id);
@@ -753,6 +758,7 @@ TEST_CASE("removing a file keeps the projection in sync", "[store][expose]") {
                   .type = memix::MemoryObjectType::Rules,
                   .source_path = nested_source,
                   .context_path = "repo/nested/AGENTS.md",
+                  .message = {},
               })
               .has_value());
   REQUIRE(store
@@ -760,6 +766,7 @@ TEST_CASE("removing a file keeps the projection in sync", "[store][expose]") {
                   .type = memix::MemoryObjectType::Rules,
                   .source_path = carried_source,
                   .context_path = "repo/carried.md",
+                  .message = {},
               })
               .has_value());
 
@@ -770,6 +777,7 @@ TEST_CASE("removing a file keeps the projection in sync", "[store][expose]") {
   const auto removed = store.remove_file({
       .type = memix::MemoryObjectType::Rules,
       .context_path = "repo/nested/AGENTS.md",
+      .message = {},
   });
   REQUIRE(removed.has_value());
   REQUIRE_FALSE(removed->projection_warning.has_value());
@@ -796,6 +804,7 @@ TEST_CASE("remove rejects missing paths and empty histories", "[store]") {
   const auto empty_store = store.remove_file({
       .type = memix::MemoryObjectType::Rules,
       .context_path = "a.md",
+      .message = {},
   });
   REQUIRE_FALSE(empty_store.has_value());
   REQUIRE(empty_store.error().kind == memix::ErrorKind::ContextPathNotFound);
@@ -804,12 +813,14 @@ TEST_CASE("remove rejects missing paths and empty histories", "[store]") {
       .type = memix::MemoryObjectType::Rules,
       .source_path = source,
       .context_path = "a.md",
+      .message = {},
   });
   REQUIRE(ingest.has_value());
 
   const auto missing = store.remove_file({
       .type = memix::MemoryObjectType::Rules,
       .context_path = "b.md",
+      .message = {},
   });
   REQUIRE_FALSE(missing.has_value());
   REQUIRE(missing.error().kind == memix::ErrorKind::ContextPathNotFound);
@@ -817,6 +828,7 @@ TEST_CASE("remove rejects missing paths and empty histories", "[store]") {
   const auto through_file = store.remove_file({
       .type = memix::MemoryObjectType::Rules,
       .context_path = "a.md/b.md",
+      .message = {},
   });
   REQUIRE_FALSE(through_file.has_value());
   REQUIRE(through_file.error().kind == memix::ErrorKind::InvalidArgument);
@@ -844,6 +856,7 @@ TEST_CASE("remove rejects unsafe paths", "[store]") {
                   .type = memix::MemoryObjectType::Rules,
                   .source_path = source,
                   .context_path = "a.md",
+                  .message = {},
               })
               .has_value());
 
@@ -851,6 +864,7 @@ TEST_CASE("remove rejects unsafe paths", "[store]") {
     const auto result = store.remove_file({
         .type = memix::MemoryObjectType::Rules,
         .context_path = path,
+        .message = {},
     });
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind == memix::ErrorKind::InvalidArgument);
@@ -938,6 +952,7 @@ TEST_CASE("store catalog explores types, subtrees, depth, counts, and bytes",
                   .type = memix::MemoryObjectType::Documents,
                   .source_path = design,
                   .context_path = "notes/design.md",
+                  .message = {},
               })
               .has_value());
   REQUIRE(store
@@ -945,6 +960,7 @@ TEST_CASE("store catalog explores types, subtrees, depth, counts, and bytes",
                   .type = memix::MemoryObjectType::Documents,
                   .source_path = decisions,
                   .context_path = "notes/project/decisions.md",
+                  .message = {},
               })
               .has_value());
   REQUIRE(store
@@ -952,6 +968,7 @@ TEST_CASE("store catalog explores types, subtrees, depth, counts, and bytes",
                   .type = memix::MemoryObjectType::Rules,
                   .source_path = rule,
                   .context_path = "repo/AGENTS.md",
+                  .message = {},
               })
               .has_value());
 
@@ -982,6 +999,7 @@ TEST_CASE("store catalog explores types, subtrees, depth, counts, and bytes",
       .type = memix::MemoryObjectType::Documents,
       .path = "notes",
       .depth = 1,
+      .generation = std::nullopt,
   });
   REQUIRE(notes.has_value());
   REQUIRE(notes->size() == 3);
@@ -1314,7 +1332,7 @@ TEST_CASE("list fails loudly when content is missing", "[store]") {
   const auto result = store.ingest(memix::MemoryObjectType::Documents, source);
   REQUIRE(result.has_value());
   make_object_mutable_for_corruption(result->object.object_dir);
-  fs::remove(result->object.object_dir / "object");
+  REQUIRE(fs::remove(result->object.object_dir / "object").value_or(false));
 
   REQUIRE_FALSE(store.list(memix::MemoryObjectType::Documents).has_value());
 }
@@ -1431,16 +1449,19 @@ TEST_CASE("expose rebuilds every type and is idempotent",
       .type = memix::MemoryObjectType::Rules,
       .source_path = rule,
       .context_path = "repo/AGENTS.md",
+      .message = {},
   }));
   REQUIRE(store.ingest_file({
       .type = memix::MemoryObjectType::Chat,
       .source_path = chat,
       .context_path = "sessions/2026/session.txt",
+      .message = {},
   }));
   REQUIRE(store.ingest_file({
       .type = memix::MemoryObjectType::Documents,
       .source_path = document,
       .context_path = "notes/design.md",
+      .message = {},
   }));
 
   const fs::path latest = store.root() / "latest";
@@ -1501,11 +1522,13 @@ TEST_CASE("memix-store expose reports plain and JSON counts",
       .type = memix::MemoryObjectType::Rules,
       .source_path = rule,
       .context_path = "repo/AGENTS.md",
+      .message = {},
   }));
   REQUIRE(store.ingest_file({
       .type = memix::MemoryObjectType::Documents,
       .source_path = document,
       .context_path = "notes/design.md",
+      .message = {},
   }));
 
   make_directory_tree_writable(store_root / "latest");
@@ -1543,6 +1566,7 @@ TEST_CASE("projection refresh failures warn without failing ingest",
       .type = memix::MemoryObjectType::Rules,
       .source_path = first_source,
       .context_path = "repo/first.md",
+      .message = {},
   });
   REQUIRE(first);
 
@@ -1553,6 +1577,7 @@ TEST_CASE("projection refresh failures warn without failing ingest",
       .type = memix::MemoryObjectType::Rules,
       .source_path = second_source,
       .context_path = "repo/second.md",
+      .message = {},
   });
   REQUIRE(second);
   REQUIRE(second->projection_warning.has_value());

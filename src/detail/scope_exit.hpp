@@ -16,7 +16,7 @@ public:
   template <typename Fp>
     requires(!std::same_as<std::remove_cvref_t<Fp>, scope_exit>
              && std::constructible_from<F, Fp &&>)
-  explicit scope_exit(Fp &&fn) : fn(std::forward<Fp>(fn)) {}
+  explicit scope_exit(Fp &&callback) : fn(std::forward<Fp>(callback)) {}
 
   scope_exit(scope_exit &&rhs) : fn(std::move(rhs.fn)), engaged(rhs.engaged) {
     rhs.release();

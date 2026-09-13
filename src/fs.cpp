@@ -58,58 +58,59 @@ FsVoid fs_void(const std::error_code &error, std::string_view operation,
 
 } // namespace
 
-FsResult<bool> exists(const path &path) {
+FsResult<bool> exists(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::exists(path, error);
-  return fs_result(value, error, "failed to inspect", path);
+  const bool value = std_fs::exists(entry_path, error);
+  return fs_result(value, error, "failed to inspect", entry_path);
 }
 
-FsResult<bool> is_directory(const path &path) {
+FsResult<bool> is_directory(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::is_directory(path, error);
-  return fs_result(value, error, "failed to inspect directory", path);
+  const bool value = std_fs::is_directory(entry_path, error);
+  return fs_result(value, error, "failed to inspect directory", entry_path);
 }
 
-FsResult<bool> is_regular_file(const path &path) {
+FsResult<bool> is_regular_file(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::is_regular_file(path, error);
-  return fs_result(value, error, "failed to inspect file", path);
+  const bool value = std_fs::is_regular_file(entry_path, error);
+  return fs_result(value, error, "failed to inspect file", entry_path);
 }
 
-FsResult<bool> is_symlink(const path &path) {
+FsResult<bool> is_symlink(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::is_symlink(std_fs::symlink_status(path, error));
-  return fs_result(value, error, "failed to inspect symlink", path);
+  const bool value =
+      std_fs::is_symlink(std_fs::symlink_status(entry_path, error));
+  return fs_result(value, error, "failed to inspect symlink", entry_path);
 }
 
-FsResult<file_status> status(const path &path) {
+FsResult<file_status> status(const path &entry_path) {
   std::error_code error;
-  const file_status value = std_fs::status(path, error);
-  return fs_result(value, error, "failed to inspect", path);
+  const file_status value = std_fs::status(entry_path, error);
+  return fs_result(value, error, "failed to inspect", entry_path);
 }
 
-FsResult<file_status> symlink_status(const path &path) {
+FsResult<file_status> symlink_status(const path &entry_path) {
   std::error_code error;
-  const file_status value = std_fs::symlink_status(path, error);
-  return fs_result(value, error, "failed to inspect symlink", path);
+  const file_status value = std_fs::symlink_status(entry_path, error);
+  return fs_result(value, error, "failed to inspect symlink", entry_path);
 }
 
-FsResult<std::uintmax_t> file_size(const path &path) {
+FsResult<std::uintmax_t> file_size(const path &entry_path) {
   std::error_code error;
-  const std::uintmax_t value = std_fs::file_size(path, error);
-  return fs_result(value, error, "failed to read file size for", path);
+  const std::uintmax_t value = std_fs::file_size(entry_path, error);
+  return fs_result(value, error, "failed to read file size for", entry_path);
 }
 
-FsResult<bool> create_directories(const path &path) {
+FsResult<bool> create_directories(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::create_directories(path, error);
-  return fs_result(value, error, "failed to create directory", path);
+  const bool value = std_fs::create_directories(entry_path, error);
+  return fs_result(value, error, "failed to create directory", entry_path);
 }
 
-FsResult<bool> create_directory(const path &path) {
+FsResult<bool> create_directory(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::create_directory(path, error);
-  return fs_result(value, error, "failed to create directory", path);
+  const bool value = std_fs::create_directory(entry_path, error);
+  return fs_result(value, error, "failed to create directory", entry_path);
 }
 
 FsResult<bool> copy_file(const path &source, const path &destination,
@@ -137,10 +138,10 @@ FsVoid create_hard_link(const path &target, const path &link) {
   return fs_void(error, "failed to create hard link", target, link);
 }
 
-FsResult<path> read_symlink(const path &path) {
+FsResult<path> read_symlink(const path &entry_path) {
   std::error_code error;
-  const auto target = std_fs::read_symlink(path, error);
-  return fs_result(target, error, "failed to read symlink", path);
+  const auto target = std_fs::read_symlink(entry_path, error);
+  return fs_result(target, error, "failed to read symlink", entry_path);
 }
 
 FsResult<path> relative(const path &target, const path &base) {
@@ -150,10 +151,10 @@ FsResult<path> relative(const path &target, const path &base) {
                    base);
 }
 
-FsResult<path> weakly_canonical(const path &path) {
+FsResult<path> weakly_canonical(const path &entry_path) {
   std::error_code error;
-  const auto value = std_fs::weakly_canonical(path, error);
-  return fs_result(value, error, "failed to canonicalize", path);
+  const auto value = std_fs::weakly_canonical(entry_path, error);
+  return fs_result(value, error, "failed to canonicalize", entry_path);
 }
 
 FsVoid rename(const path &source, const path &destination) {
@@ -239,22 +240,23 @@ FsVoid replace_directory_symlink(const path &source, const path &destination) {
 #endif
 }
 
-FsResult<bool> remove(const path &path) {
+FsResult<bool> remove(const path &entry_path) {
   std::error_code error;
-  const bool value = std_fs::remove(path, error);
-  return fs_result(value, error, "failed to remove", path);
+  const bool value = std_fs::remove(entry_path, error);
+  return fs_result(value, error, "failed to remove", entry_path);
 }
 
-FsResult<std::uintmax_t> remove_all(const path &path) {
+FsResult<std::uintmax_t> remove_all(const path &entry_path) {
   std::error_code error;
-  const std::uintmax_t value = std_fs::remove_all(path, error);
-  return fs_result(value, error, "failed to remove", path);
+  const std::uintmax_t value = std_fs::remove_all(entry_path, error);
+  return fs_result(value, error, "failed to remove", entry_path);
 }
 
-FsVoid permissions(const path &path, perms permissions, perm_options options) {
+FsVoid
+permissions(const path &entry_path, perms permissions, perm_options options) {
   std::error_code error;
-  std_fs::permissions(path, permissions, options, error);
-  return fs_void(error, "failed to set permissions", path);
+  std_fs::permissions(entry_path, permissions, options, error);
+  return fs_void(error, "failed to set permissions", entry_path);
 }
 
 FsResult<path> temp_directory_path() {
@@ -263,48 +265,48 @@ FsResult<path> temp_directory_path() {
   return fs_result(value, error, "failed to find temporary directory", value);
 }
 
-FsResult<std::string> read_text_file(const path &path) {
-  std::ifstream input(path, std::ios::binary);
+FsResult<std::string> read_text_file(const path &entry_path) {
+  std::ifstream input(entry_path, std::ios::binary);
   if (!input) {
-    return fs_error(std::format("failed to open `{}`", path.string()));
+    return fs_error(std::format("failed to open `{}`", entry_path.string()));
   }
   std::string output{std::istreambuf_iterator<char>(input),
                      std::istreambuf_iterator<char>()};
   if (input.bad()) {
-    return fs_error(std::format("failed to read `{}`", path.string()));
+    return fs_error(std::format("failed to read `{}`", entry_path.string()));
   }
   return output;
 }
 
-FsResult<std::string> read_text_file(const path &path,
-                                     std::string_view subject) {
+FsResult<std::string>
+read_text_file(const path &entry_path, std::string_view subject) {
   if (subject.empty()) {
-    return read_text_file(path);
+    return read_text_file(entry_path);
   }
 
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(entry_path, std::ios::binary);
   if (!input) {
     return fs_error(
-        std::format("failed to open {} `{}`", subject, path.string()));
+        std::format("failed to open {} `{}`", subject, entry_path.string()));
   }
   std::string output{std::istreambuf_iterator<char>(input),
                      std::istreambuf_iterator<char>()};
   if (input.bad()) {
     return fs_error(
-        std::format("failed to read {} `{}`", subject, path.string()));
+        std::format("failed to read {} `{}`", subject, entry_path.string()));
   }
   return output;
 }
 
-FsVoid write_text_file(const path &path, std::string_view contents) {
-  std::ofstream output(path, std::ios::binary);
+FsVoid write_text_file(const path &entry_path, std::string_view contents) {
+  std::ofstream output(entry_path, std::ios::binary);
   if (!output) {
     return fs_error(
-        std::format("failed to open `{}` for writing", path.string()));
+        std::format("failed to open `{}` for writing", entry_path.string()));
   }
   output << contents;
   if (!output) {
-    return fs_error(std::format("failed to write `{}`", path.string()));
+    return fs_error(std::format("failed to write `{}`", entry_path.string()));
   }
   return {};
 }
@@ -329,18 +331,19 @@ FsResult<path> unique_temp_dir(const path &parent, TempDirOptions options) {
   return fs_error(std::string(options.failure_message));
 }
 
-FsVoid apply_read_only_file_permissions(const path &path) {
-  return memix::fs::permissions(path, perms::owner_read, perm_options::replace);
-}
-
-FsVoid apply_read_only_directory_permissions(const path &path) {
-  return memix::fs::permissions(path, perms::owner_read | perms::owner_exec,
+FsVoid apply_read_only_file_permissions(const path &entry_path) {
+  return memix::fs::permissions(entry_path, perms::owner_read,
                                 perm_options::replace);
 }
 
-FsVoid apply_writable_directory_permissions(const path &path) {
+FsVoid apply_read_only_directory_permissions(const path &entry_path) {
   return memix::fs::permissions(
-      path, perms::owner_read | perms::owner_write | perms::owner_exec,
+      entry_path, perms::owner_read | perms::owner_exec, perm_options::replace);
+}
+
+FsVoid apply_writable_directory_permissions(const path &entry_path) {
+  return memix::fs::permissions(
+      entry_path, perms::owner_read | perms::owner_write | perms::owner_exec,
       perm_options::replace);
 }
 

@@ -270,6 +270,8 @@ TEST_CASE("view optional file inputs skip missing paths", "[view]") {
                   .kind = memix::ViewVersionKind::Generation,
                   .value = ingest.generation.id,
               },
+          .environment_id = {},
+          .mount = {},
       },
       memix::ViewIrInput{
           .locator = "rules/repo/MISSING.md@generation/000001",
@@ -281,6 +283,8 @@ TEST_CASE("view optional file inputs skip missing paths", "[view]") {
                   .value = ingest.generation.id,
               },
           .required = false,
+          .environment_id = {},
+          .mount = {},
       },
   };
 
@@ -458,9 +462,12 @@ TEST_CASE("views compose environments with mounts and transitive provenance",
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Context,
           .locator = "documents/notes/design.md",
+          .environment_id = {},
+          .mount = {},
       },
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Environment,
+          .locator = {},
           .environment_id = base->id.substr(0, 16),
           .output_role = "file_tree",
           .mount = "prior",
@@ -507,6 +514,7 @@ TEST_CASE("views compose environments with mounts and transitive provenance",
   const auto transitive_expression = views.expression_from_inputs({
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Environment,
+          .locator = {},
           .environment_id = composed->id,
           .output_role = "file_tree",
           .mount = "archive",
@@ -570,11 +578,15 @@ TEST_CASE("view composition rejects output path collisions", "[view]") {
   const auto expression = views.expression_from_inputs({
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Environment,
+          .locator = {},
           .environment_id = old_view->id,
+          .mount = {},
       },
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Environment,
+          .locator = {},
           .environment_id = new_view->id,
+          .mount = {},
       },
   });
   REQUIRE(expression.has_value());

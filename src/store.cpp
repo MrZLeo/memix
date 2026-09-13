@@ -1113,7 +1113,7 @@ StoreResult<LogicalPathComponents>
 context_path_components(memix::MemoryObjectType type,
                         const fs::path &context_path) {
   const fs::path::string_type &native_path = context_path.native();
-  if (native_path.contains(static_cast<fs::path::value_type>('\\'))) {
+  if (native_path.contains('\\')) {
     return store_error(memix::ErrorKind::InvalidArgument,
                        std::format("{} path must not contain backslashes",
                                    context_label(type)));

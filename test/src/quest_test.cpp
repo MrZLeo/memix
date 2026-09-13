@@ -554,6 +554,8 @@ TEST_CASE("freshness records optional inputs that resolve no files",
                       },
                   .recursive = false,
                   .required = false,
+                  .environment_id = {},
+                  .mount = {},
               },
           },
       .target = {},
@@ -942,12 +944,15 @@ TEST_CASE("composed quest builds persist timestamps history and freshness",
   const auto composed_expression = views.expression_from_inputs({
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Environment,
+          .locator = {},
           .environment_id = base->id,
           .mount = "prior",
       },
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Context,
           .locator = "documents/notes/design.md@latest",
+          .environment_id = {},
+          .mount = {},
       },
   });
   REQUIRE(composed_expression);
@@ -996,7 +1001,9 @@ TEST_CASE("composed quest builds persist timestamps history and freshness",
   const auto view_only_expression = views.expression_from_inputs({
       memix::AuthoredViewInput{
           .kind = memix::ViewInputKind::Environment,
+          .locator = {},
           .environment_id = base->id,
+          .mount = {},
       },
   });
   REQUIRE(view_only_expression);

@@ -1,3 +1,4 @@
+#include "memix/error.hpp"
 #include "memix/fs.hpp"
 #include "memix/store.hpp"
 #include "memix/view.hpp"
@@ -7,6 +8,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
