@@ -145,6 +145,7 @@ ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store resolve "$QUE
 ./build/bin/Release/memix-view --store-root /tmp/memix-store cat "$ENV" rules/README.md
 ./build/bin/Release/memix-view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md --intent "README with prior context" --name "composed README"
 ./build/bin/Release/memix-view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
+cat ./.memory/README.md
 cat ./.memory/rules/README.md
 ./build/bin/Release/memix-view --store-root /tmp/memix-store generations --into ./.memory
 ./build/bin/Release/memix-view --store-root /tmp/memix-store status --into ./.memory
@@ -159,6 +160,17 @@ compares the latest resolution with the refs it followed; and `resolve`
 re-runs a quest against current refs. `build --intent TEXT --name TEXT`
 upserts the same annotations while building. The older `list` command remains
 available for low-level environment debugging.
+
+`activate` includes a read-only `README.md` at the attachment root in both
+link and copy modes. It records the activated environment and derivation IDs,
+plus the corresponding quest's ID, name, intent, and canonical query definition.
+Each generation keeps its own README snapshot: re-activating after changing
+quest annotations creates a new generation, and rollback restores the earlier
+snapshot. Legacy environments without quest metadata still activate and report
+the missing metadata in the README. Existing generation links remain usable;
+their next activation creates a generation with a README. The original
+environment tree is unchanged. An environment with a root `README.md` entry
+cannot be activated because that path is reserved for the generated README.
 
 The plain `quests` and `find` tables shorten long intent/name cells with `...`
 so columns stay separate; their `--json` forms always retain the complete

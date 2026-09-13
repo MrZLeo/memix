@@ -71,6 +71,7 @@ constexpr std::string_view kProfileLockName = "lock";
 constexpr std::string_view kGenerationSchema = "memix.view.activation.v1";
 constexpr std::string_view kMarkerSchema = "memix.view.activation.marker.v1";
 constexpr std::string_view kActivationMarkerFilename = ".memix-activation.json";
+constexpr std::string_view kActivationReadmeFilename = "README.md";
 constexpr std::string_view kWorkspaceLockPrefix = ".memix-activation-lock-";
 constexpr std::string_view kWorkspaceProfilePrefix = "ws-";
 constexpr std::size_t kWorkspaceProfileHashLength = 16;
@@ -2798,7 +2799,7 @@ fs::path current_link_for(const fs::path &profile_dir) {
 }
 
 fs::path
-generation_link_for(const fs::path &profile_dir, std::uint64_t number) {
+generation_path_for(const fs::path &profile_dir, std::uint64_t number) {
   return generations_dir_for(profile_dir) / std::format("{}", number);
 }
 
@@ -3673,6 +3674,48 @@ load_quest_ir(const fs::path &root, std::string_view ir_hash) {
   });
 }
 
+ViewResult<std::string>
+activation_readme(const fs::path &root,
+                  const memix::ViewEnvironment &environment) {
+  const std::string &ir_hash = environment.derivation.ir_hash;
+  std::string readme =
+      std::format("# Activated memory\n\n"
+                  "- Environment: `{}`\n- Derivation: `{}`\n\n"
+                  "## Quest\n\n- ID: `{}`\n",
+                  environment.id, environment.derivation.id, ir_hash);
+  const fs::path manifest =
+      quest_dir_for(root, ir_hash) / std::string(kQuestManifestFilename);
+  const memix::FsResult<bool> exists = fs::exists(manifest);
+  if (!exists) {
+    return view_error(exists.error());
+  }
+  if (!*exists) {
+    readme += "\nQuest metadata is unavailable for this legacy environment.\n";
+    return readme;
+  }
+  // Quest metadata is replaced atomically; its IR is immutable.
+  ViewResult<QuestRecord> quest = read_quest_record_unlocked(root, ir_hash);
+  if (!quest) {
+    return std::unexpected(quest.error());
+  }
+  ViewResult<memix::ViewIr> ir = load_quest_ir(root, ir_hash);
+  if (!ir) {
+    return std::unexpected(ir.error());
+  }
+  ViewResult<std::string> json = memix::view_ir_json(*ir);
+  if (!json) {
+    return std::unexpected(json.error());
+  }
+  if (!quest->name.empty()) {
+    readme += std::format("\n### Name\n\n{}\n", quest->name);
+  }
+  if (!quest->intent.empty()) {
+    readme += std::format("\n### Intent\n\n{}\n", quest->intent);
+  }
+  readme += std::format("\n### Definition\n\n    {}\n", *json);
+  return readme;
+}
+
 struct RecordedInputGeneration {
   std::string value;
   bool found = false;
@@ -4015,11 +4058,13 @@ scan_generations(const fs::path &profile_dir) {
        !iterator_error && iterator != end; iterator.increment(iterator_error)) {
     const fs::directory_entry &entry = *iterator;
     std::error_code entry_error;
-    if (!entry.is_symlink(entry_error)) {
-      if (entry_error) {
-        return view_error(
-            fs::make_fs_error("failed to inspect", entry_error, entry.path()));
-      }
+    const fs::file_status status = entry.symlink_status(entry_error);
+    if (entry_error) {
+      return view_error(
+          fs::make_fs_error("failed to inspect", entry_error, entry.path()));
+    }
+    if (!std::filesystem::is_symlink(status)
+        && !std::filesystem::is_directory(status)) {
       continue;
     }
     std::uint64_t number = 0;
@@ -4156,10 +4201,10 @@ restore_current_after_failure(const fs::path &profile_dir,
 
 ViewVoid discard_generation(const fs::path &profile_dir, std::uint64_t number) {
   std::optional<memix::ViewError> removal_error;
-  const memix::FsResult<bool> link_removed =
-      fs::remove(generation_link_for(profile_dir, number));
-  if (!link_removed) {
-    removal_error = view_error_from_fs(link_removed.error());
+  const ViewResult<std::uintmax_t> tree_removed =
+      remove_writable_tree(generation_path_for(profile_dir, number));
+  if (!tree_removed) {
+    removal_error = tree_removed.error();
   }
   const fs::path metadata_path = generation_metadata_for(profile_dir, number);
   const ViewVoid metadata_writable =
@@ -4226,23 +4271,66 @@ restore_activation_after_failure(const fs::path &profile_dir,
   return original_error;
 }
 
+ViewVoid
+write_activation_tree(const memix::ViewDerivation &derivation,
+                      std::string_view readme, const fs::path &destination) {
+  const memix::FsResult<bool> created = fs::create_directory(destination);
+  if (!created) {
+    return view_error(created.error());
+  }
+  if (!*created) {
+    return view_error(memix::ErrorKind::AlreadyExists,
+                      std::format("activation tree already exists `{}`",
+                                  destination.string()));
+  }
+  memix::scope_exit cleanup(
+      [&destination] { remove_tree_best_effort(destination); });
+  const ViewVoid tree_created =
+      create_file_tree(destination, derivation.resolved_files);
+  if (!tree_created) {
+    return std::unexpected(tree_created.error());
+  }
+  const fs::path readme_path =
+      destination / std::string(kActivationReadmeFilename);
+  // Check through the filesystem as well, including case-insensitive aliases.
+  ViewResult<std::optional<fs::file_status>> readme_status = lstat(readme_path);
+  if (!readme_status) {
+    return std::unexpected(readme_status.error());
+  }
+  if (readme_status->has_value()) {
+    return view_error(
+        memix::ErrorKind::Conflict,
+        "environment root README.md conflicts with the activation README");
+  }
+  const memix::FsVoid written = fs::write_text_file(readme_path, readme);
+  if (!written) {
+    return view_error(written.error());
+  }
+  const memix::FsVoid read_only =
+      fs::apply_read_only_file_permissions(readme_path);
+  if (!read_only) {
+    return view_error(read_only.error());
+  }
+  const ViewVoid frozen = apply_directory_tree_permissions(destination, false);
+  if (!frozen) {
+    return std::unexpected(frozen.error());
+  }
+  cleanup.release();
+  return {};
+}
+
 ViewVoid write_generation(const fs::path &profile_dir,
                           const GenerationMetadata &metadata,
-                          const fs::path &tree_path) {
-  const fs::path generations_dir = generations_dir_for(profile_dir);
-  const ViewVoid created = ensure_directory(generations_dir);
+                          const memix::ViewDerivation &derivation,
+                          std::string_view readme) {
+  const ViewVoid created = ensure_directory(generations_dir_for(profile_dir));
   if (!created) {
     return std::unexpected(created.error());
   }
-  memix::FsResult<fs::path> relative_target =
-      fs::relative(tree_path, generations_dir);
-  if (!relative_target) {
-    return view_error(relative_target.error());
-  }
-  const memix::FsVoid linked = fs::create_directory_symlink(
-      *relative_target, generation_link_for(profile_dir, metadata.number));
-  if (!linked) {
-    return view_error(linked.error());
+  const ViewVoid tree_written = write_activation_tree(
+      derivation, readme, generation_path_for(profile_dir, metadata.number));
+  if (!tree_written) {
+    return std::unexpected(tree_written.error());
   }
   ViewResult<std::string> json =
       generation_metadata_json(metadata, kGenerationSchema);
@@ -4671,6 +4759,28 @@ sync_copy_activation(const CopyMaterializationRequest &request) {
   if (!copied) {
     return std::unexpected(copied.error());
   }
+  const fs::path generation_path = generation_path_for(
+      profile_dir_for(request.store.root(), request.metadata.profile),
+      request.metadata.number);
+  const memix::FsResult<fs::file_status> generation_status =
+      fs::symlink_status(generation_path);
+  if (!generation_status) {
+    return view_error(generation_status.error());
+  }
+  // Legacy generations link directly to the derivation and have no README.
+  if (!std::filesystem::is_symlink(*generation_status)) {
+    const fs::path readme_path = *temp / std::string(kActivationReadmeFilename);
+    const memix::FsResult<bool> readme_copied = fs::copy_file(
+        generation_path / std::string(kActivationReadmeFilename), readme_path);
+    if (!readme_copied) {
+      return view_error(readme_copied.error());
+    }
+    const memix::FsVoid read_only =
+        fs::apply_read_only_file_permissions(readme_path);
+    if (!read_only) {
+      return view_error(read_only.error());
+    }
+  }
   ViewResult<std::string> marker_json =
       generation_metadata_json(request.metadata, kMarkerSchema);
   if (!marker_json) {
@@ -4835,11 +4945,39 @@ struct CurrentGeneration {
   bool switched = false;
 };
 
+ViewResult<bool>
+generation_readme_matches(const fs::path &profile_dir, std::uint64_t number,
+                          std::string_view readme) {
+  const fs::path generation = generation_path_for(profile_dir, number);
+  ViewResult<std::optional<fs::file_status>> status = lstat(generation);
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  if (!status->has_value() || std::filesystem::is_symlink(**status)) {
+    return false;
+  }
+  const fs::path readme_path =
+      generation / std::string(kActivationReadmeFilename);
+  ViewResult<std::optional<fs::file_status>> readme_status = lstat(readme_path);
+  if (!readme_status) {
+    return std::unexpected(readme_status.error());
+  }
+  if (!readme_status->has_value()) {
+    return false;
+  }
+  const memix::FsResult<std::string> existing =
+      fs::read_text_file(readme_path, "activation README");
+  if (!existing) {
+    return view_error(existing.error());
+  }
+  return *existing == readme;
+}
+
 ViewResult<CurrentGeneration>
 ensure_current_generation(const fs::path &profile_dir,
                           const memix::ViewEnvironment &environment,
-                          memix::ActivationMode mode,
-                          const fs::path &workspace) {
+                          memix::ActivationMode mode, const fs::path &workspace,
+                          std::string_view readme) {
   ViewResult<fs::path> attach_path = workspace_attach_path(workspace);
   if (!attach_path) {
     return std::unexpected(attach_path.error());
@@ -4868,12 +5006,19 @@ ensure_current_generation(const fs::path &profile_dir,
         && existing->derivation_id == environment.derivation.id
         && existing->mode == mode
         && same_workspace) {
-      return CurrentGeneration{
-          .number = **current,
-          .metadata = std::move(*existing),
-          .previous = *current,
-          .switched = false,
-      };
+      const ViewResult<bool> same_readme =
+          generation_readme_matches(profile_dir, **current, readme);
+      if (!same_readme) {
+        return std::unexpected(same_readme.error());
+      }
+      if (*same_readme) {
+        return CurrentGeneration{
+            .number = **current,
+            .metadata = std::move(*existing),
+            .previous = *current,
+            .switched = false,
+        };
+      }
     }
   }
   ViewResult<std::vector<std::uint64_t>> existing_generations =
@@ -4905,7 +5050,7 @@ ensure_current_generation(const fs::path &profile_dir,
       .workspace = workspace_identity,
   };
   const ViewVoid written =
-      write_generation(profile_dir, metadata, environment.derivation.tree_path);
+      write_generation(profile_dir, metadata, environment.derivation, readme);
   if (!written) {
     return std::unexpected(written.error());
   }
@@ -6089,8 +6234,13 @@ ViewService::activate(std::string_view environment_prefix,
     return std::unexpected(link_target.error());
   }
 
+  ViewResult<std::string> readme =
+      activation_readme(store_.root(), *environment);
+  if (!readme) {
+    return std::unexpected(readme.error());
+  }
   ViewResult<CurrentGeneration> generation = ensure_current_generation(
-      profile_dir, *environment, options.mode, options.into);
+      profile_dir, *environment, options.mode, options.into, *readme);
   if (!generation) {
     return std::unexpected(generation.error());
   }
