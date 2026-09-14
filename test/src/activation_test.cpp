@@ -5,6 +5,7 @@
 
 #include "detail/hash.hpp"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
@@ -106,6 +107,21 @@ std::string read_file(const fs::path &path) {
   REQUIRE(input);
   return {std::istreambuf_iterator<char>(input),
           std::istreambuf_iterator<char>()};
+}
+
+void check_generation_read_only(const fs::path &generation) {
+  for (const fs::path &path : {
+           generation,
+           generation / "README.md",
+           generation / "rules",
+           generation / "rules" / "repo",
+       }) {
+    INFO(path.string());
+    const auto status = fs::symlink_status(path);
+    REQUIRE(status);
+    CHECK_FALSE(std::filesystem::is_symlink(*status));
+    CHECK((status->permissions() & fs::perms::owner_write) == fs::perms::none);
+  }
 }
 
 bool path_exists(const fs::path &path) {
@@ -439,6 +455,7 @@ TEST_CASE(
   REQUIRE(previous.contains("### Definition"));
   const fs::path cached_readme =
       fixture.profile_dir("test-profile") / "generations" / "1" / "README.md";
+  check_generation_read_only(cached_readme.parent_path());
   REQUIRE(fs::permissions(cached_readme, fs::perms::owner_all));
   write_file(cached_readme, previous);
 
@@ -447,7 +464,9 @@ TEST_CASE(
   CHECK(activated.derivation_id == environment.derivation.id);
   CHECK(read_file(fixture.memory_link() / "README.md") == readme);
   const auto rolled_back = fixture.views.rollback("test-profile", 1);
+  INFO((rolled_back ? "rollback succeeded" : rolled_back.error().message));
   REQUIRE(rolled_back);
+  check_generation_read_only(cached_readme.parent_path());
   CHECK(rolled_back->environment_id == environment.id);
   CHECK(rolled_back->derivation_id == environment.derivation.id);
   CHECK(read_file(fixture.memory_link() / "README.md") == readme);
@@ -539,7 +558,9 @@ TEST_CASE(
   REQUIRE(fs::permissions(cached_readme, fs::perms::owner_all));
   write_file(cached_readme, "README from an older activation\n");
   const auto same = fixture.views.rollback("test-profile", 1);
+  INFO((same ? "rollback succeeded" : same.error().message));
   REQUIRE(same);
+  check_generation_read_only(cached_readme.parent_path());
   CHECK_FALSE(same->switched);
   CHECK(same->materialized);
   CHECK(read_file(fixture.memory_link() / "README.md") == original);
@@ -555,8 +576,10 @@ TEST_CASE(
                          / "quests"
                          / environment.derivation.ir_hash));
   const auto rolled_back = fixture.views.rollback("test-profile");
+  INFO((rolled_back ? "rollback succeeded" : rolled_back.error().message));
   REQUIRE(rolled_back);
   CHECK(rolled_back->generation == 1);
+  check_generation_read_only(cached_readme.parent_path());
   CHECK(read_file(fixture.memory_link() / "README.md") == original);
 
   const fs::path elsewhere = fixture.directory.path() / "elsewhere" / ".memory";
@@ -582,6 +605,8 @@ TEST_CASE(
   fixture.activate(environment, "test-profile", mode);
   const fs::path generation =
       fixture.profile_dir("test-profile") / "generations" / "1";
+  const auto tree_status = fs::status(environment.derivation.tree_path);
+  REQUIRE(tree_status);
   REQUIRE(fs::permissions(generation, fs::perms::owner_all));
   REQUIRE(fs::permissions(generation / "README.md", fs::perms::owner_all));
   REQUIRE(fs::permissions(generation / "rules", fs::perms::owner_all));
@@ -595,8 +620,13 @@ TEST_CASE(
   const std::string readme = read_file(fixture.memory_link() / "README.md");
   CHECK(readme.contains(environment.derivation.ir_hash));
   const auto rolled_back = fixture.views.rollback("test-profile");
+  INFO((rolled_back ? "rollback succeeded" : rolled_back.error().message));
   REQUIRE(rolled_back);
   CHECK(rolled_back->generation == 1);
+  check_generation_read_only(generation);
+  const auto tree_status_after = fs::status(environment.derivation.tree_path);
+  REQUIRE(tree_status_after);
+  CHECK(tree_status_after->permissions() == tree_status->permissions());
   CHECK(read_file(fixture.memory_link() / "README.md") == readme);
   CHECK(read_file(fixture.memory_link() / "rules" / "repo" / "AGENTS.md")
         == "repo rules\n");

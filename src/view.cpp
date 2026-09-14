@@ -5132,6 +5132,85 @@ ensure_current_generation(const fs::path &profile_dir,
 }
 
 ViewResult<bool>
+replace_generation_tree(const fs::path &temp, const fs::path &generation,
+                        const fs::file_status &status) {
+  const bool is_directory = std::filesystem::is_directory(status);
+  if (is_directory) {
+    const ViewVoid checked = validate_removal_tree_hard_links(generation);
+    if (!checked) {
+      return std::unexpected(checked.error());
+    }
+  }
+  const ViewResult<fs::path> aside =
+      unique_temp_dir(generation.parent_path(),
+                      std::format("old-{}", generation.filename().string()));
+  if (!aside) {
+    return std::unexpected(aside.error());
+  }
+
+  // Older macOS versions require write permission on a directory itself to
+  // rename it, even within the same parent. Only thaw the roots, never links
+  // into the immutable store or files within either tree.
+  const memix::FsVoid writable = fs::apply_writable_directory_permissions(temp);
+  if (!writable) {
+    return view_error(writable.error());
+  }
+  if (is_directory) {
+    const memix::FsVoid previous_writable = fs::permissions(
+        generation, fs::perms::owner_write, fs::perm_options::add);
+    if (!previous_writable) {
+      return view_error(previous_writable.error());
+    }
+  }
+
+  const memix::FsVoid moved_aside = fs::rename(generation, *aside);
+  const auto restore_previous =
+      [&](memix::ViewError error) -> ViewResult<bool> {
+    if (moved_aside) {
+      const memix::FsVoid restored = fs::rename(*aside, generation);
+      if (!restored) {
+        error.message = std::format("{}; additionally failed to restore "
+                                    "generation: {}; recover it from `{}`",
+                                    error.message, restored.error().message,
+                                    aside->string());
+        return std::unexpected(std::move(error));
+      }
+    }
+    if (is_directory) {
+      const memix::FsVoid restored =
+          fs::permissions(generation, status.permissions());
+      if (!restored) {
+        error.message = std::format(
+            "{}; additionally failed to restore generation permissions: {}",
+            error.message, restored.error().message);
+      }
+    }
+    return std::unexpected(std::move(error));
+  };
+  if (!moved_aside) {
+    return restore_previous(view_error_from_fs(moved_aside.error()));
+  }
+  const memix::FsVoid installed = fs::rename(temp, generation);
+  if (!installed) {
+    return restore_previous(view_error_from_fs(installed.error()));
+  }
+  const memix::FsVoid frozen =
+      fs::apply_read_only_directory_permissions(generation);
+  if (!frozen) {
+    const memix::FsVoid withdrawn = fs::rename(generation, temp);
+    if (!withdrawn) {
+      return view_error(std::format(
+          "{}; additionally failed to withdraw replacement generation: {}; "
+          "recover the previous generation from `{}`",
+          frozen.error().message, withdrawn.error().message, aside->string()));
+    }
+    return restore_previous(view_error_from_fs(frozen.error()));
+  }
+  remove_tree_best_effort(*aside);
+  return true;
+}
+
+ViewResult<bool>
 refresh_generation_tree(const fs::path &profile_dir,
                         const GenerationMetadata &metadata,
                         const memix::ViewEnvironment &environment) {
@@ -5161,8 +5240,8 @@ refresh_generation_tree(const fs::path &profile_dir,
   if (!written) {
     return std::unexpected(written.error());
   }
-  ViewResult<bool> installed = replace_existing_with_copy_tree(
-      *temp, generation, std::filesystem::is_directory(*status));
+  ViewResult<bool> installed =
+      replace_generation_tree(*temp, generation, *status);
   if (!installed) {
     return std::unexpected(installed.error());
   }
