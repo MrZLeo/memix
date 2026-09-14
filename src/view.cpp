@@ -3771,7 +3771,12 @@ std::string activation_readme(const memix::ViewEnvironment &environment) {
       "# Activated memory\n\n- Environment: `{}`\n- Derivation: `{}`\n\n",
       environment.id, environment.derivation.id);
   if (environment.derivation.runtime_quest.has_value()) {
-    readme += *environment.derivation.runtime_quest;
+    const std::string_view snapshot = *environment.derivation.runtime_quest;
+    // Keep the stored snapshot and its identity intact. Only omit the final
+    // generated definition from the export; Name and Intent may contain
+    // their own Markdown headings.
+    const std::size_t definition = snapshot.rfind("\n### Definition\n\n    ");
+    readme += snapshot.substr(0, definition);
   } else {
     readme += std::format("## Quest\n\n- ID: `{}`\n\n"
                           "Runtime Quest instructions were not recorded for "

@@ -274,6 +274,15 @@ TEST_CASE("activation includes the corresponding quest in a read-only README",
       fixture.views, kRulesLocator,
       {.intent = "实现功能\n保留 `API` 兼容性", .name = "Repository context"});
   const std::string manifest = read_file(environment.derivation.manifest_path);
+  const std::string environment_manifest = read_file(environment.manifest_path);
+  const fs::path definition_path = fixture.store_root
+                                 / "views"
+                                 / "quests"
+                                 / environment.derivation.ir_hash
+                                 / "ir.json";
+  const std::string definition = read_file(definition_path);
+  REQUIRE(environment.derivation.runtime_quest);
+  CHECK(environment.derivation.runtime_quest->contains(definition));
 
   // A newer resolution of the same quest must not change which environment
   // the activation README describes.
@@ -293,17 +302,16 @@ TEST_CASE("activation includes the corresponding quest in a read-only README",
   CHECK(readme.contains(environment.derivation.ir_hash));
   CHECK(readme.contains("Repository context"));
   CHECK(readme.contains("实现功能\n保留 `API` 兼容性"));
-  CHECK(readme.contains(read_file(fixture.store_root
-                                  / "views"
-                                  / "quests"
-                                  / environment.derivation.ir_hash
-                                  / "ir.json")));
+  CHECK_FALSE(readme.contains("### Definition"));
+  CHECK_FALSE(readme.contains(definition));
   CHECK_FALSE(path_is_symlink(readme_path));
   const memix::FsResult<fs::file_status> status = fs::status(readme_path);
   REQUIRE(status);
   CHECK((status->permissions() & fs::perms::owner_write) == fs::perms::none);
   CHECK_FALSE(path_exists(environment.derivation.tree_path / "README.md"));
   CHECK(read_file(environment.derivation.manifest_path) == manifest);
+  CHECK(read_file(environment.manifest_path) == environment_manifest);
+  CHECK(read_file(definition_path) == definition);
   CHECK(read_file(fixture.memory_link() / "rules" / "repo" / "AGENTS.md")
         == "repo rules\n");
 }
@@ -391,9 +399,10 @@ TEST_CASE("activation preserves frozen instructions after deleting the quest",
   SECTION("copy") { mode = memix::ActivationMode::Copy; }
   write_file(fixture.source, "repo rules\n");
   ingest_rules(fixture.store, fixture.source, "rules");
+  const std::string intent =
+      "Frozen instructions\n\n### Definition\n\n    Keep this example";
   const memix::ViewEnvironment environment = build_rules_environment(
-      fixture.views, kRulesLocator,
-      {.intent = "Frozen instructions", .name = "Frozen name"});
+      fixture.views, kRulesLocator, {.intent = intent, .name = "Frozen name"});
   REQUIRE(fs::remove_all(fixture.store_root
                          / "views"
                          / "quests"
@@ -401,10 +410,51 @@ TEST_CASE("activation preserves frozen instructions after deleting the quest",
   fixture.activate(environment, "test-profile", mode);
   const std::string readme = read_file(fixture.memory_link() / "README.md");
   CHECK(readme.contains(environment.derivation.ir_hash));
-  CHECK(readme.contains("Frozen instructions"));
+  CHECK(readme.contains(intent));
   CHECK(readme.contains("Frozen name"));
-  CHECK(readme.contains("### Definition"));
+  CHECK_FALSE(readme.contains("memix.view.ir."));
   CHECK_FALSE(readme.contains("legacy"));
+}
+
+TEST_CASE(
+    "activation and rollback omit definitions from previously cached READMEs",
+    "[activation][quest]") {
+  ActivationFixture fixture;
+  memix::ActivationMode mode = memix::ActivationMode::Link;
+  SECTION("link") {}
+  SECTION("copy") { mode = memix::ActivationMode::Copy; }
+  write_file(fixture.source, "repo rules\n");
+  ingest_rules(fixture.store, fixture.source, "rules");
+  const memix::ViewEnvironment environment = build_rules_environment(
+      fixture.views, kRulesLocator,
+      {.intent = "Frozen instructions", .name = "Frozen name"});
+  fixture.activate(environment, "test-profile", mode);
+  const std::string readme = read_file(fixture.memory_link() / "README.md");
+  REQUIRE_FALSE(readme.contains("### Definition"));
+  REQUIRE(environment.derivation.runtime_quest);
+  const std::string previous = std::format(
+      "# Activated memory\n\n- Environment: `{}`\n- Derivation: `{}`\n\n{}",
+      environment.id, environment.derivation.id,
+      *environment.derivation.runtime_quest);
+  REQUIRE(previous.contains("### Definition"));
+  const fs::path cached_readme =
+      fixture.profile_dir("test-profile") / "generations" / "1" / "README.md";
+  REQUIRE(fs::permissions(cached_readme, fs::perms::owner_all));
+  write_file(cached_readme, previous);
+
+  const auto activated = fixture.activate(environment, "test-profile", mode);
+  CHECK(activated.environment_id == environment.id);
+  CHECK(activated.derivation_id == environment.derivation.id);
+  CHECK(read_file(fixture.memory_link() / "README.md") == readme);
+  const auto rolled_back = fixture.views.rollback("test-profile", 1);
+  REQUIRE(rolled_back);
+  CHECK(rolled_back->environment_id == environment.id);
+  CHECK(rolled_back->derivation_id == environment.derivation.id);
+  CHECK(read_file(fixture.memory_link() / "README.md") == readme);
+  const auto rebuilt = build_rules_environment(fixture.views, kRulesLocator);
+  CHECK(rebuilt.id == environment.id);
+  CHECK(rebuilt.derivation.runtime_quest
+        == environment.derivation.runtime_quest);
 }
 
 TEST_CASE("runtime quest snapshots are checked against the derivation identity",

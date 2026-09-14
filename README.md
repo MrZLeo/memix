@@ -163,7 +163,9 @@ available for low-level environment debugging.
 
 `activate` includes a read-only `README.md` at the attachment root in both
 link and copy modes. It records the activated environment and derivation IDs,
-plus the corresponding quest's ID, name, intent, and canonical query definition.
+plus the corresponding quest's ID and frozen name and intent. The complete
+query definition is omitted from the README; it remains in the store with its
+existing version bindings.
 The runtime quest instructions are frozen in the derivation at build time and
 participate in its identity. Changing the quest's name, intent, or query and
 then rebuilding produces a new environment. Updating the quest catalog alone
