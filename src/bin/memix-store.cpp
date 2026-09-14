@@ -105,7 +105,7 @@ require_type(std::string_view value) {
 
 std::string format_size(std::uintmax_t size_bytes) {
   constexpr std::array<std::string_view, 7> units = {
-      "B", "KB", "MB", "GB", "TB", "PB", "EB",
+      {"B", "KB", "MB", "GB", "TB", "PB", "EB"},
   };
 
   if (size_bytes < kSizeUnitBaseBytes) {
@@ -235,7 +235,7 @@ metadata_json_array(const std::vector<memix::StoredObject> &objects) {
   bool needs_comma = false;
   for (const memix::StoredObject &object : objects) {
     if (needs_comma) {
-      output += ",";
+      output += ',';
     }
     const std::expected<std::string, memix::StoreError> metadata =
         memix::metadata_json(object);
@@ -245,7 +245,7 @@ metadata_json_array(const std::vector<memix::StoredObject> &objects) {
     output += *metadata;
     needs_comma = true;
   }
-  output += "]";
+  output += ']';
   return output;
 }
 
@@ -611,7 +611,7 @@ void add_list_command(Argum::Parser &parser, StoreCliOptions &options) {
                  }));
   parser.add(Argum::Option("--json")
                  .help("Emit metadata as a JSON array instead of a table.")
-                 .handler([&options]() { options.list_json = true; }));
+                 .handler([&options] { options.list_json = true; }));
 }
 
 void add_ingest_command(Argum::Parser &parser, StoreCliOptions &options) {
@@ -698,7 +698,7 @@ void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
   add_type_option(parser, options.tree_type_name);
   parser.add(Argum::Option("--all")
                  .help("Explore every available object type.")
-                 .handler([&options]() { options.tree_all = true; }));
+                 .handler([&options] { options.tree_all = true; }));
   parser.add(Argum::Option("--path")
                  .argName("TEXT")
                  .help("Limit output to one logical path or subtree.")
@@ -724,7 +724,7 @@ void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
           }));
   parser.add(Argum::Option("--json")
                  .help("Emit structured catalog entries as JSON.")
-                 .handler([&options]() { options.tree_json = true; }));
+                 .handler([&options] { options.tree_json = true; }));
   add_generation_option(parser, options.tree_generation,
                         "Generation id. Defaults to the selected type's "
                         "latest ref.");
@@ -733,7 +733,7 @@ void add_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
 void add_expose_command(Argum::Parser &parser, StoreCliOptions &options) {
   parser.add(Argum::Option("--json")
                  .help("Emit per-type projection file counts as JSON.")
-                 .handler([&options]() { options.expose_json = true; }));
+                 .handler([&options] { options.expose_json = true; }));
 }
 
 void add_rules_cat_command(Argum::Parser &parser, StoreCliOptions &options) {

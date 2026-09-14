@@ -1536,7 +1536,7 @@ find_context_tree_entry(const std::vector<memix::ContextTreeEntry> &entries,
 
 void upsert_context_tree_entry(std::vector<memix::ContextTreeEntry> &entries,
                                memix::ContextTreeEntry replacement) {
-  auto entry = find_context_tree_entry(entries, replacement.name);
+  const auto entry = find_context_tree_entry(entries, replacement.name);
   if (entry == entries.end()) {
     entries.push_back(std::move(replacement));
     return;

@@ -142,7 +142,7 @@ column_window(std::span<const ColumnKind> stack, std::size_t terminal_width) {
 
 [[nodiscard]] inline std::string format_size(std::uintmax_t size_bytes) {
   constexpr std::array<std::string_view, 7> units = {
-      "B", "KB", "MB", "GB", "TB", "PB", "EB",
+      {"B", "KB", "MB", "GB", "TB", "PB", "EB"},
   };
   constexpr std::uintmax_t unit_base_bytes = 1024;
   constexpr double unit_base = 1024.0;
@@ -813,7 +813,7 @@ parse_special_locator(const std::string &source) {
         .kind = kind,
         .type = std::nullopt,
         .path = {},
-        .version = {},
+        .version = ContextVersion(),
         .value = std::move(value),
     };
   }

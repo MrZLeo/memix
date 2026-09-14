@@ -1115,7 +1115,7 @@ memix::cli_detail::VoidResult run_status(const ViewCliOptions &options) {
 void add_list_command(Argum::Parser &parser, ViewCliOptions &options) {
   parser.add(Argum::Option("--json")
                  .help("Emit environment summaries as JSON.")
-                 .handler([&options]() { options.list_json = true; }));
+                 .handler([&options] { options.list_json = true; }));
 }
 
 void add_tree_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1150,7 +1150,7 @@ void add_tree_command(Argum::Parser &parser, ViewCliOptions &options) {
           }));
   parser.add(Argum::Option("--json")
                  .help("Emit structured tree entries as JSON.")
-                 .handler([&options]() { options.tree_json = true; }));
+                 .handler([&options] { options.tree_json = true; }));
 }
 
 void add_cat_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1214,7 +1214,7 @@ void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
   add_quest_metadata(parser, options);
   parser.add(Argum::Option("--json")
                  .help("Emit the view environment manifest JSON.")
-                 .handler([&options]() { options.build_json = true; }));
+                 .handler([&options] { options.build_json = true; }));
 }
 
 void add_define_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1222,13 +1222,13 @@ void add_define_command(Argum::Parser &parser, ViewCliOptions &options) {
   add_quest_metadata(parser, options);
   parser.add(Argum::Option("--json")
                  .help("Emit the quest definition as JSON.")
-                 .handler([&options]() { options.define_json = true; }));
+                 .handler([&options] { options.define_json = true; }));
 }
 
 void add_quests_command(Argum::Parser &parser, ViewCliOptions &options) {
   parser.add(Argum::Option("--json")
                  .help("Emit quest summaries as JSON.")
-                 .handler([&options]() { options.quests_json = true; }));
+                 .handler([&options] { options.quests_json = true; }));
 }
 
 void add_find_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1246,20 +1246,20 @@ void add_find_command(Argum::Parser &parser, ViewCliOptions &options) {
                  }));
   parser.add(Argum::Option("--json")
                  .help("Emit matching quest summaries as JSON.")
-                 .handler([&options]() { options.find_json = true; }));
+                 .handler([&options] { options.find_json = true; }));
 }
 
 void add_quest_id_command(Argum::Parser &parser, ViewCliOptions &options,
                           std::string_view help, bool &json) {
   parser.add(Argum::Positional("quest-id")
-                 .help(std::string(help))
+                 .help(help)
                  .occurs(Argum::neverOrOnce)
                  .handler([&options](std::string_view value) {
                    options.quest_id = value;
                  }));
   parser.add(Argum::Option("--json")
                  .help("Emit structured JSON output.")
-                 .handler([&json]() { json = true; }));
+                 .handler([&json] { json = true; }));
 }
 
 void add_resolve_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1286,7 +1286,7 @@ void add_show_command(Argum::Parser &parser, ViewCliOptions &options) {
                  }));
   parser.add(Argum::Option("--json")
                  .help("Emit the view environment manifest JSON.")
-                 .handler([&options]() { options.show_json = true; }));
+                 .handler([&options] { options.show_json = true; }));
 }
 
 void add_into_option(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1328,7 +1328,7 @@ void add_activate_command(Argum::Parser &parser, ViewCliOptions &options) {
                  }));
   parser.add(Argum::Option("--force")
                  .help("Replace an existing workspace symlink.")
-                 .handler([&options]() { options.force = true; }));
+                 .handler([&options] { options.force = true; }));
 }
 
 void add_generations_command(Argum::Parser &parser, ViewCliOptions &options) {
@@ -1354,7 +1354,7 @@ void add_deactivate_command(Argum::Parser &parser, ViewCliOptions &options) {
       Argum::Option("--wipe-profile")
           .help("Also remove the profile and its generations from the "
                 "store. Other workspaces sharing the profile will dangle.")
-          .handler([&options]() { options.wipe_profile = true; }));
+          .handler([&options] { options.wipe_profile = true; }));
 }
 
 void add_status_command(Argum::Parser &parser, ViewCliOptions &options) {

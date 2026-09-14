@@ -71,14 +71,13 @@ CliParseResult parse_cli_args(int argc, char **argv) {
   const char *program_name = "memix-tui";
   CliParseResult result;
   Argum::Parser parser;
-  parser.add(
-      Argum::Option("--help", "-h")
-          .help("Print this help message and exit")
-          .handler([&result]() { result.options.help_requested = true; }));
+  parser.add(Argum::Option("--help", "-h")
+                 .help("Print this help message and exit")
+                 .handler([&result] { result.options.help_requested = true; }));
   parser.add(
       Argum::Option("--version")
           .help("Display program version information and exit")
-          .handler([&result]() { result.options.version_requested = true; }));
+          .handler([&result] { result.options.version_requested = true; }));
   parser.add(Argum::Option("--store-root")
                  .argName("PATH")
                  .help("Store root. Defaults to MEMIX_STORE_HOME, "
@@ -251,7 +250,7 @@ public:
   }
 
   void Render(ftxui::Screen &screen) override {
-    auto label =
+    const auto label =
         ftxui::text(std::to_string(scroll_progress_percent(scroll_)) + "%")
         | ftxui::align_right;
     label->ComputeRequirement();
@@ -985,8 +984,8 @@ bool load_store_file_content(TuiState &state, ContentScreen &screen) {
   screen.title = screen.path.generic_string();
   screen.scope = type_scope(screen.type, screen.generation);
   memix::tui::Provenance provenance;
-  provenance.generation = generation_id;
-  provenance.parent_generation = parent;
+  provenance.generation = std::move(generation_id);
+  provenance.parent_generation = std::move(parent);
   return finish_object_content(state, screen, *object, std::move(provenance));
 }
 
@@ -1040,7 +1039,7 @@ load_environment_file_content(TuiState &state, ContentScreen &screen) {
       file->source_generation.empty()
           ? std::nullopt
           : std::optional<std::string>(file->source_generation);
-  provenance.parent_generation = parent;
+  provenance.parent_generation = std::move(parent);
   provenance.locator = file->locator.empty()
                          ? std::nullopt
                          : std::optional<std::string>(file->locator);
@@ -1451,7 +1450,7 @@ std::vector<fs::path> parent_scopes(const fs::path &path, bool include_path) {
 }
 
 std::expected<std::optional<std::string>, std::string>
-resolve_locator_generation(TuiState &state,
+resolve_locator_generation(const TuiState &state,
                            const memix::tui::Locator &locator) {
   if (locator.version.kind == memix::tui::ContextVersionKind::Latest) {
     return std::optional<std::string>{};
@@ -1694,8 +1693,11 @@ create_editor_temp_file(const fs::path &logical_path,
     return std::unexpected(system_temp.error().message);
   }
   const memix::FsResult<fs::path> unique = fs::unique_temp_dir(
-      *system_temp, {.prefix = "memix-tui",
-                     .failure_message = "failed to allocate editor temp path"});
+      *system_temp,
+      {
+          .prefix = "memix-tui",
+          .failure_message = "failed to allocate editor temp path",
+      });
   if (!unique) {
     return std::unexpected(unique.error().message);
   }
@@ -1734,7 +1736,7 @@ create_editor_temp_file(const fs::path &logical_path,
 }
 
 std::expected<std::string, std::string>
-editor_initial_content(TuiState &state, const EditorRequest &request) {
+editor_initial_content(const TuiState &state, const EditorRequest &request) {
   if (request.operation == memix::tui::EditOperation::Add) {
     return std::string{};
   }
@@ -2144,7 +2146,7 @@ bool is_mutation_event(const ftxui::Event &event) {
 
 bool handle_mutation_event(TuiState &state, const ftxui::Event &event,
                            const ftxui::Closure &open_editor) {
-  if (auto *list = std::get_if<ListScreen>(&state.stack.back())) {
+  if (const auto *list = std::get_if<ListScreen>(&state.stack.back())) {
     if (list->kind == ListKind::EnvironmentTree) {
       state.status = "environments are locked artifacts";
       return true;
@@ -2940,7 +2942,7 @@ ftxui::Element render_list_body(ListScreen &screen, bool ancestor, int width) {
        | flex;
 }
 
-ftxui::Element render_list(TuiState &state, ListScreen &screen) {
+ftxui::Element render_list(const TuiState &state, ListScreen &screen) {
   using namespace ftxui;
   return vbox({
              status_bar(state,
@@ -2995,24 +2997,23 @@ ftxui::Element render_content_line(std::string_view line,
   const std::vector<std::size_t> offsets =
       match_offsets({.text = line, .query = query});
   if (offsets.empty()) {
-    return text(std::string(line)) | color(Color::GrayLight);
+    return text(line) | color(Color::GrayLight);
   }
   Elements pieces;
   std::size_t cursor = 0;
   for (const std::size_t offset : offsets) {
     if (offset > cursor) {
-      pieces.push_back(text(std::string(line.substr(cursor, offset - cursor)))
+      pieces.push_back(text(line.substr(cursor, offset - cursor))
                        | color(Color::GrayLight));
     }
     pieces.push_back(
-        text(std::string(line.substr(offset, query.size())))
+        text(line.substr(offset, query.size()))
         | color(Color::Black)
         | bgcolor(current ? Color::MagentaLight : Color::YellowLight));
     cursor = offset + query.size();
   }
   if (cursor < line.size()) {
-    pieces.push_back(text(std::string(line.substr(cursor)))
-                     | color(Color::GrayLight));
+    pieces.push_back(text(line.substr(cursor)) | color(Color::GrayLight));
   }
   return hbox(std::move(pieces));
 }
@@ -3112,7 +3113,7 @@ ftxui::Element render_content_body(ContentScreen &screen) {
        | flex;
 }
 
-ftxui::Element render_content(TuiState &state, ContentScreen &screen) {
+ftxui::Element render_content(const TuiState &state, ContentScreen &screen) {
   using namespace ftxui;
   const std::string query = visible_search_query(screen);
   return vbox({
@@ -3225,7 +3226,7 @@ render_column_layout(TuiState &state,
   TuiScreen &active = state.stack.back();
   Element status;
   Element footer;
-  if (auto *list = std::get_if<ListScreen>(&active)) {
+  if (const auto *list = std::get_if<ListScreen>(&active)) {
     status = status_bar(state, StatusBarFields{
                                    .count = list->count,
                                    .cursor = list_cursor(*list),
@@ -3235,7 +3236,7 @@ render_column_layout(TuiState &state,
                                });
     footer = list_footer(state, *list);
   } else {
-    auto &content = std::get<ContentScreen>(active);
+    const auto &content = std::get<ContentScreen>(active);
     status = status_bar(state, StatusBarFields{
                                    .count = content.count,
                                    .cursor = content_cursor(content),

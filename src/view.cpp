@@ -988,7 +988,7 @@ environment_ir_input_from_json(const JsonObjectReader &fields) {
       .locator = {},
       .type = memix::MemoryObjectType::Rules,
       .path = {},
-      .version = {},
+      .version = memix::ViewVersionSelector(),
       .recursive = false,
       .required = true,
       .kind = memix::ViewInputKind::Environment,
@@ -1084,7 +1084,7 @@ ViewResult<memix::ViewIr> ir_from_json(const IrJsonParseRequest &request) {
       memix::detail::parse_json_object(request.text);
   if (!document) {
     return view_error(memix::detail::with_error_context(
-        std::move(document.error()), std::string(request.context),
+        std::move(document.error()), request.context,
         memix::ErrorKind::InvalidData));
   }
   const JsonObjectReader fields(document->root_object());
@@ -4224,8 +4224,7 @@ ViewVoid acquire_existing_profile_lock(const fs::path &profile_dir) {
 }
 
 ViewVoid swap_current(const fs::path &profile_dir, std::uint64_t number) {
-  ViewResult<fs::path> temp =
-      unique_temp_dir(profile_dir, std::string(kCurrentLinkName));
+  ViewResult<fs::path> temp = unique_temp_dir(profile_dir, kCurrentLinkName);
   if (!temp) {
     return std::unexpected(temp.error());
   }
@@ -5394,7 +5393,7 @@ lower_authored_input(const memix::AuthoredViewInput &authored) {
       .locator = {},
       .type = memix::MemoryObjectType::Rules,
       .path = {},
-      .version = {},
+      .version = memix::ViewVersionSelector(),
       .recursive = false,
       .required = true,
       .kind = memix::ViewInputKind::Environment,

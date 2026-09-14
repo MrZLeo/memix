@@ -137,10 +137,10 @@ struct CommonOptions {
 inline void add_common_options(Argum::Parser &parser, CommonOptions &options) {
   parser.add(Argum::Option("--help", "-h")
                  .help("Print this help message and exit")
-                 .handler([&options]() { options.help_requested = true; }));
+                 .handler([&options] { options.help_requested = true; }));
   parser.add(Argum::Option("--version")
                  .help("Display program version information and exit")
-                 .handler([&options]() { options.version_requested = true; }));
+                 .handler([&options] { options.version_requested = true; }));
   parser.add(Argum::Option("--store-root")
                  .argName("TEXT")
                  .help("Store root. Defaults to MEMIX_STORE_HOME, "
@@ -150,10 +150,10 @@ inline void add_common_options(Argum::Parser &parser, CommonOptions &options) {
                  }));
 }
 
-inline VoidResult parse_arguments(Argum::Parser &parser, int argc,
-                                  char **argv) {
+inline VoidResult
+parse_arguments(const Argum::Parser &parser, int argc, char **argv) {
   const Argum::Expected<void> result = parser.parse(argc, argv);
-  if (auto error = result.error()) {
+  if (const auto error = result.error()) {
     return unexpected_error(error->message());
   }
   return {};
