@@ -54,7 +54,7 @@ constexpr std::uint64_t kDecimalRadix = 10;
 template <typename Value>
 using StoreResult = memix::StoreResult<Value>;
 
-using StoreVoid = memix::StoreVoid;
+using memix::StoreVoid;
 
 using memix::detail::is_lower_hex_sha256;
 using memix::detail::JsonObjectReader;

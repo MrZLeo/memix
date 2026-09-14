@@ -83,7 +83,7 @@ constexpr auto kQuestLockTimeout = std::chrono::seconds(1);
 template <typename Value>
 using ViewResult = memix::ViewResult<Value>;
 
-using ViewVoid = memix::ViewVoid;
+using memix::ViewVoid;
 using memix::detail::JsonObjectReader;
 
 struct VersionJson {

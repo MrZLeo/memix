@@ -12,16 +12,15 @@
 
 namespace memix::fs {
 
-using path = std::filesystem::path;
-using perms = std::filesystem::perms;
-using perm_options = std::filesystem::perm_options;
-using copy_options = std::filesystem::copy_options;
-using directory_entry = std::filesystem::directory_entry;
-using directory_iterator = std::filesystem::directory_iterator;
-using file_status = std::filesystem::file_status;
-using file_type = std::filesystem::file_type;
-using recursive_directory_iterator =
-    std::filesystem::recursive_directory_iterator;
+using std::filesystem::copy_options;
+using std::filesystem::directory_entry;
+using std::filesystem::directory_iterator;
+using std::filesystem::file_status;
+using std::filesystem::file_type;
+using std::filesystem::path;
+using std::filesystem::perm_options;
+using std::filesystem::perms;
+using std::filesystem::recursive_directory_iterator;
 
 } // namespace memix::fs
 
