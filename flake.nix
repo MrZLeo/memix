@@ -34,8 +34,10 @@
               llvmPackages_latest.clang-tools
             ];
 
-            # The project defaults to fully static executables on Linux.
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.glibc.static ];
+            # Keep static libc available
+            env = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              LIBRARY_PATH = "${pkgs.glibc.static}/lib";
+            };
             CMAKE_GENERATOR = "Ninja";
           };
         }

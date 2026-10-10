@@ -77,9 +77,11 @@ The default build always produces the `memix` library and also builds every `src
 
 The flake supports `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`
 (Apple Silicon). `nix develop` uses GCC on Linux and Clang on macOS, through
-nixpkgs' official `stdenv`. It adds CMake, Ninja, Git, pkg-config, ccache, and
-clang-tools (clang-tidy, clang-format, clangd). Linux also includes
-`glibc.static` for the project's default static linking.
+nixpkgs' official `stdenv`. It provides the CMake 4.4+ / C++26 toolchain, plus
+Ninja, Git, pkg-config, ccache, and clang-tools (clang-tidy, clang-format,
+clangd). On Linux, `glibc.static` is available through a `LIBRARY_PATH`
+fallback for static linking, without overriding shared libc during ordinary
+compiler checks and dynamic links.
 
 With [Nix](https://nixos.org/download/) installed and `nix-command` / `flakes`
 enabled, build in a separate directory from any host-toolchain build:
