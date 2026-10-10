@@ -1,3 +1,4 @@
+#include "memix/error.hpp"
 #include "memix/view.hpp"
 
 #include "detail/file_lock.hpp"
@@ -6,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -1717,7 +1719,7 @@ TEST_CASE("concurrent quest definitions atomically publish complete metadata",
   std::atomic<int> completed = 0;
   std::atomic<bool> start = false;
   std::atomic<bool> parse_failed = false;
-  std::vector<memix::ViewResult<memix::QuestDefinition>> results(writer_count);
+  std::array<memix::ViewResult<memix::QuestDefinition>, writer_count> results{};
   std::vector<std::thread> writers;
   writers.reserve(writer_count);
   for (int index = 0; index < writer_count; ++index) {
@@ -1863,7 +1865,8 @@ TEST_CASE("concurrent quest reads append complete receipt lines",
 
   std::atomic<int> ready = 0;
   std::atomic<bool> start = false;
-  std::vector<memix::ViewResult<memix::ResolvedViewFile>> results(reader_count);
+  std::array<memix::ViewResult<memix::ResolvedViewFile>, reader_count>
+      results{};
   std::vector<std::thread> readers;
   readers.reserve(reader_count);
   for (int index = 0; index < reader_count; ++index) {
@@ -1919,7 +1922,8 @@ TEST_CASE("concurrent quest builds append complete history lines", "[quest]") {
 
   std::atomic<int> ready = 0;
   std::atomic<bool> start = false;
-  std::vector<memix::ViewResult<memix::ViewEnvironment>> results(builder_count);
+  std::array<memix::ViewResult<memix::ViewEnvironment>, builder_count>
+      results{};
   std::vector<std::thread> builders;
   builders.reserve(builder_count);
   for (int index = 0; index < builder_count; ++index) {

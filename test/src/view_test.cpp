@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -614,7 +615,8 @@ TEST_CASE("concurrent view builds report one insertion and clean temps",
 
   std::atomic<int> ready = 0;
   std::atomic<bool> start = false;
-  std::vector<memix::ViewResult<memix::ViewEnvironment>> results(kBuilderCount);
+  std::array<memix::ViewResult<memix::ViewEnvironment>, kBuilderCount>
+      results{};
   std::vector<std::thread> builders;
   builders.reserve(kBuilderCount);
 
