@@ -1,10 +1,26 @@
 name: Set up build tools
-description: Install current CMake (4.4+) and Ninja releases.
+description: Use the locked Nix toolchain on Linux; install current CMake and Ninja on macOS/Windows.
 
 runs:
   using: composite
   steps:
+    - name: Install Nix
+      if: runner.os == 'Linux'
+      uses: cachix/install-nix-action@v31.11.1
+
+    - name: Show locked Linux toolchain
+      if: runner.os == 'Linux'
+      shell: nix develop --no-update-lock-file --command bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        cmake --version
+        ninja --version
+        "$CXX" --version
+        clang-tidy --version
+        # Codecov runs outside nix develop, but must use this GCC's gcov.
+        echo "GCOV=$(command -v gcov)" >> "$GITHUB_ENV"
+
     - name: Install CMake and Ninja
+      if: runner.os != 'Linux'
       shell: bash
       run: |
         python -m pip install --upgrade "cmake>=4.4" ninja
@@ -17,6 +33,7 @@ runs:
         PY
 
     - name: Show build tool versions
+      if: runner.os != 'Linux'
       shell: bash
       run: |
         cmake --version

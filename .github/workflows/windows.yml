@@ -10,6 +10,9 @@ env:
   BUILD_TYPE: Release
   INSTALL_LOCATION: ".local"
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+  # clang-cl supports C++26 while keeping the MSVC ABI, STL, and static CRT.
+  CC: C:/Program Files/LLVM/bin/clang-cl.exe
+  CXX: C:/Program Files/LLVM/bin/clang-cl.exe
 
 jobs:
   build:
@@ -46,8 +49,11 @@ jobs:
           }
         }
 
+    - name: show compiler
+      run: '& "$env:CXX" --version'
+
     - name: configure
-      run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" -DCMAKE_INSTALL_PREFIX="$HOME/$env:INSTALL_LOCATION" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE"
+      run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" -DCMAKE_INSTALL_PREFIX="$HOME/$env:INSTALL_LOCATION" -DCPM_SOURCE_CACHE="$env:CPM_SOURCE_CACHE" -DCMAKE_LINKER_TYPE=LLD
       
     - name: build
       run: cmake --build build --config "$env:BUILD_TYPE" -j4

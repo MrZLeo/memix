@@ -10,13 +10,14 @@ env:
   BUILD_TYPE: Release
   INSTALL_LOCATION: .local
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
-  CC: gcc-14
-  CXX: g++-14
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: nix develop --no-update-lock-file --command bash --noprofile --norc -e -o pipefail {0}
     if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]')"
 
     steps:
@@ -46,6 +47,7 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
+        gcov_executable: ${{ env.GCOV }}
 
     - name: install project
       run: cmake --build build --target install --config Release 

@@ -116,6 +116,12 @@ revision. To update versions, run `nix flake update nixpkgs` and commit the
 lock-file change. Validate with `nix flake check --all-systems --no-build`;
 format the flake with `nix fmt`.
 
+Ubuntu CI and Linux release builds use this same locked shell through
+`nix develop --no-update-lock-file`. Their compiler, CMake, Ninja, and coverage
+`gcov` come from the flake rather than the runner's preinstalled tools.
+Windows CI uses native `clang-cl` and `lld-link` with the MSVC standard library
+and static runtime; it does not use Nix.
+
 These are native C++ environments, not cross-compilation toolchains; Intel
 macOS and Windows are not included. CPM downloads project dependencies on the
 first configure. The optional SwiftUI Inspector still requires Xcode/Swift.

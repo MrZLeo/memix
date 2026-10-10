@@ -23,18 +23,23 @@ jobs:
           - name: Linux x86_64 GCC
             os: ubuntu-24.04
             asset: linux-x86_64
-            cc: gcc-14
-            cxx: g++-14
-          - name: Windows x86_64 MSVC
+            shell: nix develop --no-update-lock-file --command bash --noprofile --norc -e -o pipefail {0}
+          - name: Windows x86_64 Clang (MSVC ABI)
             os: windows-2025-vs2026
             asset: windows-x86_64
-            cc: cl
-            cxx: cl
+            cc: C:/Program Files/LLVM/bin/clang-cl.exe
+            cxx: C:/Program Files/LLVM/bin/clang-cl.exe
+            shell: pwsh
           - name: macOS arm64 Clang
             os: macos-26
             asset: macos-arm64
             cc: /Library/Developer/CommandLineTools/usr/bin/clang
             cxx: /Library/Developer/CommandLineTools/usr/bin/clang++
+            shell: bash
+
+    defaults:
+      run:
+        shell: ${{ matrix.config.shell }}
 
     steps:
       - name: checkout
@@ -71,12 +76,18 @@ jobs:
             }
           }
 
-      - name: configure
-        if: runner.os != 'macOS'
+      - name: configure Linux with the locked Nix toolchain
+        if: runner.os == 'Linux'
+        run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON -Dmemix_ENABLE_LTO=ON
+
+      - name: configure Windows with clang-cl and lld-link
+        if: runner.os == 'Windows'
         env:
           CC: ${{ matrix.config.cc }}
           CXX: ${{ matrix.config.cxx }}
-        run: cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON -Dmemix_ENABLE_LTO=ON
+        run: |
+          & "$env:CXX" --version
+          cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON -Dmemix_ENABLE_LTO=ON -DCMAKE_LINKER_TYPE=LLD
 
       - name: configure macOS 14-compatible binaries
         if: runner.os == 'macOS'
