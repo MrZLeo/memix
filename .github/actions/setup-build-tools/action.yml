@@ -1,0 +1,23 @@
+name: Set up build tools
+description: Install current CMake (4.4+) and Ninja releases.
+
+runs:
+  using: composite
+  steps:
+    - name: Install CMake and Ninja
+      shell: bash
+      run: |
+        python -m pip install --upgrade "cmake>=4.4" ninja
+        python - <<'PY'
+        import os
+        import sysconfig
+
+        with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as path_file:
+            print(sysconfig.get_path("scripts"), file=path_file)
+        PY
+
+    - name: Show build tool versions
+      shell: bash
+      run: |
+        cmake --version
+        ninja --version

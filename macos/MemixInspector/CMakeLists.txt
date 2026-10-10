@@ -1,11 +1,7 @@
-add_library(memix_inspector_bridge STATIC
-  Bridge/MMXStore.mm
-  Bridge/MMXStore.h
-)
-
-target_include_directories(memix_inspector_bridge
-  PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/Bridge
+add_library(memix_inspector_bridge STATIC Bridge/MMXStore.mm)
+target_sources(memix_inspector_bridge PUBLIC FILE_SET HEADERS
+  BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/Bridge"
+  FILES Bridge/MMXStore.h
 )
 
 target_compile_options(memix_inspector_bridge
@@ -15,12 +11,8 @@ target_compile_options(memix_inspector_bridge
 
 set_target_properties(memix_inspector_bridge
   PROPERTIES
-    CXX_STANDARD ${PROJECT_CXX_STANDARD}
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS OFF
-    OBJCXX_STANDARD ${PROJECT_CXX_STANDARD}
-    OBJCXX_STANDARD_REQUIRED ON
-    OBJCXX_EXTENSIONS OFF
+    VERIFY_INTERFACE_HEADER_SETS ON
+    VERIFY_PRIVATE_HEADER_SETS ON
 )
 
 target_link_libraries(memix_inspector_bridge

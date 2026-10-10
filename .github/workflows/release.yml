@@ -40,6 +40,8 @@ jobs:
       - name: checkout
         uses: actions/checkout@v7
 
+      - uses: ./.github/actions/setup-build-tools
+
       - name: cache CPM downloads
         uses: actions/cache@v6
         with:
@@ -197,6 +199,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-build-tools
 
       - name: cache CPM downloads
         uses: actions/cache@v6

@@ -11,7 +11,7 @@ Treat memory as immutable evidence plus reproducible views — not a mutable not
 [![Windows](https://github.com/MrZLeo/memix/actions/workflows/windows.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/windows.yml)
 [![Release](https://img.shields.io/github/v/release/MrZLeo/memix?include_prereleases&color=blue)](https://github.com/MrZLeo/memix/releases)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/w/cpp/23)
+[![C++26](https://img.shields.io/badge/C%2B%2B-26-00599C?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/w/cpp/26)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#-self-contained-binaries)
 
 [🚀 Build](#-build) •
@@ -63,6 +63,16 @@ The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 
 ## 🚀 Build
 
+Building from source requires **CMake 4.4 or newer**, **Ninja**, and a compiler
+with C++26 mode and the standard library features used by memix. The project
+requires C++26 without compiler extensions; it does not fall back to an older
+standard. This applies to the library, CLIs, tests, and the optional
+Objective-C++ Inspector bridge. Individual C++26 features still depend on the
+compiler and standard library implementation.
+
+Use `nix develop` for the pinned toolchain described below. CI installs current
+CMake and Ninja releases explicitly rather than relying on runner defaults.
+
 ```bash
 cmake -G Ninja -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
@@ -90,11 +100,16 @@ enabled, build in a separate directory from any host-toolchain build:
 nix develop
 cmake -G Ninja -S . -B build-nix \
   -DCMAKE_BUILD_TYPE=Debug \
-  -DCPM_SOURCE_CACHE="$HOME/.cache/CPM" \
-  -Dmemix_ENABLE_CLANG_TIDY=ON
+  -DCPM_SOURCE_CACHE="$HOME/.cache/CPM"
 cmake --build build-nix --parallel
 ctest --test-dir build-nix --output-on-failure
 ```
+
+Add `-Dmemix_ENABLE_CLANG_TIDY=ON` to enable project analysis. The current
+locked Linux clang-tidy/libstdc++ pair has an upstream C++26 `<format>`
+compatibility issue, so leave this option off for Linux compiler/runtime
+validation until it is fixed. That is not a passing lint result; see
+[current toolchain limitations](CONTRIBUTING.md#current-toolchain-limitations).
 
 Core tools use the latest packaged versions in the locked `nixpkgs-unstable`
 revision. To update versions, run `nix flake update nixpkgs` and commit the
@@ -105,6 +120,23 @@ These are native C++ environments, not cross-compilation toolchains; Intel
 macOS and Windows are not included. CPM downloads project dependencies on the
 first configure. The optional SwiftUI Inspector still requires Xcode/Swift.
 
+### CMake package consumers
+
+After `cmake --install build --prefix /your/prefix`, consumers can use:
+
+```cmake
+find_package(memix 0.5 CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE memix::memix)
+```
+
+Pass the prefix in `CMAKE_PREFIX_PATH`. The exported target supplies public
+headers and the C++26 requirement, but not memix's warning or exception flags.
+Installations using the default relative install directories can be moved to a
+new prefix. Package matching follows CMake's `SemanticVersion` policy: 0.x
+releases require the same minor version (`0.5.0` does not satisfy `0.4.x`);
+from 1.x onward, compatibility is within the same major version. In either
+case, the installed version must be at least the requested version.
+
 ## 💿 Self-contained binaries
 
 `memix_STATIC_LINK=ON` is the default. Each generated CLI is self-contained
@@ -114,8 +146,9 @@ with respect to memix and its third-party dependencies:
 * 🪟 **Windows** — executables use the static MSVC runtime (`/MT`).
 * 🍎 **macOS** — executables statically include memix and its third-party dependencies. Apple does not support fully static user executables, so `libc++` and `libSystem` remain system-provided dynamic libraries.
 
-To restore platform-default dynamic runtime linking, configure with
-`-Dmemix_STATIC_LINK=OFF`.
+The static-link setting also applies to Linux/MinGW test executables; tests
+retain exception support. To restore platform-default dynamic runtime
+linking, configure with `-Dmemix_STATIC_LINK=OFF`.
 
 Tag builds publish the standalone CLIs and Codex skill as GitHub release
 assets:
@@ -310,12 +343,21 @@ needed to build and run the CLI. See `Formula/README.md` for publishing steps.
 | Option | Default | Description |
 | ------ | ------- | ----------- |
 | `memix_BUILD_EXECUTABLE` | `ON` | Build CLI executables |
-| `memix_BUILD_HEADERS_ONLY` | `OFF` | Use as header-only library |
 | `memix_STATIC_LINK` | `ON` | Self-contained static binaries |
 | `memix_ENABLE_UNIT_TESTING` | `ON` | Build unit tests |
-| `memix_ENABLE_CLANG_TIDY` | `OFF` | Run clang-tidy checks |
-| `memix_ENABLE_CPPCHECK` | `OFF` | Run cppcheck analysis |
+| `memix_ENABLE_CLANG_TIDY` | `OFF` | Analyze library and CLI sources with clang-tidy |
+| `memix_ENABLE_CPPCHECK` | `OFF` | Analyze library and CLI sources with cppcheck |
+| `memix_ENABLE_CCACHE` | `ON` | Use ccache unless a compiler launcher is explicitly set |
+| `memix_WARNINGS_AS_ERRORS` | `OFF` | Treat project compiler warnings as errors |
 | `memix_ENABLE_CODE_COVERAGE` | `OFF` | Enable code coverage |
 | `memix_ENABLE_DOXYGEN` | `OFF` | Generate Doxygen docs |
 | `memix_ENABLE_LTO` | `OFF` | Enable link-time optimization |
 | `memix_ENABLE_ASAN` | `OFF` | Enable AddressSanitizer |
+
+For a shared library, configure with `-Dmemix_STATIC_LINK=OFF -DBUILD_SHARED_LIBS=ON`.
+With `memix_BUILD_EXECUTABLE=OFF`, library tests still build, but the `store_test`
+and `quest_test` targets are explicitly skipped because they also exercise the
+CLIs. Set `memix_ENABLE_UNIT_TESTING=OFF` for a library-only build without tests.
+The old header-only mode is unsupported; the template's `USE_ALT_NAMES` and
+`VERBOSE_OUTPUT` options have been removed. Use CMake's `--log-level=VERBOSE`
+(or `CMAKE_MESSAGE_LOG_LEVEL=VERBOSE`) for verbose configuration output.

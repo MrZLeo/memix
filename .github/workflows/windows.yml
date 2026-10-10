@@ -19,6 +19,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+
+    - uses: ./.github/actions/setup-build-tools
       
     - name: cache CPM downloads
       uses: actions/cache@v6

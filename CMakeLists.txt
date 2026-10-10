@@ -1,275 +1,82 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 4.4)
+project(memix VERSION 0.5.0 LANGUAGES CXX)
 
-#
-# Project details
-#
+if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
+  message(FATAL_ERROR "In-source builds are not supported. Use cmake -S . -B build -G Ninja.")
+endif()
 
-project(
-  "memix"
-  VERSION 0.5.0
-  LANGUAGES CXX
-)
-
-option(${PROJECT_NAME}_BUILD_MACOS_INSPECTOR "Build the native macOS Memix Inspector app." OFF)
-
-#
-# Set project options
-#
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "") # works
+# Initialize project targets and dependencies that do not choose their own standard.
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(cmake/StandardSettings.cmake)
+include(cmake/CompilerWarnings.cmake)
 include(cmake/StaticAnalyzers.cmake)
 include(cmake/Utils.cmake)
 include(cmake/CPM.cmake)
-include(cmake/ProjectStandard.cmake)
-
-project_detect_cxx_standard(PROJECT_CXX_STANDARD)
-if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
-  message(
-    FATAL_ERROR
-    "${PROJECT_NAME}_BUILD_HEADERS_ONLY is not supported because memix now has compiled store sources. "
-    "Configure with -D${PROJECT_NAME}_BUILD_HEADERS_ONLY=OFF."
-  )
-endif()
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE "Debug")
-endif()
-message(STATUS "Started CMake for ${PROJECT_NAME} v${PROJECT_VERSION}...\n")
-
-# CMake uses this variable to initialize every target as it is created, so it
-# must be set before memix and its dependencies define their targets.
-if(MSVC)
-  if(${PROJECT_NAME}_STATIC_LINK)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-  else()
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-  endif()
-endif()
-
-if(${PROJECT_NAME}_STATIC_LINK)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(STATUS "Static linking enabled: Linux executables will have no dynamic runtime dependencies.")
-  elseif(MSVC)
-    message(STATUS "Static linking enabled: Windows executables will use the static MSVC runtime.")
-  elseif(MINGW)
-    message(STATUS "Static linking enabled: MinGW executables will have no dynamic runtime dependencies.")
-  elseif(APPLE)
-    message(STATUS "Static linking enabled for bundled code; macOS system libraries remain dynamic.")
-  else()
-    message(WARNING "${PROJECT_NAME}_STATIC_LINK is not implemented for ${CMAKE_SYSTEM_NAME}; using the platform default runtime linkage.")
-  endif()
-endif()
-
-if (UNIX)
-    add_compile_options("$<$<CONFIG:DEBUG>:-D_DEBUG>")    #this will allow to use same _DEBUG macro available in both Linux as well as Windows - MSCV environment. Easy to put Debug specific code.
-endif (UNIX)
-
-
-#
-# Setup alternative names
-#
-
-if(${PROJECT_NAME}_USE_ALT_NAMES)
-  string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWERCASE)
-  string(TOUPPER ${PROJECT_NAME} PROJECT_NAME_UPPERCASE)
-else()
-  set(PROJECT_NAME_LOWERCASE ${PROJECT_NAME})
-  set(PROJECT_NAME_UPPERCASE ${PROJECT_NAME})
-endif()
-
-#
-# Prevent building in the source directory
-#
-
-if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
-  message(FATAL_ERROR "In-source builds not allowed. Please make a new directory (called a build directory) and run CMake from there.\n")
-endif()
-
-#
-# Create library, setup header and source files
-#
-
-# Find all headers and implementation files
 include(cmake/SourcesAndHeaders.cmake)
+include(GNUInstallDirs)
 
-if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
-  add_library(${PROJECT_NAME} INTERFACE)
-
-  if(${PROJECT_NAME}_VERBOSE_OUTPUT)
-    verbose_message("Found the following headers:")
-    foreach(header IN LISTS headers)
-      verbose_message("* ${header}")
-    endforeach()
-  endif()
-else()
-  set(memix_library_type)
-  if(${PROJECT_NAME}_STATIC_LINK)
-    set(memix_library_type STATIC)
-  endif()
-  add_library(
-    ${PROJECT_NAME}
-    ${memix_library_type}
-    ${headers}
-    ${private_headers}
-    ${sources}
-  )
-
-  if(${PROJECT_NAME}_VERBOSE_OUTPUT)
-    verbose_message("Found the following sources:")
-    foreach(source IN LISTS sources)
-      verbose_message("* ${source}")
-    endforeach()
-    verbose_message("Found the following headers:")
-    foreach(header IN LISTS headers)
-      verbose_message("* ${header}")
-    endforeach()
-    verbose_message("Found the following private headers:")
-    foreach(header IN LISTS private_headers)
-      verbose_message("* ${header}")
-    endforeach()
-  endif()
+# Diagnose the removed mode rather than silently ignoring an old configuration.
+if(memix_BUILD_HEADERS_ONLY)
+  message(FATAL_ERROR "memix is a compiled library; memix_BUILD_HEADERS_ONLY is no longer supported.")
 endif()
 
-set(bin_targets)
-if(${PROJECT_NAME}_BUILD_EXECUTABLE)
-  if(${PROJECT_NAME}_VERBOSE_OUTPUT)
-    verbose_message("Found the following executable entrypoints:")
-    foreach(bin_source IN LISTS bin_sources)
-      verbose_message("* ${bin_source}")
-    endforeach()
-  endif()
+configure_file(cmake/version.hpp.in include/memix/version.hpp @ONLY)
 
-  foreach(bin_source IN LISTS bin_sources)
-    get_filename_component(bin_name ${bin_source} NAME_WE)
-    set(bin_target ${PROJECT_NAME}_${bin_name})
-
-    add_executable(${bin_target} ${bin_source})
-    set_target_properties(
-      ${bin_target}
-      PROPERTIES
-      OUTPUT_NAME ${bin_name}
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
-    )
-
-    if(${PROJECT_NAME}_STATIC_LINK)
-      if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR MINGW)
-        target_link_options(${bin_target} PRIVATE -static)
-        set_target_properties(
-          ${bin_target}
-          PROPERTIES
-          LINK_SEARCH_START_STATIC TRUE
-          LINK_SEARCH_END_STATIC TRUE
-        )
-      endif()
-    endif()
-
-    if(bin_name STREQUAL "memix-tui")
-      target_link_libraries(${bin_target} PRIVATE ftxui::component)
-    endif()
-
-    list(APPEND bin_targets ${bin_target})
-  endforeach()
+set(memix_library_type)
+if(memix_STATIC_LINK)
+  set(memix_library_type STATIC)
 endif()
-
-set_target_properties(
-  ${PROJECT_NAME}
-  PROPERTIES
-  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE}"
-  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE}"
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
+add_library(memix ${memix_library_type} ${sources})
+add_library(memix::memix ALIAS memix)
+target_compile_features(memix PUBLIC cxx_std_26)
+target_sources(memix
+  PUBLIC FILE_SET HEADERS
+    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include"
+    FILES ${headers} "${CMAKE_CURRENT_BINARY_DIR}/include/memix/version.hpp"
+  PRIVATE FILE_SET private_headers TYPE HEADERS
+    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    FILES ${private_headers}
+)
+set_target_properties(memix PROPERTIES
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib/$<CONFIG>"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib/$<CONFIG>"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin/$<CONFIG>"
+  WINDOWS_EXPORT_ALL_SYMBOLS ON
+  VERIFY_INTERFACE_HEADER_SETS ON
+  VERIFY_PRIVATE_HEADER_SETS ON
 )
 
-message(STATUS "Added all header and implementation files.\n")
-
-project_enable_clang_tidy_for_targets(${PROJECT_NAME} ${bin_targets})
-
-#
-# Set the project standard and warnings
-#
-
-if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
-  project_apply_cxx_standard(${PROJECT_NAME} INTERFACE)
-else()
-  project_apply_cxx_standard(${PROJECT_NAME} PUBLIC)
-endif()
-foreach(bin_target IN LISTS bin_targets)
-  project_apply_cxx_standard(${bin_target} PRIVATE)
-endforeach()
-include(cmake/CompilerWarnings.cmake)
-set_project_warnings(${PROJECT_NAME})
-verbose_message("Applied compiler warnings. Using standard C++${PROJECT_CXX_STANDARD}.\n")
-
-function(memix_disable_exceptions target)
-  if(NOT TARGET ${target})
-    message(FATAL_ERROR "Cannot disable exceptions for unknown target `${target}`.")
-  endif()
-
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /EHs-c-)
-    target_compile_definitions(${target} PRIVATE _HAS_EXCEPTIONS=0)
-  else()
-    target_compile_options(${target} PRIVATE -fno-exceptions)
-  endif()
-endfunction()
-
-function(memix_enable_msvc_conforming_preprocessor target)
-  if(NOT TARGET ${target})
-    message(FATAL_ERROR "Cannot enable the MSVC conforming preprocessor for unknown target `${target}`.")
-  endif()
-
-  target_compile_options(${target} PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:preprocessor>")
-endfunction()
-
-if(NOT ${PROJECT_NAME}_BUILD_HEADERS_ONLY)
-  memix_disable_exceptions(${PROJECT_NAME})
-endif()
-foreach(bin_target IN LISTS bin_targets)
-  memix_disable_exceptions(${bin_target})
-  memix_enable_msvc_conforming_preprocessor(${bin_target})
-endforeach()
-
-#
-# Enable Doxygen
-#
-
-include(cmake/Doxygen.cmake)
-
-#
-# Model project dependencies
-#
-
+# simdjson is compiled into memix, so it is not a downstream dependency.
 CPMAddPackage(
   NAME simdjson
   GITHUB_REPOSITORY simdjson/simdjson
   GIT_TAG v5.0.3
   DOWNLOAD_ONLY YES
 )
-target_sources(
-  ${PROJECT_NAME}
-  PRIVATE
-    ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp
+target_sources(memix PRIVATE "${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp")
+set_source_files_properties("${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp" PROPERTIES
+  COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>"
+  SKIP_LINTING TRUE
+  CXX_SCAN_FOR_MODULES OFF
 )
+# A build-only interface keeps vendor headers SYSTEM even in private header checks.
+add_library(memix_simdjson_headers INTERFACE)
+target_include_directories(memix_simdjson_headers SYSTEM INTERFACE "${simdjson_SOURCE_DIR}/singleheader")
+target_link_libraries(memix PRIVATE "$<BUILD_INTERFACE:memix_simdjson_headers>")
 
-set_source_files_properties(
-  ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp
-  PROPERTIES
-    COMPILE_OPTIONS "-w"
-    SKIP_LINTING TRUE
-)
-
-target_include_directories(
-  ${PROJECT_NAME}
-  SYSTEM PRIVATE
-    ${simdjson_SOURCE_DIR}/singleheader
-)
-
-# Identify and link with the specific "packages" the project uses
-if(${PROJECT_NAME}_BUILD_EXECUTABLE)
+set(bin_targets)
+if(memix_BUILD_EXECUTABLE)
   CPMAddPackage(
     NAME FTXUI
     GITHUB_REPOSITORY ArthurSonzogni/FTXUI
     VERSION 7.0.2
+    SYSTEM YES
     OPTIONS
+      "BUILD_SHARED_LIBS OFF"
       "FTXUI_BUILD_DOCS OFF"
       "FTXUI_BUILD_EXAMPLES OFF"
       "FTXUI_BUILD_TESTS OFF"
@@ -280,14 +87,16 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
     GITHUB_REPOSITORY gershnik/argum
     GIT_TAG v2.8
     GIT_SHALLOW TRUE
-    OPTIONS
-      "ARGUM_NO_TESTS ON"
+    SYSTEM YES
+    OPTIONS "ARGUM_NO_TESTS ON"
   )
   CPMAddPackage(
     NAME spdlog
     GITHUB_REPOSITORY gabime/spdlog
     GIT_TAG v1.17.0
+    SYSTEM YES
     OPTIONS
+      "BUILD_SHARED_LIBS OFF"
       "SPDLOG_NO_EXCEPTIONS ON"
       "SPDLOG_BUILD_SHARED OFF"
       "SPDLOG_BUILD_EXAMPLE OFF"
@@ -295,255 +104,111 @@ if(${PROJECT_NAME}_BUILD_EXECUTABLE)
       "SPDLOG_INSTALL OFF"
   )
 
-  if(NOT TARGET argum::argum)
-    find_package(argum CONFIG REQUIRED)
-  endif()
-  if(NOT TARGET spdlog::spdlog)
-    find_package(spdlog CONFIG REQUIRED)
-  endif()
-
-  function(project_mark_dependency_includes_system target)
-    if(NOT TARGET ${target})
-      return()
+  foreach(bin_source IN LISTS bin_sources)
+    get_filename_component(bin_name "${bin_source}" NAME_WE)
+    set(bin_target memix_${bin_name})
+    add_executable(${bin_target} "${bin_source}")
+    set_target_properties(${bin_target} PROPERTIES
+      OUTPUT_NAME "${bin_name}"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin/$<CONFIG>"
+    )
+    if(BUILD_SHARED_LIBS AND NOT memix_STATIC_LINK)
+      file(RELATIVE_PATH memix_lib_from_bin "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
+      if(APPLE)
+        set_property(TARGET ${bin_target} PROPERTY INSTALL_RPATH "@loader_path/${memix_lib_from_bin}")
+      elseif(UNIX)
+        set_property(TARGET ${bin_target} PROPERTY INSTALL_RPATH "$ORIGIN/${memix_lib_from_bin}")
+      endif()
     endif()
-
-    get_target_property(dependency_includes ${target} INTERFACE_INCLUDE_DIRECTORIES)
-    if(dependency_includes)
-      set_target_properties(
-        ${target}
-        PROPERTIES
-        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${dependency_includes}"
+    target_include_directories(${bin_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_definitions(${bin_target} PRIVATE ARGUM_USE_EXPECTED=1 SPDLOG_NO_EXCEPTIONS=1)
+    target_link_libraries(${bin_target} PRIVATE memix::memix memix_simdjson_headers argum::argum spdlog::spdlog)
+    if(bin_name STREQUAL "memix-tui")
+      target_link_libraries(${bin_target} PRIVATE ftxui::component)
+    endif()
+    if(memix_STATIC_LINK AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR MINGW))
+      target_link_options(${bin_target} PRIVATE -static)
+      set_target_properties(${bin_target} PROPERTIES
+        LINK_SEARCH_START_STATIC TRUE
+        LINK_SEARCH_END_STATIC TRUE
       )
     endif()
-  endfunction()
-
-  foreach(dependency_target IN ITEMS screen dom component)
-    project_mark_dependency_includes_system(${dependency_target})
-  endforeach()
-
-  foreach(bin_target IN LISTS bin_targets)
-    target_include_directories(
-      ${bin_target}
-      PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-    if(DEFINED argum_SOURCE_DIR)
-      target_include_directories(
-        ${bin_target}
-        SYSTEM PRIVATE
-          ${argum_SOURCE_DIR}/inc
-      )
-    endif()
-    if(DEFINED spdlog_SOURCE_DIR)
-      target_include_directories(
-        ${bin_target}
-        SYSTEM PRIVATE
-          ${spdlog_SOURCE_DIR}/include
-      )
-    endif()
-    target_include_directories(
-      ${bin_target}
-      SYSTEM PRIVATE
-        ${simdjson_SOURCE_DIR}/singleheader
-    )
-    target_compile_definitions(
-      ${bin_target}
-      PRIVATE
-        ARGUM_USE_EXPECTED=1
-        SPDLOG_NO_EXCEPTIONS=1
-    )
-    target_link_libraries(
-      ${bin_target}
-      PRIVATE
-        ${PROJECT_NAME}
-        spdlog::spdlog
-    )
-    if(NOT DEFINED argum_SOURCE_DIR)
-      target_link_libraries(${bin_target} PRIVATE argum::argum)
-    endif()
+    list(APPEND bin_targets ${bin_target})
   endforeach()
 endif()
 
-verbose_message("Successfully added all dependencies and linked against them.")
+# Exceptions stay enabled in Catch2/tests and the Objective-C++ bridge.
+foreach(target IN ITEMS memix ${bin_targets})
+  set_project_warnings(${target})
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /EHs-c-)
+    target_compile_definitions(${target} PRIVATE _HAS_EXCEPTIONS=0)
+  else()
+    target_compile_options(${target} PRIVATE -fno-exceptions)
+  endif()
+endforeach()
+memix_enable_static_analysis(memix ${bin_targets})
 
-#
-# Set the build/user include directories
-#
-
-# Allow usage of header files in the `src` directory, but only for utilities
-if(${PROJECT_NAME}_BUILD_HEADERS_ONLY)
-  target_include_directories(
-    ${PROJECT_NAME}
-    INTERFACE
-    $<INSTALL_INTERFACE:include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-  )
-else()
-  target_include_directories(
-    ${PROJECT_NAME}
-    PUBLIC
-    $<INSTALL_INTERFACE:include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-    PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-  )
+if(memix_ENABLE_CODE_COVERAGE)
+  target_compile_options(memix PRIVATE -O0 -g --coverage)
+  # Users of an instrumented library also need its coverage runtime.
+  target_link_options(memix PUBLIC --coverage)
 endif()
 
-message(STATUS "Finished setting up include directories.")
-
-#
-# Provide alias to library for
-#
-
-add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
-
-verbose_message("Project is now aliased as ${PROJECT_NAME}::${PROJECT_NAME}.\n")
-
-if(${PROJECT_NAME}_BUILD_MACOS_INSPECTOR)
+if(memix_BUILD_MACOS_INSPECTOR)
   if(NOT APPLE)
     message(FATAL_ERROR "memix_BUILD_MACOS_INSPECTOR is only supported on Apple platforms.")
   endif()
+  set(CMAKE_OBJCXX_STANDARD 26)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+  set(CMAKE_OBJCXX_EXTENSIONS OFF)
   enable_language(OBJCXX)
-  if(POLICY CMP0157)
-    cmake_policy(SET CMP0157 NEW)
-  endif()
   enable_language(Swift)
   add_subdirectory(macos/MemixInspector)
 endif()
 
-#
-# Format the project using the `clang-format` target (i.e: cmake --build build --target clang-format)
-#
-
+include(cmake/Doxygen.cmake)
 add_clang_format_target()
 
-#
-# Install library for easy downstream inclusion
-#
-
-include(GNUInstallDirs)
-install(
-  TARGETS
-  ${PROJECT_NAME}
-  EXPORT
-  ${PROJECT_NAME}Targets
-  LIBRARY DESTINATION
-  ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION
-  ${CMAKE_INSTALL_BINDIR}
-  ARCHIVE DESTINATION
-  ${CMAKE_INSTALL_LIBDIR}
-  INCLUDES DESTINATION
-  include
-  PUBLIC_HEADER DESTINATION
-  include
-)
-
-if(bin_targets)
-  install(
-    TARGETS
-    ${bin_targets}
-    RUNTIME DESTINATION
-    ${CMAKE_INSTALL_BINDIR}
+if(memix_GENERATE_EXPORT_HEADER)
+  include(GenerateExportHeader)
+  generate_export_header(memix)
+  target_sources(memix PUBLIC FILE_SET export_header TYPE HEADERS
+    BASE_DIRS "${CMAKE_CURRENT_BINARY_DIR}"
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/memix_export.h"
   )
 endif()
 
-install(
-  EXPORT
-  ${PROJECT_NAME}Targets
-  FILE
-  ${PROJECT_NAME}Targets.cmake
-  NAMESPACE
-  ${PROJECT_NAME}::
-  DESTINATION
-  ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
+# Header sets provide the build include paths and the installed include layout.
+install(TARGETS memix EXPORT memixTargets
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  FILE_SET HEADERS DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+  FILE_SET export_header DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
-
-#
-# Add version header
-#
-
-configure_file(
-  ${CMAKE_CURRENT_LIST_DIR}/cmake/version.hpp.in
-  include/${PROJECT_NAME_LOWERCASE}/version.hpp
-  @ONLY
-)
-
-install(
-  FILES
-  ${CMAKE_CURRENT_BINARY_DIR}/include/${PROJECT_NAME_LOWERCASE}/version.hpp
-  DESTINATION
-  include/${PROJECT_NAME_LOWERCASE}
-)
-
-#
-# Install the `include` directory
-#
-
-install(
-  DIRECTORY
-  include/${PROJECT_NAME_LOWERCASE}
-  DESTINATION
-  include
-)
-
-verbose_message("Install targets successfully built. Install with `cmake --build <build_directory> --target install --config <build_config>`.")
-
-#
-# Quick `ConfigVersion.cmake` creation
-#
+if(bin_targets)
+  install(TARGETS ${bin_targets} RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+install(EXPORT memixTargets NAMESPACE memix:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/memix")
 
 include(CMakePackageConfigHelpers)
-write_basic_package_version_file(
-  ${PROJECT_NAME}ConfigVersion.cmake
-  VERSION
-  ${PROJECT_VERSION}
-  COMPATIBILITY
-  SameMajorVersion
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/memixConfigVersion.cmake"
+  VERSION "${PROJECT_VERSION}"
+  COMPATIBILITY SemanticVersion
+)
+configure_package_config_file(cmake/memixConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/memixConfig.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/memix"
+  PATH_VARS CMAKE_INSTALL_INCLUDEDIR
+)
+install(FILES
+  "${CMAKE_CURRENT_BINARY_DIR}/memixConfig.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/memixConfigVersion.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/memix"
 )
 
-configure_package_config_file(
-  ${CMAKE_CURRENT_LIST_DIR}/cmake/${PROJECT_NAME}Config.cmake.in
-  ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-  INSTALL_DESTINATION
-  ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
-)
-
-install(
-  FILES
-  ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-  ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
-  DESTINATION
-  ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
-)
-
-#
-# Generate export header if specified
-#
-
-if(${PROJECT_NAME}_GENERATE_EXPORT_HEADER)
-  include(GenerateExportHeader)
-  generate_export_header(${PROJECT_NAME})
-  install(
-    FILES
-    ${PROJECT_BINARY_DIR}/${PROJECT_NAME_LOWERCASE}_export.h
-    DESTINATION
-    include
-  )
-
-  message(STATUS "Generated the export header `${PROJECT_NAME_LOWERCASE}_export.h` and installed it.")
-endif()
-
-message(STATUS "Finished building requirements for installing the package.\n")
-
-#
-# Unit testing setup
-#
-
-if(${PROJECT_NAME}_ENABLE_UNIT_TESTING)
+if(memix_ENABLE_UNIT_TESTING)
   enable_testing()
-  message(STATUS "Build unit tests for the project. Tests should always be found in the test folder\n")
   add_subdirectory(test)
 endif()
