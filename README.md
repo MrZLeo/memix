@@ -73,6 +73,36 @@ cmake --build build
 
 The default build always produces the `memix` library and also builds every `src/bin/*.cpp` entrypoint as an executable.
 
+### Nix development environment
+
+The flake supports `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`
+(Apple Silicon). `nix develop` uses GCC on Linux and Clang on macOS, through
+nixpkgs' official `stdenv`. It adds CMake, Ninja, Git, pkg-config, ccache, and
+clang-tools (clang-tidy, clang-format, clangd). Linux also includes
+`glibc.static` for the project's default static linking.
+
+With [Nix](https://nixos.org/download/) installed and `nix-command` / `flakes`
+enabled, build in a separate directory from any host-toolchain build:
+
+```bash
+nix develop
+cmake -G Ninja -S . -B build-nix \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCPM_SOURCE_CACHE="$HOME/.cache/CPM" \
+  -Dmemix_ENABLE_CLANG_TIDY=ON
+cmake --build build-nix --parallel
+ctest --test-dir build-nix --output-on-failure
+```
+
+Core tools use the latest packaged versions in the locked `nixpkgs-unstable`
+revision. To update versions, run `nix flake update nixpkgs` and commit the
+lock-file change. Validate with `nix flake check --all-systems --no-build`;
+format the flake with `nix fmt`.
+
+These are native C++ environments, not cross-compilation toolchains; Intel
+macOS and Windows are not included. CPM downloads project dependencies on the
+first configure. The optional SwiftUI Inspector still requires Xcode/Swift.
+
 ## 💿 Self-contained binaries
 
 `memix_STATIC_LINK=ON` is the default. Each generated CLI is self-contained

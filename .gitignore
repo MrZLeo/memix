@@ -6,6 +6,11 @@ CMakeCache.*
 CMakeFiles/*
 [Tt]esting/*
 
+### Nix ###
+.direnv/
+/result
+/result-*
+
 ### VisualStudioCode ###
 .vscode/*
 .vscode/settings.json

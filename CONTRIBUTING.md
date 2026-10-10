@@ -10,6 +10,11 @@ Thanks for helping improve `memix`.
 
 ## Development
 
+For a pinned Linux/macOS C++ toolchain, run `nix develop` first: GCC on Linux,
+Clang on macOS. See the
+[Nix development environment](README.md#nix-development-environment) section
+for supported platforms and build instructions.
+
 Build the project from the repository root:
 
 ```bash
