@@ -31,7 +31,7 @@ have GitHub authentication configured for Homebrew's clone/fetch step.
 The formula declares:
 
 * build dependencies: `cmake`, `ninja`
-* bundled source resources: CPM.cmake 0.42.0, `simdjson` 4.6.2, `argum` 2.8,
+* bundled source resources: CPM.cmake 0.42.0, `simdjson` 5.0.3, `argum` 2.8,
   and `spdlog` 1.17.0
 
 The formula preloads the source resources into the CPM cache before running

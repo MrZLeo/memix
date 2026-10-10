@@ -15,8 +15,8 @@ class Memix < Formula
   end
 
   resource "simdjson" do
-    url "https://github.com/simdjson/simdjson/archive/refs/tags/v4.6.2.tar.gz"
-    sha256 "c240d4bffcccda4fe3a2bba2872718d96fc92e56d2615bfac4f9b2bad89a6386"
+    url "https://github.com/simdjson/simdjson/archive/refs/tags/v5.0.3.tar.gz"
+    sha256 "295e96d96d6d55face58e99b47ddc1f6c7c1a302f2ce5edf2c1ba7518972f0ed"
   end
 
   resource "argum" do
@@ -41,7 +41,7 @@ class Memix < Formula
     resource("cpm").stage do
       cp "CPM.cmake", buildpath/"build/cmake/CPM_0.42.0.cmake"
     end
-    resource("simdjson").stage cpm_cache/"simdjson/4924"
+    resource("simdjson").stage cpm_cache/"simdjson/4606"
     resource("argum").stage cpm_cache/"argum/e544"
     resource("spdlog").stage cpm_cache/"spdlog/7d8f"
     resource("ftxui").stage cpm_cache/"ftxui/7e12"

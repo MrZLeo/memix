@@ -57,7 +57,7 @@ The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 | Dependency | Version | Purpose |
 | ---------- | ------- | ------- |
 | [argum](https://github.com/gershnik/argum/releases/tag/v2.8) | 2.8 | CLI parsing |
-| [simdjson](https://github.com/simdjson/simdjson/releases/tag/v4.6.2) | 4.6.2 | Metadata JSON parsing and writing |
+| [simdjson](https://github.com/simdjson/simdjson/releases/tag/v5.0.3) | 5.0.3 | Metadata JSON parsing and writing |
 | [spdlog](https://github.com/gabime/spdlog/releases/tag/v1.17.0) | 1.17.0 | Executable logging |
 | [Catch2](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) | 3.11.0 | Tests |
 

@@ -259,7 +259,6 @@ pretty_json(std::string_view json) {
 
   simdjson::fractured_json_options options;
   options.indent_spaces = kJsonIndentSpaces;
-  options.max_inline_length = 0;
   options.max_inline_complexity = 0;
   options.max_compact_array_complexity = 0;
   options.enable_table_format = false;

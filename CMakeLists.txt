@@ -241,7 +241,7 @@ include(cmake/Doxygen.cmake)
 CPMAddPackage(
   NAME simdjson
   GITHUB_REPOSITORY simdjson/simdjson
-  GIT_TAG v4.6.2
+  GIT_TAG v5.0.3
   DOWNLOAD_ONLY YES
 )
 target_sources(
