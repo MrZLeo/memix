@@ -1,0 +1,5 @@
+# The image only needs flake metadata; sources are bind-mounted at runtime.
+*
+!Dockerfile
+!flake.nix
+!flake.lock

@@ -47,6 +47,11 @@ clang-tidy/cppcheck integration covers the library and CLIs, not test macros.
 Use `memix_WARNINGS_AS_ERRORS=ON` to enforce compiler warnings on all project
 C++ targets, including tests, without imposing those flags on package consumers.
 
+The [Docker development environment](README.md#docker-development-environment)
+uses the same flake and lock file for Linux builds. Run permission-sensitive
+tests as an ordinary user, not root; the container example shows how to drop
+privileges after building.
+
 ### Current toolchain limitations
 
 The locked Linux environment combines GCC/libstdc++ 16.2 with clang-tidy

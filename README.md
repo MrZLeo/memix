@@ -120,6 +120,78 @@ These are native C++ environments, not cross-compilation toolchains; Intel
 macOS and Windows are not included. CPM downloads project dependencies on the
 first configure. The optional SwiftUI Inspector still requires Xcode/Swift.
 
+### Docker development environment
+
+The Docker image uses the same `flake.nix` and `flake.lock`, not a separate
+apt/pip toolchain. Docker BuildKit selects the matching rolling
+`nixpkgs/nix-flakes:latest-x86_64-linux` or `latest-aarch64-linux` base for
+amd64 or arm64. These architecture-qualified tags are published independently;
+the Dockerfile does not use the old, unsuffixed `latest` manifest. The bases
+already enable flakes. The matching Linux dev shell supplies GCC and static
+libc. The image build preloads that shell, and every container command runs through
+`nix develop --no-update-lock-file --command`. Tool versions come from the
+lock file; required lock-file changes fail rather than being made silently.
+
+Build the image and open a development shell:
+
+```bash
+docker build --pull -t memix-dev .
+docker run --rm -it \
+  --mount type=bind,source="$PWD",target=/workspace \
+  memix-dev
+```
+
+Or build and test directly with the default compiler-only configuration:
+
+```bash
+docker run --rm \
+  --mount type=bind,source="$PWD",target=/workspace \
+  memix-dev bash -c '
+    set -e
+    cmake -G Ninja -S . -B build-container \
+      -DCMAKE_BUILD_TYPE=Debug -Dmemix_ENABLE_CLANG_TIDY=OFF
+    cmake --build build-container --parallel
+    mkdir -p build-container/Testing
+    chown -R 1000:1000 build-container/Testing
+    chroot --userspec=1000:1000 / \
+      "$(command -v env)" HOME=/tmp TMPDIR=/tmp \
+      "$(command -v ctest)" --test-dir /workspace/build-container \
+      --output-on-failure
+  '
+```
+
+Use a separate `build-container` directory: this is a Linux build, even on a
+macOS host. The initial image build downloads Linux Nix packages and can take
+time; unchanged base images and flake metadata reuse the cached image layer.
+CPM uses its default per-build dependency storage, which persists with the
+build directory in the source bind mount; no separate cache volume or cache
+variable is required. Builds run as root; the test command drops to UID/GID
+1000 because permission-sensitive tests must not run as root. Only the test log directory
+changes ownership. Linux bind mounts may therefore contain root- or
+UID-1000-owned build files. The image contains only the tools declared in the
+flake; add optional development tools there rather than maintaining another
+Docker package list.
+
+#### Apple container on macOS
+
+On Apple Silicon, the same Dockerfile also works with Apple's
+[`container`](https://github.com/apple/container) CLI:
+
+```bash
+container system start --enable-kernel-install
+container build --platform linux/arm64 \
+  --build-arg TARGETARCH=arm64 --pull -t memix-dev .
+container run --rm -it --cpus 6 --memory 16G \
+  --mount type=bind,source="$PWD",target=/workspace \
+  memix-dev
+```
+
+Inside the shell, use the CMake/build/test commands from the Docker example.
+Adjust the CPU and memory limits for your machine. With `container` 1.5.0,
+pass `TARGETARCH=arm64` explicitly: `--platform` alone does not populate that
+build argument. This is a native Linux arm64 build, not a macOS build. The
+bind-mounted build directory survives removal of the container.
+
 ### CMake package consumers
 
 After `cmake --install build --prefix /your/prefix`, consumers can use:
