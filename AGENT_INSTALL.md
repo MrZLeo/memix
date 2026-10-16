@@ -55,8 +55,11 @@ the archive contains this complete layout:
 ```text
 memix-cli/
 ├── SKILL.md
-└── agents/
-    └── openai.yaml
+├── agents/
+│   └── openai.yaml
+└── references/
+    ├── cli.md
+    └── profiles-and-recovery.md
 ```
 
 The `agents/openai.yaml` file is Codex-specific interface metadata. Other
@@ -80,9 +83,10 @@ the current agent:
   asked for a project-local installation, use `.dsh/skills` at the project
   root instead.
 
-The resulting paths must be `<skill-root>/memix-cli/SKILL.md` and
-`<skill-root>/memix-cli/agents/openai.yaml`. Do not flatten the directory or
-create an extra nested `memix-cli/memix-cli` directory. If a destination named
+Keep every file in the layout above, including both `references/` documents,
+under `<skill-root>/memix-cli/`. The main skill links to those documents for
+on-demand CLI and Profile guidance. Do not flatten the directory or create
+an extra nested `memix-cli/memix-cli` directory. If a destination named
 `memix-cli` already exists but is not a previous installation of this skill,
 stop instead of overwriting it.
 
@@ -93,7 +97,8 @@ installation directory.
 Read the entire extracted `SKILL.md` in the current session before running
 memix for the user; a newly installed skill might only be discovered
 automatically by a later agent session. Follow the file as the operating
-instructions for `memix-store` and `memix-view`. If the exact-tag skill archive
+instructions for `memix-store` and `memix-view`, loading its relative reference
+files when the task needs them. If the exact-tag skill archive
 cannot be downloaded or does not have the expected layout, stop instead of
 substituting instructions from a different version.
 
