@@ -203,7 +203,7 @@ bind-mounted build directory survives removal of the container.
 After `cmake --install build --prefix /your/prefix`, consumers can use:
 
 ```cmake
-find_package(memix 0.5 CONFIG REQUIRED)
+find_package(memix 0.6 CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE memix::memix)
 ```
 
@@ -211,7 +211,7 @@ Pass the prefix in `CMAKE_PREFIX_PATH`. The exported target supplies public
 headers and the C++26 requirement, but not memix's warning or exception flags.
 Installations using the default relative install directories can be moved to a
 new prefix. Package matching follows CMake's `SemanticVersion` policy: 0.x
-releases require the same minor version (`0.5.0` does not satisfy `0.4.x`);
+releases require the same minor version (`0.6.0` does not satisfy `0.5.x`);
 from 1.x onward, compatibility is within the same major version. In either
 case, the installed version must be at least the requested version.
 

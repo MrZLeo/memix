@@ -2,7 +2,7 @@ class Memix < Formula
   desc "Immutable local memory and context store CLI"
   homepage "https://github.com/MrZLeo/memix"
   url "https://github.com/MrZLeo/memix.git", branch: "master"
-  version "0.5.0"
+  version "0.6.0"
   license "Unlicense"
   head "https://github.com/MrZLeo/memix.git", branch: "master"
 
