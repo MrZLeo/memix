@@ -7,7 +7,7 @@ description: "Recall, save, update, compose, or activate durable user and projec
 
 ## Store and Safety
 
-Use the installed or user-provided `memix` command, with the `store` and `view` namespaces. If unavailable, ask for its path or installation context. The legacy `memix-store` and `memix-view` executables remain compatibility entrypoints; prefer the unified command for new workflows.
+Use the installed or user-provided `memix` command, with the `store` and `view` namespaces. If unavailable, ask for its path or installation context. Only this entrypoint is supported; do not substitute legacy executables.
 
 For ordinary recall and saving, use the supplied Store or the configured default: `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`, then `$HOME/.memix`. Omit `--store-root` for the default. Only demonstrations, experiments, or explicitly isolated tasks use a fresh temporary Store. Never silently substitute an empty temporary Store for the user's memory. Common options can precede the namespace or its subcommand:
 

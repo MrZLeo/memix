@@ -103,18 +103,6 @@ std::string unified_binary() {
   return binary_path(MEMIX_TEST_BINARY, "MEMIX_TEST_BINARY_OVERRIDE");
 }
 
-std::string legacy_binary(std::string_view command) {
-  if (command == "store") {
-    return binary_path(MEMIX_STORE_TEST_BINARY,
-                       "MEMIX_STORE_TEST_BINARY_OVERRIDE");
-  }
-  if (command == "view") {
-    return binary_path(MEMIX_VIEW_TEST_BINARY,
-                       "MEMIX_VIEW_TEST_BINARY_OVERRIDE");
-  }
-  return binary_path(MEMIX_TUI_TEST_BINARY, "MEMIX_TUI_TEST_BINARY_OVERRIDE");
-}
-
 struct CliResult {
   int status;
   std::string output;
@@ -143,18 +131,15 @@ run(const fs::path &directory, const std::vector<std::string> &arguments) {
   return run_binary(directory, unified_binary(), arguments);
 }
 
-CliResult
-run_command(const fs::path &directory, std::string_view command,
-            const std::vector<std::string> &arguments, bool legacy = false) {
-  std::vector<std::string> full;
-  if (!legacy) {
-    full.emplace_back(command);
-  }
-  full.emplace_back("--store-root");
-  full.push_back((directory / "store with spaces").string());
+CliResult run_command(const fs::path &directory, std::string_view command,
+                      const std::vector<std::string> &arguments) {
+  std::vector<std::string> full{
+      std::string(command),
+      "--store-root",
+      (directory / "store with spaces").string(),
+  };
   full.append_range(arguments);
-  return run_binary(directory,
-                    legacy ? legacy_binary(command) : unified_binary(), full);
+  return run(directory, full);
 }
 
 std::string latest_environment(const fs::path &directory) {
@@ -193,12 +178,10 @@ TEST_CASE("unified CLI discovers namespaces and reports versions", "[cli]") {
     REQUIRE(run(root, {"--help", command}).output == help.output);
     REQUIRE(run(root, {command, "--version"}).output == version.output);
     REQUIRE(run(root, {"--version", command}).output == version.output);
-    REQUIRE(run_binary(root, legacy_binary(command), {"--version"}).output
-            == version.output);
   }
 }
 
-TEST_CASE("unified and compatibility CLIs retain nested help", "[cli]") {
+TEST_CASE("unified CLI provides nested help", "[cli]") {
   TemporaryDirectory directory;
   for (const auto *command :
        {"list", "ingest", "cat", "tree", "expose", "rm", "rules"}) {
@@ -206,11 +189,7 @@ TEST_CASE("unified and compatibility CLIs retain nested help", "[cli]") {
     REQUIRE(help.status == 0);
     REQUIRE(
         help.output.contains(std::format("Usage: memix store {}", command)));
-    const auto legacy = run_binary(directory.path(), legacy_binary("store"),
-                                   {command, "--help"});
-    REQUIRE(legacy.status == 0);
-    REQUIRE(
-        legacy.output.contains(std::format("Usage: memix-store {}", command)));
+    REQUIRE(help.error.empty());
   }
   for (const auto *command : {"cat", "tree"}) {
     const auto help =
@@ -226,11 +205,7 @@ TEST_CASE("unified and compatibility CLIs retain nested help", "[cli]") {
     const auto help = run(directory.path(), {"view", command, "--help"});
     REQUIRE(help.status == 0);
     REQUIRE(help.output.contains(std::format("Usage: memix view {}", command)));
-    const auto legacy = run_binary(directory.path(), legacy_binary("view"),
-                                   {command, "--help"});
-    REQUIRE(legacy.status == 0);
-    REQUIRE(
-        legacy.output.contains(std::format("Usage: memix-view {}", command)));
+    REQUIRE(help.error.empty());
   }
 }
 
@@ -279,7 +254,7 @@ TEST_CASE("unified CLI preserves global options and option terminators",
                      "rules", "--dest=view", source.string()})
               .status
           == 0);
-  const auto expected = run_command(root, "store", {"list", "--json"}, true);
+  const auto expected = run_command(root, "store", {"list", "--json"});
   REQUIRE(expected.status == 0);
   for (const std::vector<std::string> &arguments :
        {std::vector<std::string>{"--store-root", store, "store", "list",
@@ -297,13 +272,12 @@ TEST_CASE("unified CLI preserves global options and option terminators",
   REQUIRE(content.output == "literal namespace-like path\n");
   REQUIRE(run_command(root, "store", {"rules", "cat", "--", "view"}).output
           == content.output);
-  // Preserve the legacy parser's handling of option-like positionals too.
-  const std::vector<std::string> option_path{"cat", "--type", "rules", "--",
-                                             "--help"};
-  const auto result = run_command(root, "store", option_path);
-  const auto legacy = run_command(root, "store", option_path, true);
-  REQUIRE(result.status == legacy.status);
-  REQUIRE(result.output == legacy.output);
+  // The parser rejects this positional; it must not turn it into help.
+  const auto result =
+      run_command(root, "store", {"cat", "--type", "rules", "--", "--help"});
+  REQUIRE(result.status != 0);
+  REQUIRE(result.error.contains("unexpected argument: --help"));
+  REQUIRE(result.output.empty());
 }
 
 TEST_CASE("unified CLI forwards option-like store roots literally", "[cli]") {
@@ -388,18 +362,18 @@ TEST_CASE("unified CLI preserves store view and activation workflows",
   REQUIRE(ingest().status == 0);
   REQUIRE(build().status == 0);
   const auto first = latest_environment(root);
-  for (const std::vector<std::string> &arguments :
-       {std::vector<std::string>{"list", "--json"},
-        {"show", first, "--json"},
-        {"tree", first, "--json"},
-        {"cat", first, "rules/AGENTS.md"}}) {
+  const auto view_output = [&](const std::vector<std::string> &arguments) {
     const auto result = run_command(root, "view", arguments);
-    const auto legacy = run_command(root, "view", arguments, true);
+    INFO(result.error);
     REQUIRE(result.status == 0);
     REQUIRE(result.error.empty());
-    REQUIRE(legacy.status == result.status);
-    REQUIRE(legacy.output == result.output);
-  }
+    return result.output;
+  };
+  REQUIRE(view_output({"list", "--json"}).contains(first));
+  REQUIRE(view_output({"show", first, "--json"}).contains(first));
+  REQUIRE(view_output({"tree", first, "--json"}).contains("rules/AGENTS.md"));
+  REQUIRE(view_output({"cat", first, "rules/AGENTS.md"})
+          == "first generation\n");
   REQUIRE(activate(first).status == 0);
   REQUIRE(read_text(attachment / "rules" / "AGENTS.md")
           == "first generation\n");
@@ -411,15 +385,15 @@ TEST_CASE("unified CLI preserves store view and activation workflows",
   REQUIRE(activate(second).status == 0);
   REQUIRE(read_text(attachment / "rules" / "AGENTS.md")
           == "second generation\n");
-  for (const auto *command : {"status", "generations"}) {
-    const auto result =
-        run_command(root, "view", {command, "--into", attachment.string()});
-    REQUIRE(result.status == 0);
-    REQUIRE(result.output
-            == run_command(root, "view",
-                           {command, "--into", attachment.string()}, true)
-                   .output);
-  }
+  const auto status = view_output({"status", "--into", attachment.string()});
+  REQUIRE(status.contains("active: true\n"));
+  REQUIRE(status.contains("generation: 2\n"));
+  REQUIRE(status.contains(second));
+  const auto generations =
+      view_output({"generations", "--into", attachment.string()});
+  constexpr std::size_t kDisplayIdLength = 12;
+  REQUIRE(generations.contains(first.substr(0, kDisplayIdLength)));
+  REQUIRE(generations.contains(second.substr(0, kDisplayIdLength)));
   REQUIRE(run_command(root, "view", {"rollback", "--into", attachment.string()})
               .status
           == 0);

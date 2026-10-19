@@ -71,7 +71,7 @@ class Memix < Formula
     assert_match "Usage: memix view", shell_output("#{bin}/memix view --help")
     assert_match "Usage: memix tui", shell_output("#{bin}/memix tui --help")
     %w[store view tui].each do |command|
-      assert_match "memix #{version}", shell_output("#{bin}/memix-#{command} --version")
+      assert_match "memix #{version}", shell_output("#{bin}/memix #{command} --version")
     end
   end
 end

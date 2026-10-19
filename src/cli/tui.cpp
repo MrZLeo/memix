@@ -3365,8 +3365,8 @@ resolve_store_root(const fs::path &override_root) {
 
 } // namespace
 
-int memix::cli::run_tui(const std::vector<std::string> &arguments,
-                        std::string_view program_name) {
+int memix::cli::run_tui(const std::vector<std::string> &arguments) {
+  constexpr std::string_view program_name = "memix tui";
   const CliParseResult cli = parse_cli_args(arguments, program_name);
   if (!cli.error.empty()) {
     std::cerr << program_name << ": " << cli.error << '\n' << cli.help << '\n';

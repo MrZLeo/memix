@@ -50,14 +50,6 @@ foreach(file IN LISTS test_sources)
     target_compile_definitions(${test_name}_Tests PRIVATE
       MEMIX_TEST_BINARY="$<TARGET_FILE:${test_cli}>"
     )
-    if(test_name STREQUAL "cli_test")
-      add_dependencies(${test_name}_Tests memix_memix-store memix_memix-view memix_memix-tui)
-      target_compile_definitions(${test_name}_Tests PRIVATE
-        MEMIX_STORE_TEST_BINARY="$<TARGET_FILE:memix_memix-store>"
-        MEMIX_VIEW_TEST_BINARY="$<TARGET_FILE:memix_memix-view>"
-        MEMIX_TUI_TEST_BINARY="$<TARGET_FILE:memix_memix-tui>"
-      )
-    endif()
   endif()
   catch_discover_tests(${test_name}_Tests)
 endforeach()

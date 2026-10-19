@@ -9,7 +9,6 @@
 #include <print>
 #include <ranges>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace {
@@ -56,8 +55,7 @@ int memix::cli::run(const std::vector<std::string> &arguments) {
   }
 
   const std::string &command = parsed->front();
-  using EntryPoint =
-      int (*)(const std::vector<std::string> &, std::string_view);
+  using EntryPoint = int (*)(const std::vector<std::string> &);
   EntryPoint entry = nullptr;
   if (command == "store") {
     entry = run_store;
@@ -83,5 +81,5 @@ int memix::cli::run(const std::vector<std::string> &arguments) {
     forwarded.emplace_back("--version");
   }
   forwarded.append_range(*parsed | std::views::drop(1));
-  return entry(forwarded, std::format("memix {}", command));
+  return entry(forwarded);
 }

@@ -105,9 +105,7 @@ if(memix_BUILD_EXECUTABLE)
       "SPDLOG_INSTALL OFF"
   )
 
-  # Both the unified command and the compatibility entrypoints call these
-  # modules in-process. Static archive extraction keeps unused CLIs out of
-  # the legacy binaries, while compiling each implementation only once.
+  # Keep command implementations modular behind the single memix entrypoint.
   add_library(memix_cli STATIC ${cli_sources} ${cli_headers})
   target_include_directories(memix_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_definitions(memix_cli PRIVATE ARGUM_USE_EXPECTED=1 SPDLOG_NO_EXCEPTIONS=1)

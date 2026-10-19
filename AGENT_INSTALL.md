@@ -24,10 +24,9 @@ repository or release is not public. Keep the resolved tag for the skill step
 below. If no published release can be resolved, stop and report that memix is
 not available for prebuilt installation yet.
 
-Check that the release includes the unified `memix` platform asset. If it is
-an older release with only `memix-store` / `memix-view`, follow `AGENT_INSTALL.md`
-from that exact tag instead; do not mix release versions or rename a legacy
-binary to `memix`.
+Check that the release includes the `memix` platform asset. If it is missing,
+stop and report that the release does not provide the required CLI. Do not
+fall back to legacy executables or rename one to `memix`.
 
 Download the platform asset and the platform-independent agent skill archive
 from that exact release:
@@ -51,8 +50,8 @@ Rename the installed file to its canonical command name:
 On Linux and macOS, make the file executable. Run `memix --version`,
 `memix store --help`, `memix view --help`, and `memix tui --help`; treat any
 non-zero exit status as an installation failure. This single binary includes
-all three namespaces and needs no sibling executables. Legacy command assets
-remain available for existing scripts, but are not needed for a new installation.
+all three namespaces. It is the only supported CLI executable; no legacy
+entrypoints or compatibility aliases are provided.
 
 ## 3. Install the matching CLI skill
 

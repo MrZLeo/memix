@@ -47,7 +47,7 @@ Treat memory as immutable evidence plus reproducible views, not as a mutable not
 
 * `include/` and `src/` contain the `memix` library
 * `src/cli/` contains shared store, view, TUI, and dispatch implementations
-* `src/bin/*.cpp` are thin, auto-discovered executable entrypoints: `memix` and the legacy compatibility commands
+* `src/bin/memix.cpp` is the sole CLI entrypoint, providing `memix store`, `memix view`, and `memix tui`
 
 The CLIs use [argum](https://github.com/gershnik/argum) for argument parsing.
 
@@ -82,7 +82,7 @@ cmake -G Ninja -S . -B build \
 cmake --build build
 ```
 
-The default build always produces the `memix` library and also builds every `src/bin/*.cpp` entrypoint as an executable.
+The default build produces the `memix` library and the `memix` CLI executable.
 
 ### Nix development environment
 
@@ -239,9 +239,8 @@ assets:
 | Windows x86_64 | `memix-windows-x86_64.exe` |
 | Any | `memix-cli-skill.tar.gz` (platform-independent) |
 
-Each `memix` binary includes `store`, `view`, and `tui`; it does not require
-sibling executables. The `memix-store-<platform>`, `memix-view-<platform>`, and
-`memix-tui-<platform>` assets are also published for compatibility.
+Each `memix` binary includes `store`, `view`, and `tui`; no additional CLI
+executables or compatibility aliases are built, installed, or published.
 
 On Linux or macOS, mark a downloaded asset executable before first use:
 
@@ -274,11 +273,12 @@ memix --store-root /tmp/memix-store store list --json
 ```
 
 Common options such as `--store-root` can appear before the namespace or
-within it. Existing `memix-store …`, `memix-view …`, and `memix-tui …`
-invocations remain supported as compatibility entrypoints, with the same
-arguments, data output, and exit behavior. Activation, generations, and
-rollback remain under `memix view`; this migration does not change the
-store format or introduce a `profile` namespace.
+within it. The old `memix-store`, `memix-view`, and `memix-tui` entrypoints
+have been removed: update scripts to `memix store`, `memix view`, and
+`memix tui`, respectively. Remove any old standalone binaries left by a
+previous installation. Activation, generations, and rollback remain under
+`memix view`; this change does not alter the store format or introduce a
+`profile` namespace.
 
 ```bash
 ./build/bin/Release/memix store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md

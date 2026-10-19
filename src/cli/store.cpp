@@ -1005,8 +1005,8 @@ int run_cli(const std::vector<std::string> &arguments,
 
 } // namespace
 
-int memix::cli::run_store(const std::vector<std::string> &arguments,
-                          std::string_view program_name) {
+int memix::cli::run_store(const std::vector<std::string> &arguments) {
+  constexpr std::string_view program_name = "memix store";
   const std::shared_ptr<spdlog::logger> logger =
       memix::cli_detail::make_logger(program_name);
   return run_cli(arguments, program_name, logger);
