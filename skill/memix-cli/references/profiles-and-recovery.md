@@ -5,9 +5,9 @@ Read the main [SKILL.md](../SKILL.md) for task routing and authorization. Exampl
 ## Activate Only When an Attachment Is Needed
 
 ```text
-memix-view activate <environment-id> --into ./.memory
-memix-view status --into ./.memory
-memix-view generations --into ./.memory
+memix view activate <environment-id> --into ./.memory
+memix view status --into ./.memory
+memix view generations --into ./.memory
 ```
 
 Activation records a numbered generation within a Store Profile and switches its `current` pointer. The workspace holds a symlink in the default `--mode link`, or disposable real files in `--mode copy`. The default attachment path is `./.memory`; use the supplied `--into` path consistently.
@@ -25,8 +25,8 @@ Without `--profile`, Memix derives `ws-<hash>` from the canonical workspace dire
 Use `--profile NAME` only when workspaces should intentionally share one mutable current pointer. Explicit names match `[a-z0-9][a-z0-9._-]*`, are at most 64 characters, and cannot start with `ws-`.
 
 ```text
-memix-view activate <environment-id> --profile shared-project --into ./.memory --mode link
-memix-view generations --profile shared-project --into ./.memory
+memix view activate <environment-id> --profile shared-project --into ./.memory --mode link
+memix view generations --profile shared-project --into ./.memory
 ```
 
 - Linked workspaces follow the shared Profile's current generation. Activating or rolling back that Profile can change all their visible memory.
@@ -42,7 +42,7 @@ Reactivating the current Environment through an already-correct link attachment 
 Copy mode always rebuilds its disposable workspace copy, even for an already-current Environment. Use it to repair deleted or modified copied files:
 
 ```text
-memix-view activate <current-environment-id> --into ./.memory --mode copy
+memix view activate <current-environment-id> --into ./.memory --mode copy
 ```
 
 For an explicit Profile, also repeat `--profile NAME`. `status` reports the Profile, generation, Environment, and attachment staleness. Here `stale: true` means a copied attachment is behind its Profile's current generation, **not** that a Quest's source refs have moved.
@@ -52,9 +52,9 @@ When refreshing a stale copy, obtain the Profile's current Environment from its 
 ## Rollback
 
 ```text
-memix-view generations --into ./.memory
-memix-view rollback --into ./.memory
-memix-view rollback --to 2 --into ./.memory
+memix view generations --into ./.memory
+memix view rollback --into ./.memory
+memix view rollback --to 2 --into ./.memory
 ```
 
 Without `--to`, rollback selects the previous Profile generation. `--to N` expects a **Profile generation number**, not an Environment ID, source generation ID, or `@generation/NNNNNN` source ref. Inspect history before choosing a target; use the full retained reference, not an ID reconstructed from a displayed prefix.
@@ -66,7 +66,7 @@ Rollback restores the selected Environment and its frozen README. It does not re
 ## Deactivate and Remove Profile History
 
 ```text
-memix-view deactivate --into ./.memory
+memix view deactivate --into ./.memory
 ```
 
 Ordinary deactivation removes the workspace attachment, not its Profile history or stored source memory.
@@ -88,15 +88,15 @@ If the user cancels a choice, leave the attachment and Profile unchanged. Never 
 Use root or subcommand help to verify syntax:
 
 ```text
-memix-store --help
-memix-store ingest --help
-memix-view activate --help
-memix-view rollback --help
+memix store --help
+memix store ingest --help
+memix view activate --help
+memix view rollback --help
 ```
 
 - **No latest ref or missing source:** inspect the logical tree and requested version. A new source type needs an intentional `ingest --dest` before logical reads/builds can use it. Do not create placeholder memory to hide a recall failure.
 - **Invalid locator:** check the supported type, safe relative path, version selector, and trailing `/` for directories. See [CLI reference](cli.md).
-- **Missing/stale projection:** use `memix-store expose` only when current-source exploration is permitted. It repairs the derived projection, not source content or authorization.
+- **Missing/stale projection:** use `memix store expose` only when current-source exploration is permitted. It repairs the derived projection, not source content or authorization.
 - **Path conflict during composition:** choose the intended version or put both inputs under distinct mounts. Do not drop a source merely to make the build pass.
 - **Lock reported:** a lock may belong to a live Memix operation. Confirm that no operation is using that exact Profile or workspace and obtain approval before removal. Remove only the exact reported stale lock directory, never a glob or its parent. Profile locks are `lock` directories under `views/profiles/`; workspace locks are sibling `.memix-activation-lock-<hash>` directories beside the attachment. If ownership or liveness is uncertain, stop and report it.
 

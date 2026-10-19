@@ -3,8 +3,8 @@
 Read the main [SKILL.md](../SKILL.md) for task routing and authorization. These are syntax templates, not commands to execute against the user's Store as a demonstration. Replace example paths and IDs with inspected or returned values. Use the task's command paths and shell quoting. For an isolated experiment, create a fresh temporary directory and pass its absolute path before every subcommand:
 
 ```text
-memix-store --store-root "<absolute-store-path>" tree --all --depth 2 --json
-memix-view --store-root "<absolute-store-path>" quests --json
+memix store --store-root "<absolute-store-path>" tree --all --depth 2 --json
+memix view --store-root "<absolute-store-path>" quests --json
 ```
 
 The examples below omit that common option. Without it, the Store resolves from `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`, then `$HOME/.memix`.
@@ -14,11 +14,11 @@ The examples below omit that common option. Without it, the Store resolves from 
 Supported types are exactly `rules`, `chat`, and `documents`. Logical paths are relative within a type, such as `projects/example/decisions.md`.
 
 ```text
-memix-store ingest --type documents --dest projects/example/decisions.md --message "record decision" decisions.md
-memix-store ingest --type rules --dest projects/example/AGENTS.md AGENTS.md
-memix-store cat --type documents projects/example/decisions.md
-memix-store rules cat projects/example/AGENTS.md
-memix-store cat --type documents --generation <full-generation-id> projects/example/decisions.md
+memix store ingest --type documents --dest projects/example/decisions.md --message "record decision" decisions.md
+memix store ingest --type rules --dest projects/example/AGENTS.md AGENTS.md
+memix store cat --type documents projects/example/decisions.md
+memix store rules cat projects/example/AGENTS.md
+memix store cat --type documents --generation <full-generation-id> projects/example/decisions.md
 ```
 
 - `--dest` accepts one source file. Each ingest commits a new logical-tree generation, retaining other entries, and advances that type's latest ref. Use separate ingests for multiple logical files.
@@ -29,8 +29,8 @@ memix-store cat --type documents --generation <full-generation-id> projects/exam
 Raw-object storage, only when logical retrieval is not wanted:
 
 ```text
-memix-store ingest --type documents notes.md transcript.json
-memix-store list --type documents --json
+memix store ingest --type documents notes.md transcript.json
+memix store list --type documents --json
 ```
 
 Without `--dest`, ingest may take several files but creates blobs only. They appear in `list`, not in the logical tree or `latest/`, and cannot be selected by logical `cat` or `build --source`. `list` is a blob inventory, not a list of current logical memory.
@@ -38,8 +38,8 @@ Without `--dest`, ingest may take several files but creates blobs only. They app
 Logical retraction:
 
 ```text
-memix-store rm --type documents projects/example/obsolete.md --message "retract obsolete note"
-memix-store rm --type chat sessions/old-project
+memix store rm --type documents projects/example/obsolete.md --message "retract obsolete note"
+memix store rm --type chat sessions/old-project
 ```
 
 `--type` is required, and the file or directory subtree must exist in the latest tree. Removal creates a new generation and refreshes the latest projection. Blobs, earlier generations, and pinned Views remain readable. This is not secure erasure; the CLI provides no garbage collection or physical-forgetting workflow.
@@ -47,10 +47,10 @@ memix-store rm --type chat sessions/old-project
 ## Inspect and Search Sources
 
 ```text
-memix-store tree --all --depth 2 --json
-memix-store tree --type documents --path projects/example --depth 2 --json
-memix-store tree --type rules
-memix-store rules tree
+memix store tree --all --depth 2 --json
+memix store tree --type documents --path projects/example --depth 2 --json
+memix store tree --type rules
+memix store rules tree
 ```
 
 Catalog output includes type, logical path, entry kind, recursive file count, total bytes, latest timestamp, and file blob IDs. Supplying `--all`, `--path`, `--depth`, or `--json` selects this catalog form; plain `tree --type <type>` retains compact path/blob output. These are path-oriented inventories, not semantic rankings.
@@ -66,7 +66,7 @@ A projection hit at `latest/documents/projects/example/decisions.md` maps to loc
 Ingest with `--dest` and logical removal refresh the affected projection after committing. A refresh failure warns without undoing the commit. If the projection is missing or was reported stale, and current-source exploration is allowed, repair it with:
 
 ```text
-memix-store expose
+memix store expose
 ```
 
 Never edit projection files: they hardlink immutable blobs. Do not use `expose` or a latest-source search to bypass a deliberately restricted source set or a requested historical version. For historical reads, use the specified generation or Environment.
@@ -76,10 +76,10 @@ Never edit projection files: they hardlink immutable blobs. Do not use `expose` 
 A Quest stores a reusable query plus name/intent annotations; resolutions associate it with built Environments. Use the public catalog:
 
 ```text
-memix-view find deployment --json
-memix-view find deployment postgres --json
-memix-view find --covers documents/projects/example/decisions.md --json
-memix-view quests --json
+memix view find deployment --json
+memix view find deployment postgres --json
+memix view find --covers documents/projects/example/decisions.md --json
+memix view quests --json
 ```
 
 `find` matches substrings in name and intent, with ASCII case-insensitivity. Several terms are an AND filter, not alternatives or semantic search. Terms and `--covers` also combine as filters. Plain tables truncate long annotations; use JSON for their full text.
@@ -87,9 +87,9 @@ memix-view quests --json
 `--covers` checks structural relationships against the Quest's direct context inputs, not whether content supports a claim. It does not traverse composed `--view` inputs. Thus, no coverage match does not rule out a relevant composed Environment; inspect its metadata and derived paths instead.
 
 ```text
-memix-view define --source documents/projects/example/ --name "Example decisions" --intent "Project decisions; start at documents/projects/example/decisions.md" --json
-memix-view resolve <quest-id> --json
-memix-view freshness <quest-id> --json
+memix view define --source documents/projects/example/ --name "Example decisions" --intent "Project decisions; start at documents/projects/example/decisions.md" --json
+memix view resolve <quest-id> --json
+memix view freshness <quest-id> --json
 ```
 
 `define` creates or annotates a Quest without building. `resolve` builds its query; `build` defines and resolves in one operation. Equivalent canonical queries reuse their Quest identity. Retain the Quest ID from `define` or catalog JSON; an Environment ID is not a Quest ID.
@@ -119,9 +119,9 @@ An unqualified locator follows latest at build/resolve time. The resulting Envir
 ## Build and Compose Environments
 
 ```text
-memix-view build --source rules/projects/example/AGENTS.md --source documents/projects/example/ --name "Example workspace" --intent "Project rules and decisions for current work" --json
-memix-view build --view <environment-a> --view <environment-b> --intent "Combined project context" --json
-memix-view build --view <environment-a>=prior --source documents/projects/example/decisions.md --json
+memix view build --source rules/projects/example/AGENTS.md --source documents/projects/example/ --name "Example workspace" --intent "Project rules and decisions for current work" --json
+memix view build --view <environment-a> --view <environment-b> --intent "Combined project context" --json
+memix view build --view <environment-a>=prior --source documents/projects/example/decisions.md --json
 ```
 
 The only target is `file_tree`, also the default. It packages selected files at stable paths without merging their contents. Use one source if that is sufficient; do not create a wrapper View solely to select an existing Environment.
@@ -141,18 +141,18 @@ Activation generates a root `README.md` with Environment/Derivation IDs and the 
 ## Read, Audit, and Interpret Usage
 
 ```text
-memix-view tree <environment-id> --depth 2 --json
-memix-view tree <environment-id> --path documents/projects/example --depth 2 --json
-memix-view cat <environment-id> documents/projects/example/decisions.md
-memix-view show <environment-id> --json
-memix-view stats <quest-id> --json
+memix view tree <environment-id> --depth 2 --json
+memix view tree <environment-id> --path documents/projects/example --depth 2 --json
+memix view cat <environment-id> documents/projects/example/decisions.md
+memix view show <environment-id> --json
+memix view stats <quest-id> --json
 ```
 
 Use derived paths from `tree`, especially for mounted compositions. `tree` and `cat` work without activation. `show` is manifest/provenance inspection, not a payload read.
 
 `build --json`, `resolve --json`, and `show --json` expose the Environment ID, binding Derivation IDs, and closure IDs, not filesystem paths or each source's resolved generation. Plain build/show output includes the Environment manifest path, not the materialized tree path. For exact source provenance, retain ingest generation IDs or inspect the Derivation manifest; do not infer resolved generations from Environment JSON alone.
 
-`memix-view list --json` is a low-level Environment inventory with full IDs, Derivation IDs, file/byte counts, and upstream counts. Use it for debugging, not as the default discovery catalog.
+`memix view list --json` is a low-level Environment inventory with full IDs, Derivation IDs, file/byte counts, and upstream counts. Use it for debugging, not as the default discovery catalog.
 
 Successful CLI `cat`, `tree`, and `activate` record best-effort consumption receipts. Activation records even a no-op reactivation; rollback records the Environment it recommits; deactivate records nothing. Ordinary attachment reads bypass CLI receipts. `stats` and catalog usage counts show observed operations, not payload comprehension, semantic relevance, or evidence quality.
 

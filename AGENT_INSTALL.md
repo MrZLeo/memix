@@ -24,28 +24,35 @@ repository or release is not public. Keep the resolved tag for the skill step
 below. If no published release can be resolved, stop and report that memix is
 not available for prebuilt installation yet.
 
-Download both platform assets and the platform-independent agent skill archive
+Check that the release includes the unified `memix` platform asset. If it is
+an older release with only `memix-store` / `memix-view`, follow `AGENT_INSTALL.md`
+from that exact tag instead; do not mix release versions or rename a legacy
+binary to `memix`.
+
+Download the platform asset and the platform-independent agent skill archive
 from that exact release:
 
 ```text
-https://github.com/MrZLeo/memix/releases/download/<tag>/memix-store-<asset-suffix><executable-suffix>
-https://github.com/MrZLeo/memix/releases/download/<tag>/memix-view-<asset-suffix><executable-suffix>
+https://github.com/MrZLeo/memix/releases/download/<tag>/memix-<asset-suffix><executable-suffix>
 https://github.com/MrZLeo/memix/releases/download/<tag>/memix-cli-skill.tar.gz
 ```
 
-## 2. Install and verify the commands
+## 2. Install and verify the command
 
-Install the two assets in a user-owned directory on `PATH`. Do not use
+Install the binary in a user-owned directory on `PATH`. Do not use
 administrator or root privileges unless the user explicitly requests a
 system-wide installation.
 
-Rename the installed files to their canonical command names:
+Rename the installed file to its canonical command name:
 
-- Linux and macOS: `memix-store` and `memix-view`
-- Windows: `memix-store.exe` and `memix-view.exe`
+- Linux and macOS: `memix`
+- Windows: `memix.exe`
 
-On Linux and macOS, make both files executable. Run both commands with
-`--version` and treat any non-zero exit status as an installation failure.
+On Linux and macOS, make the file executable. Run `memix --version`,
+`memix store --help`, `memix view --help`, and `memix tui --help`; treat any
+non-zero exit status as an installation failure. This single binary includes
+all three namespaces and needs no sibling executables. Legacy command assets
+remain available for existing scripts, but are not needed for a new installation.
 
 ## 3. Install the matching CLI skill
 
@@ -97,13 +104,13 @@ installation directory.
 Read the entire extracted `SKILL.md` in the current session before running
 memix for the user; a newly installed skill might only be discovered
 automatically by a later agent session. Follow the file as the operating
-instructions for `memix-store` and `memix-view`, loading its relative reference
+instructions for `memix store` and `memix view`, loading its relative reference
 files when the task needs them. If the exact-tag skill archive
 cannot be downloaded or does not have the expected layout, stop instead of
 substituting instructions from a different version.
 
-Finally, report the installed release tag, the two command paths, the skill
-path when installed, and the result of both version checks. When running as
+Finally, report the installed release tag, the command path, the skill
+path when installed, and the results of the version and help checks. When running as
 pi, also mention that later sessions can load the skill explicitly with
 `/skill:memix-cli`. When running as Claude Code, mention that later sessions
 can invoke it with `/memix-cli`, and that Claude Code only discovers new

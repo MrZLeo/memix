@@ -112,7 +112,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          for binary in build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
+          for binary in build/bin/Release/memix build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
             file "$binary"
             "$binary" --version
             if readelf -l "$binary" | grep -q 'INTERP'; then
@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for binary in build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
+          for binary in build/bin/Release/memix build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
             file "$binary"
             "$binary" --version
 
@@ -158,6 +158,7 @@ jobs:
         shell: pwsh
         run: |
           $binaries = @(
+            "build/bin/Release/memix.exe",
             "build/bin/Release/memix-store.exe",
             "build/bin/Release/memix-view.exe",
             "build/bin/Release/memix-tui.exe"
@@ -178,10 +179,11 @@ jobs:
         shell: bash
         run: |
           mkdir dist
+          cp build/bin/Release/memix "dist/memix-${{ matrix.config.asset }}"
           cp build/bin/Release/memix-store "dist/memix-store-${{ matrix.config.asset }}"
           cp build/bin/Release/memix-view "dist/memix-view-${{ matrix.config.asset }}"
           cp build/bin/Release/memix-tui "dist/memix-tui-${{ matrix.config.asset }}"
-          strip "dist/memix-store-${{ matrix.config.asset }}" "dist/memix-view-${{ matrix.config.asset }}" "dist/memix-tui-${{ matrix.config.asset }}"
+          strip "dist/memix-${{ matrix.config.asset }}" "dist/memix-store-${{ matrix.config.asset }}" "dist/memix-view-${{ matrix.config.asset }}" "dist/memix-tui-${{ matrix.config.asset }}"
           ls -lh dist
 
       - name: stage Windows executables
@@ -189,6 +191,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist
+          Copy-Item build/bin/Release/memix.exe "dist/memix-${{ matrix.config.asset }}.exe"
           Copy-Item build/bin/Release/memix-store.exe "dist/memix-store-${{ matrix.config.asset }}.exe"
           Copy-Item build/bin/Release/memix-view.exe "dist/memix-view-${{ matrix.config.asset }}.exe"
           Copy-Item build/bin/Release/memix-tui.exe "dist/memix-tui-${{ matrix.config.asset }}.exe"
@@ -290,11 +293,12 @@ jobs:
           test "$(sw_vers -productVersion | cut -d. -f1)" = "14"
 
           mkdir -p "$RUNNER_TEMP/memix-bin"
+          install -m 0755 dist/memix-macos-arm64 "$RUNNER_TEMP/memix-bin/memix"
           install -m 0755 dist/memix-store-macos-arm64 "$RUNNER_TEMP/memix-bin/memix-store"
           install -m 0755 dist/memix-view-macos-arm64 "$RUNNER_TEMP/memix-bin/memix-view"
           install -m 0755 dist/memix-tui-macos-arm64 "$RUNNER_TEMP/memix-bin/memix-tui"
 
-          for binary in "$RUNNER_TEMP/memix-bin/memix-store" "$RUNNER_TEMP/memix-bin/memix-view" "$RUNNER_TEMP/memix-bin/memix-tui"; do
+          for binary in "$RUNNER_TEMP/memix-bin/memix" "$RUNNER_TEMP/memix-bin/memix-store" "$RUNNER_TEMP/memix-bin/memix-view" "$RUNNER_TEMP/memix-bin/memix-tui"; do
             test "$(lipo -archs "$binary")" = "arm64"
             build_info="$(xcrun vtool -show-build "$binary")"
             printf '%s\n' "$build_info"
@@ -323,23 +327,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          memix="$RUNNER_TEMP/memix-bin/memix"
           store="$RUNNER_TEMP/memix-bin/memix-store"
           view="$RUNNER_TEMP/memix-bin/memix-view"
           inspect="$RUNNER_TEMP/memix-bin/memix-tui"
 
+          memix_version="$("$memix" --version)"
           store_version="$("$store" --version)"
           view_version="$("$view" --version)"
           inspect_version="$("$inspect" --version)"
+          test "$store_version" = "$memix_version"
           test "$store_version" = "$view_version"
           test "$store_version" = "$inspect_version"
+          grep -Fq 'Usage: memix' <<<"$("$memix" --help)"
+          for command in store view tui; do
+            grep -Fq "Usage: memix $command" <<<"$("$memix" "$command" --help)"
+            test "$("$memix" "$command" --version)" = "$memix_version"
+          done
           grep -Fq 'Usage: memix-store' <<<"$("$store" --help)"
           grep -Fq 'Usage: memix-view' <<<"$("$view" --help)"
           grep -Fq 'Usage: memix-tui' <<<"$("$inspect" --help)"
 
           smoke_root="$(mktemp -d "$RUNNER_TEMP/memix-readonly-smoke.XXXXXX")"
           rmdir "$smoke_root"
-          test "$("$store" --store-root "$smoke_root/store" list --json)" = '[]'
-          test "$("$view" --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
+          test "$("$memix" store --store-root "$smoke_root/store" list --json)" = '[]'
+          test "$("$memix" view --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
           test ! -e "$smoke_root"
 
   release:

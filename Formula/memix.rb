@@ -58,16 +58,20 @@ class Memix < Formula
   end
 
   test do
-    assert_match "memix #{version}", shell_output("#{bin}/memix-store --version")
+    assert_match "memix #{version}", shell_output("#{bin}/memix --version")
 
     (testpath/"input.txt").write "hello from homebrew\n"
     store_root = testpath/"store"
-    system bin/"memix-store", "--store-root", store_root, "ingest",
+    system bin/"memix", "store", "--store-root", store_root, "ingest",
            "--type", "rules", "--dest", "input.txt", testpath/"input.txt"
 
-    output = shell_output("#{bin}/memix-store --store-root #{store_root} list --type rules")
+    output = shell_output("#{bin}/memix store --store-root #{store_root} list --type rules")
     assert_match "rules", output
     assert_match "input.txt", output
-    assert_match "memix #{version}", shell_output("#{bin}/memix-view --version")
+    assert_match "Usage: memix view", shell_output("#{bin}/memix view --help")
+    assert_match "Usage: memix tui", shell_output("#{bin}/memix tui --help")
+    %w[store view tui].each do |command|
+      assert_match "memix #{version}", shell_output("#{bin}/memix-#{command} --version")
+    end
   end
 end

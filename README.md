@@ -46,7 +46,8 @@ Treat memory as immutable evidence plus reproducible views, not as a mutable not
 `memix` is implemented as a CMake-based C++ project with a Rust-style split between library code and executable entrypoints:
 
 * `include/` and `src/` contain the `memix` library
-* `src/bin/*.cpp` are auto-discovered and built as executables
+* `src/cli/` contains shared store, view, TUI, and dispatch implementations
+* `src/bin/*.cpp` are thin, auto-discovered executable entrypoints: `memix` and the legacy compatibility commands
 
 The CLIs use [argum](https://github.com/gershnik/argum) for argument parsing.
 
@@ -228,21 +229,25 @@ The static-link setting also applies to Linux/MinGW test executables; tests
 retain exception support. To restore platform-default dynamic runtime
 linking, configure with `-Dmemix_STATIC_LINK=OFF`.
 
-Tag builds publish the standalone CLIs and Codex skill as GitHub release
+Tag builds publish the unified `memix` executable and agent skill as GitHub release
 assets:
 
 | Platform | Assets |
 | -------- | ------ |
-| Linux x86_64 | `memix-store-linux-x86_64`, `memix-view-linux-x86_64`, `memix-tui-linux-x86_64` |
-| macOS arm64 | `memix-store-macos-arm64`, `memix-view-macos-arm64`, `memix-tui-macos-arm64`, `MemixInspector-macos-arm64.zip` |
-| Windows x86_64 | `memix-store-windows-x86_64.exe`, `memix-view-windows-x86_64.exe`, `memix-tui-windows-x86_64.exe` |
+| Linux x86_64 | `memix-linux-x86_64` |
+| macOS arm64 | `memix-macos-arm64`, `MemixInspector-macos-arm64.zip` |
+| Windows x86_64 | `memix-windows-x86_64.exe` |
 | Any | `memix-cli-skill.tar.gz` (platform-independent) |
+
+Each `memix` binary includes `store`, `view`, and `tui`; it does not require
+sibling executables. The `memix-store-<platform>`, `memix-view-<platform>`, and
+`memix-tui-<platform>` assets are also published for compatibility.
 
 On Linux or macOS, mark a downloaded asset executable before first use:
 
 ```bash
-chmod +x memix-store-linux-x86_64
-./memix-store-linux-x86_64 --version
+chmod +x memix-linux-x86_64
+./memix-linux-x86_64 --version
 ```
 
 ## 🤖 Install with an agent
@@ -250,7 +255,7 @@ chmod +x memix-store-linux-x86_64
 Copy this request into an agent:
 
 ```text
-Install memix by reading and following https://raw.githubusercontent.com/MrZLeo/memix/master/AGENT_INSTALL.md. If your harness supports Agent Skills packages (for example Codex, pi, or Claude Code), install the complete version-matched memix CLI skill package before using either command.
+Install memix by reading and following https://raw.githubusercontent.com/MrZLeo/memix/master/AGENT_INSTALL.md. If your harness supports Agent Skills packages (for example Codex, pi, or Claude Code), install the complete version-matched memix CLI skill package before using memix.
 ```
 
 The full bootstrap procedure is also available in
@@ -258,16 +263,33 @@ The full bootstrap procedure is also available in
 
 ## ▶️ Run
 
+Use the unified command for new workflows:
+
 ```bash
-./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
-./build/bin/Release/memix-store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
-./build/bin/Release/memix-store --store-root /tmp/memix-store rules tree
-./build/bin/Release/memix-store --store-root /tmp/memix-store tree --all --depth 2 --json
-./build/bin/Release/memix-store --store-root /tmp/memix-store list
-./build/bin/Release/memix-store --store-root /tmp/memix-store list --json
-./build/bin/Release/memix-store --store-root /tmp/memix-store expose
-./build/bin/Release/memix-store --version
-./build/bin/Release/memix-store --help
+memix --help
+memix store --help
+memix view build --help
+memix tui --help
+memix --store-root /tmp/memix-store store list --json
+```
+
+Common options such as `--store-root` can appear before the namespace or
+within it. Existing `memix-store …`, `memix-view …`, and `memix-tui …`
+invocations remain supported as compatibility entrypoints, with the same
+arguments, data output, and exit behavior. Activation, generations, and
+rollback remain under `memix view`; this migration does not change the
+store format or introduce a `profile` namespace.
+
+```bash
+./build/bin/Release/memix store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
+./build/bin/Release/memix store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
+./build/bin/Release/memix store --store-root /tmp/memix-store rules tree
+./build/bin/Release/memix store --store-root /tmp/memix-store tree --all --depth 2 --json
+./build/bin/Release/memix store --store-root /tmp/memix-store list
+./build/bin/Release/memix store --store-root /tmp/memix-store list --json
+./build/bin/Release/memix store --store-root /tmp/memix-store expose
+./build/bin/Release/memix store --version
+./build/bin/Release/memix store --help
 ```
 
 Build a reproducible `file_tree` view and attach it to the current directory
@@ -277,22 +299,22 @@ read memory with ordinary file tools, roll back with `rollback`, and inspect
 the attachment with `status`:
 
 ```bash
-QUEST=$(./build/bin/Release/memix-view --store-root /tmp/memix-store define --source rules/README.md --intent "repository documentation" --name "README context" | head -n1 | awk '{print $2}')
-./build/bin/Release/memix-view --store-root /tmp/memix-store quests
-./build/bin/Release/memix-view --store-root /tmp/memix-store find repository --covers rules/README.md
-ENV=$(./build/bin/Release/memix-view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
-./build/bin/Release/memix-view --store-root /tmp/memix-store freshness "$QUEST"
-./build/bin/Release/memix-view --store-root /tmp/memix-store stats "$QUEST" --json
-./build/bin/Release/memix-view --store-root /tmp/memix-store list --json
-./build/bin/Release/memix-view --store-root /tmp/memix-store tree "$ENV" --depth 2
-./build/bin/Release/memix-view --store-root /tmp/memix-store cat "$ENV" rules/README.md
-./build/bin/Release/memix-view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md --intent "README with prior context" --name "composed README"
-./build/bin/Release/memix-view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
+QUEST=$(./build/bin/Release/memix view --store-root /tmp/memix-store define --source rules/README.md --intent "repository documentation" --name "README context" | head -n1 | awk '{print $2}')
+./build/bin/Release/memix view --store-root /tmp/memix-store quests
+./build/bin/Release/memix view --store-root /tmp/memix-store find repository --covers rules/README.md
+ENV=$(./build/bin/Release/memix view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
+./build/bin/Release/memix view --store-root /tmp/memix-store freshness "$QUEST"
+./build/bin/Release/memix view --store-root /tmp/memix-store stats "$QUEST" --json
+./build/bin/Release/memix view --store-root /tmp/memix-store list --json
+./build/bin/Release/memix view --store-root /tmp/memix-store tree "$ENV" --depth 2
+./build/bin/Release/memix view --store-root /tmp/memix-store cat "$ENV" rules/README.md
+./build/bin/Release/memix view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md --intent "README with prior context" --name "composed README"
+./build/bin/Release/memix view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
 cat ./.memory/README.md
 cat ./.memory/rules/README.md
-./build/bin/Release/memix-view --store-root /tmp/memix-store generations --into ./.memory
-./build/bin/Release/memix-view --store-root /tmp/memix-store status --into ./.memory
-./build/bin/Release/memix-view --store-root /tmp/memix-store deactivate --into ./.memory
+./build/bin/Release/memix view --store-root /tmp/memix-store generations --into ./.memory
+./build/bin/Release/memix view --store-root /tmp/memix-store status --into ./.memory
+./build/bin/Release/memix view --store-root /tmp/memix-store deactivate --into ./.memory
 ```
 
 Every `build` persists its canonical query as a quest and records the resulting
@@ -334,7 +356,7 @@ ref is reported with `pinned: false`, `current_generation: null`, and
 matching locators in `resolved_inputs`; any context locator absent there is
 conservatively reported `fresh: false` rather than silently skipped.
 
-Successful `memix-view cat` and `tree` calls, including `tree --json`, and
+Successful `memix view cat` and `tree` calls, including `tree --json`, and
 every successful `activate` append best-effort consumption receipts to the
 quest's `receipts.jsonl`. Activation is recorded even for a no-op
 re-activation, and rollback records the environment it recommits. Once
@@ -349,12 +371,12 @@ This remains evidence for future admission policy, not a promotion or eviction
 policy itself. `show` is provenance debugging and does not count as
 consumption.
 
-`memix-store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
+`memix store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
 then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,
 and `documents`. Stored bytes live as immutable SHA-256 blobs under each
 type's `blobs/` directory; when ingest uses `--dest`, memix also records the
 blob in that type's canonical context tree and advances the type's latest
-generation ref. `memix-store rm --type <type> <path>` retracts a logical file
+generation ref. `memix store rm --type <type> <path>` retracts a logical file
 or directory subtree by committing a new generation whose tree no longer
 contains the path. Removal is logical and history-preserving: blobs and prior
 generations remain immutable and readable, so pinned generation locators keep
@@ -376,7 +398,7 @@ An ingest with `--dest` refreshes the affected type after committing its new
 generation, and `rm` refreshes it the same way after a removal. Blob-only
 ingests have no logical path and do not appear. The
 projection contains no source-of-truth state and can be deleted or repaired
-with `memix-store --store-root /tmp/memix-store expose`; a refresh failure
+with `memix store --store-root /tmp/memix-store expose`; a refresh failure
 warns without rolling back the committed ingest. Searching this surface is
 untracked exploration. Turn useful paths into quests with `find --covers`,
 `define`, or `build` so selection and subsequent consumption remain tracked.
@@ -385,9 +407,9 @@ untracked exploration. Turn useful paths into quests with `find --covers`,
 <summary><b>🔍 Manual smoke check</b> (against the real default store root)</summary>
 
 ```bash
-./build/bin/Release/memix-store ingest --type rules --dest README.md README.md
-./build/bin/Release/memix-store rules tree
-./build/bin/Release/memix-store list --type rules
+./build/bin/Release/memix store ingest --type rules --dest README.md README.md
+./build/bin/Release/memix store rules tree
+./build/bin/Release/memix store list --type rules
 ```
 
 All object types can ingest plain blobs. Passing `--dest` stores the blob at a
