@@ -270,14 +270,14 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
                   const std::vector<std::string> &arguments) {
   const fs::path output_path = directory / "cli-stdout.txt";
   const fs::path error_path = directory / "cli-stderr.txt";
-  std::string_view binary = MEMIX_VIEW_TEST_BINARY;
+  std::string_view binary = MEMIX_TEST_BINARY;
   if (const char *override_binary =
-          std::getenv("MEMIX_VIEW_TEST_BINARY_OVERRIDE");
+          std::getenv("MEMIX_TEST_BINARY_OVERRIDE");
       override_binary != nullptr && override_binary[0] != '\0') {
     binary = override_binary;
   }
   std::string command = shell_quote(binary);
-  command += " --store-root ";
+  command += " view --store-root ";
   command += shell_quote(store_root.string());
   for (const std::string &argument : arguments) {
     command.push_back(' ');

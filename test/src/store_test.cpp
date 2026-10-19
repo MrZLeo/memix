@@ -217,14 +217,14 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
                   const std::vector<std::string> &arguments) {
   const fs::path output_path = directory / "store-cli-stdout.txt";
   const fs::path error_path = directory / "store-cli-stderr.txt";
-  std::string_view binary = MEMIX_STORE_TEST_BINARY;
+  std::string_view binary = MEMIX_TEST_BINARY;
   if (const char *override_binary =
-          std::getenv("MEMIX_STORE_TEST_BINARY_OVERRIDE");
+          std::getenv("MEMIX_TEST_BINARY_OVERRIDE");
       override_binary != nullptr && override_binary[0] != '\0') {
     binary = override_binary;
   }
   std::string command = shell_quote(binary);
-  command += " --store-root ";
+  command += " store --store-root ";
   command += shell_quote(store_root.string());
   for (const std::string &argument : arguments) {
     command.push_back(' ');
@@ -1509,7 +1509,7 @@ TEST_CASE("expose rebuilds every type and is idempotent",
           == fs::perms::none);
 }
 
-TEST_CASE("memix-store expose reports plain and JSON counts",
+TEST_CASE("memix store expose reports plain and JSON counts",
           "[store][expose][cli]") {
   TemporaryDirectory directory("expose-cli");
   const fs::path rule = directory.path() / "AGENTS.md";
@@ -1581,7 +1581,7 @@ TEST_CASE("projection refresh failures warn without failing ingest",
   });
   REQUIRE(second);
   REQUIRE(second->projection_warning.has_value());
-  REQUIRE(second->projection_warning->contains("memix-store expose"));
+  REQUIRE(second->projection_warning->contains("memix store expose"));
   const auto latest_after_warning = store.read_ref("rules/latest");
   REQUIRE(latest_after_warning);
   REQUIRE(latest_after_warning->has_value());
@@ -1602,7 +1602,7 @@ TEST_CASE("projection refresh failures warn without failing ingest",
   INFO(cli.error);
   REQUIRE(cli.status == 0);
   REQUIRE(cli.error.contains("[warning]"));
-  REQUIRE(cli.error.contains("memix-store expose"));
+  REQUIRE(cli.error.contains("memix store expose"));
   const auto files_after_cli = store.list_files(memix::MemoryObjectType::Rules);
   REQUIRE(files_after_cli);
   REQUIRE(files_after_cli->size() == 3);

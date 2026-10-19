@@ -27,12 +27,8 @@ endif()
 foreach(file IN LISTS test_sources)
   get_filename_component(test_name "${file}" NAME_WE)
   set(test_cli)
-  if(test_name STREQUAL "quest_test")
-    set(test_cli memix_memix-view)
-    set(test_binary_define MEMIX_VIEW_TEST_BINARY)
-  elseif(test_name STREQUAL "store_test")
-    set(test_cli memix_memix-store)
-    set(test_binary_define MEMIX_STORE_TEST_BINARY)
+  if(test_name STREQUAL "quest_test" OR test_name STREQUAL "store_test" OR test_name STREQUAL "cli_test")
+    set(test_cli memix_memix)
   endif()
   if(test_cli AND NOT TARGET "${test_cli}")
     message(STATUS "Skipping ${test_name}: requires CLI target ${test_cli}.")
@@ -52,8 +48,16 @@ foreach(file IN LISTS test_sources)
   if(test_cli)
     add_dependencies(${test_name}_Tests ${test_cli})
     target_compile_definitions(${test_name}_Tests PRIVATE
-      ${test_binary_define}="$<TARGET_FILE:${test_cli}>"
+      MEMIX_TEST_BINARY="$<TARGET_FILE:${test_cli}>"
     )
+    if(test_name STREQUAL "cli_test")
+      add_dependencies(${test_name}_Tests memix_memix-store memix_memix-view memix_memix-tui)
+      target_compile_definitions(${test_name}_Tests PRIVATE
+        MEMIX_STORE_TEST_BINARY="$<TARGET_FILE:memix_memix-store>"
+        MEMIX_VIEW_TEST_BINARY="$<TARGET_FILE:memix_memix-view>"
+        MEMIX_TUI_TEST_BINARY="$<TARGET_FILE:memix_memix-tui>"
+      )
+    endif()
   endif()
   catch_discover_tests(${test_name}_Tests)
 endforeach()

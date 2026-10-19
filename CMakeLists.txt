@@ -69,6 +69,7 @@ target_include_directories(memix_simdjson_headers SYSTEM INTERFACE "${simdjson_S
 target_link_libraries(memix PRIVATE "$<BUILD_INTERFACE:memix_simdjson_headers>")
 
 set(bin_targets)
+set(cli_targets)
 if(memix_BUILD_EXECUTABLE)
   CPMAddPackage(
     NAME FTXUI
@@ -104,6 +105,17 @@ if(memix_BUILD_EXECUTABLE)
       "SPDLOG_INSTALL OFF"
   )
 
+  # Both the unified command and the compatibility entrypoints call these
+  # modules in-process. Static archive extraction keeps unused CLIs out of
+  # the legacy binaries, while compiling each implementation only once.
+  add_library(memix_cli STATIC ${cli_sources} ${cli_headers})
+  target_include_directories(memix_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_compile_definitions(memix_cli PRIVATE ARGUM_USE_EXPECTED=1 SPDLOG_NO_EXCEPTIONS=1)
+  target_link_libraries(memix_cli PRIVATE
+    memix::memix memix_simdjson_headers argum::argum spdlog::spdlog ftxui::component
+  )
+  list(APPEND cli_targets memix_cli)
+
   foreach(bin_source IN LISTS bin_sources)
     get_filename_component(bin_name "${bin_source}" NAME_WE)
     set(bin_target memix_${bin_name})
@@ -121,11 +133,7 @@ if(memix_BUILD_EXECUTABLE)
       endif()
     endif()
     target_include_directories(${bin_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_definitions(${bin_target} PRIVATE ARGUM_USE_EXPECTED=1 SPDLOG_NO_EXCEPTIONS=1)
-    target_link_libraries(${bin_target} PRIVATE memix::memix memix_simdjson_headers argum::argum spdlog::spdlog)
-    if(bin_name STREQUAL "memix-tui")
-      target_link_libraries(${bin_target} PRIVATE ftxui::component)
-    endif()
+    target_link_libraries(${bin_target} PRIVATE memix_cli)
     if(memix_STATIC_LINK AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR MINGW))
       target_link_options(${bin_target} PRIVATE -static)
       set_target_properties(${bin_target} PROPERTIES
@@ -138,7 +146,7 @@ if(memix_BUILD_EXECUTABLE)
 endif()
 
 # Exceptions stay enabled in Catch2/tests and the Objective-C++ bridge.
-foreach(target IN ITEMS memix ${bin_targets})
+foreach(target IN ITEMS memix ${cli_targets} ${bin_targets})
   set_project_warnings(${target})
   if(MSVC)
     target_compile_options(${target} PRIVATE /EHs-c-)
@@ -147,7 +155,7 @@ foreach(target IN ITEMS memix ${bin_targets})
     target_compile_options(${target} PRIVATE -fno-exceptions)
   endif()
 endforeach()
-memix_enable_static_analysis(memix ${bin_targets})
+memix_enable_static_analysis(memix ${cli_targets} ${bin_targets})
 
 if(memix_ENABLE_CODE_COVERAGE)
   target_compile_options(memix PRIVATE -O0 -g --coverage)

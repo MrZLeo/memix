@@ -150,9 +150,9 @@ inline void add_common_options(Argum::Parser &parser, CommonOptions &options) {
                  }));
 }
 
-inline VoidResult
-parse_arguments(const Argum::Parser &parser, int argc, char **argv) {
-  const Argum::Expected<void> result = parser.parse(argc, argv);
+inline VoidResult parse_arguments(const Argum::Parser &parser,
+                                  const std::vector<std::string> &arguments) {
+  const Argum::Expected<void> result = parser.parse(arguments);
   if (const auto error = result.error()) {
     return unexpected_error(error->message());
   }

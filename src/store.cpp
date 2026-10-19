@@ -2700,7 +2700,7 @@ Store::ingest_file(const FileIngestRequest &request) const {
       root_, request.type, parent_root_tree, *root_tree);
   if (!projection_refreshed) {
     projection_warning = std::format(
-        "failed to refresh latest/{} projection: {}; run `memix-store expose` "
+        "failed to refresh latest/{} projection: {}; run `memix store expose` "
         "to rebuild it",
         memix::to_string(request.type),
         projection_refreshed.error().message);
@@ -2806,7 +2806,7 @@ Store::remove_file(const FileRemoveRequest &request) const {
                                   *root_tree);
   if (!projection_refreshed) {
     projection_warning = std::format(
-        "failed to refresh latest/{} projection: {}; run `memix-store expose` "
+        "failed to refresh latest/{} projection: {}; run `memix store expose` "
         "to rebuild it",
         memix::to_string(request.type),
         projection_refreshed.error().message);

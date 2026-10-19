@@ -77,7 +77,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        for binary in build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
+        for binary in build/bin/Release/memix build/bin/Release/memix-store build/bin/Release/memix-view build/bin/Release/memix-tui; do
           build_info="$(xcrun vtool -show-build "$binary")"
           printf '%s\n' "$build_info"
           if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
@@ -94,6 +94,7 @@ jobs:
       shell: bash
       run: |
         mkdir compatibility
+        cp build/bin/Release/memix compatibility/
         cp build/bin/Release/memix-store compatibility/
         cp build/bin/Release/memix-view compatibility/
         cp build/bin/Release/memix-tui compatibility/
@@ -145,8 +146,10 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        export MEMIX_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix"
         export MEMIX_STORE_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix-store"
         export MEMIX_VIEW_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix-view"
+        export MEMIX_TUI_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix-tui"
         for test_binary in compatibility/*_Tests; do
           "$test_binary"
         done
@@ -155,13 +158,16 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        memix="compatibility/memix"
         store="compatibility/memix-store"
         view="compatibility/memix-view"
         inspect="compatibility/memix-tui"
 
+        memix_version="$("$memix" --version)"
         store_version="$("$store" --version)"
         view_version="$("$view" --version)"
         inspect_version="$("$inspect" --version)"
+        test "$store_version" = "$memix_version"
         test "$store_version" = "$view_version"
         test "$store_version" = "$inspect_version"
         case "$store_version" in
@@ -172,14 +178,19 @@ jobs:
             ;;
         esac
 
+        grep -Fq 'Usage: memix' <<<"$("$memix" --help)"
+        for command in store view tui; do
+          grep -Fq "Usage: memix $command" <<<"$("$memix" "$command" --help)"
+          test "$("$memix" "$command" --version)" = "$memix_version"
+        done
         grep -Fq 'Usage: memix-store' <<<"$("$store" --help)"
         grep -Fq 'Usage: memix-view' <<<"$("$view" --help)"
         grep -Fq 'Usage: memix-tui' <<<"$("$inspect" --help)"
 
         smoke_root="$(mktemp -d "$RUNNER_TEMP/memix-readonly-smoke.XXXXXX")"
         rmdir "$smoke_root"
-        test "$("$store" --store-root "$smoke_root/store" list --json)" = '[]'
-        test "$("$view" --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
+        test "$("$memix" store --store-root "$smoke_root/store" list --json)" = '[]'
+        test "$("$memix" view --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
         test ! -e "$smoke_root"
 
   inspector:

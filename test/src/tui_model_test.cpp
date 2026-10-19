@@ -1,4 +1,4 @@
-#include "bin/tui_model.hpp"
+#include "cli/tui_model.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 

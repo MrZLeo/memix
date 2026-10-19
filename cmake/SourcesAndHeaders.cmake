@@ -18,9 +18,16 @@ set(private_headers
 file(GLOB bin_sources CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bin/*.cpp
 )
-set(bin_headers
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bin/cli_common.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bin/tui_model.hpp
+set(cli_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/tui.cpp
+)
+set(cli_headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/commands.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/cli_common.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/tui_model.hpp
 )
 
 set(headers
@@ -31,6 +38,7 @@ set(headers
 )
 
 set(test_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/src/cli_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/activation_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/hash_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/json_test.cpp

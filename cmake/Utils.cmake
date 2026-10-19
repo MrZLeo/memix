@@ -5,7 +5,7 @@ function(add_clang_format_target)
   if(memix_CLANG_FORMAT_BINARY)
     add_custom_target(clang-format
       COMMAND "${memix_CLANG_FORMAT_BINARY}" -i
-        ${sources} ${headers} ${private_headers} ${bin_sources} ${bin_headers} ${test_sources}
+        ${sources} ${headers} ${private_headers} ${bin_sources} ${cli_sources} ${cli_headers} ${test_sources}
       WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
       COMMAND_EXPAND_LISTS
       VERBATIM
