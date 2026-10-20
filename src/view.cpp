@@ -2179,20 +2179,79 @@ ViewVoid validate_file_paths(const std::vector<memix::ResolvedViewFile> &files,
   return {};
 }
 
+ViewVoid validate_raw_output_file(simdjson::dom::element value,
+                                  const memix::ResolvedViewFile &file) {
+  auto object = memix::detail::json_object_from_element(value);
+  if (!object)
+    return view_error(object.error(), memix::ErrorKind::InvalidData);
+  const JsonObjectReader fields(*object);
+  auto valid = check_fields(fields, {
+                                        "path",
+                                        "role",
+                                        "media_type",
+                                        "size_bytes",
+                                        "content_hash",
+                                        "source",
+                                    });
+  if (!valid)
+    return std::unexpected(valid.error());
+  auto path = fields.require_string("path");
+  auto role = fields.require_string("role");
+  auto media_type = fields.require_string("media_type");
+  auto size = fields.require_uint64("size_bytes");
+  auto hash = fields.require_string("content_hash");
+  auto source = fields.require_object("source");
+  if (!path
+      || !role
+      || !media_type
+      || !size
+      || !hash
+      || !source
+      || *path != file.output_path.generic_string()
+      || *role != "source"
+      || *media_type != "application/octet-stream"
+      || *size != file.blob.size_bytes
+      || *hash != file.blob.hash) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      "output manifest differs from resolved selection");
+  }
+  const JsonObjectReader source_fields(*source);
+  valid = check_fields(source_fields, {"kind", "type", "blob"});
+  if (!valid)
+    return std::unexpected(valid.error());
+  auto kind = source_fields.require_string("kind");
+  auto type = source_fields.require_string("type");
+  auto blob = source_fields.require_string("blob");
+  if (!kind
+      || !type
+      || !blob
+      || *kind != "raw_blob"
+      || *type != memix::to_string(file.type)
+      || *blob != file.blob.id) {
+    return view_error(memix::ErrorKind::InvalidData,
+                      "output source differs from resolved selection");
+  }
+  return {};
+}
+
 ViewVoid
 validate_raw_output_fields(const JsonObjectReader &fields,
                            const std::vector<memix::ResolvedViewFile> &files) {
-  simdjson::builder::string_builder file_builder;
-  append_output_files(file_builder, files);
-  auto expected_files = json_from_builder(file_builder);
-  auto stored_files = fields.require_field("files");
-  if (!expected_files)
-    return std::unexpected(expected_files.error());
+  auto stored_files = fields.require_array("files");
   if (!stored_files)
-    return view_error(stored_files.error());
-  if (simdjson::to_string(*stored_files) != *expected_files) {
+    return view_error(stored_files.error(), memix::ErrorKind::InvalidData);
+  if (stored_files->size() != files.size()) {
     return view_error(memix::ErrorKind::InvalidData,
                       "output manifest differs from resolved selection");
+  }
+  // Validate the schema directly instead of serializing untrusted DOM values.
+  // Array order is significant; object member order is not identity material.
+  auto expected = files.begin();
+  for (const auto value : *stored_files) {
+    auto valid = validate_raw_output_file(value, *expected);
+    if (!valid)
+      return std::unexpected(valid.error());
+    ++expected;
   }
   return {};
 }

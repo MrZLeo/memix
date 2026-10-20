@@ -17,6 +17,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace fs = memix::fs;
@@ -876,6 +877,140 @@ TEST_CASE("view delivery verifies payloads instead of trusting cached trees",
   CHECK(views.quest_stats(d->ir_hash)->read_count == 1);
   CHECK(views.quest_stats(e->ir_hash)->read_count == 1);
   CHECK(views.quest_stats(d->ir_hash)->resolution_count == 1);
+}
+
+TEST_CASE("raw output manifests validate typed descriptions without changing "
+          "identity",
+          "[view][d2]") {
+  TemporaryDirectory directory("raw-output-validation");
+  const auto source = directory.path() / "input";
+  const memix::Store store(directory.path() / "store");
+  const memix::ViewService views(store);
+  write_file(source, "payload\n");
+  const auto ingested = ingest_context_file(
+      store, memix::MemoryObjectType::Rules, source, "a.md", "rules");
+  const auto d = views.select(*views.expression_from_sources({"rules/a.md"}));
+  REQUIRE(d);
+  const auto e = views.compose(
+      {{.mount = {}, .derivation_id = d->id, .output_role = "file_tree"}});
+  REQUIRE(e);
+  const auto manifest = read_file(d->manifest_path);
+  constexpr std::string_view files_key = "\"files\":";
+  const auto key_at = manifest.find(files_key);
+  REQUIRE(key_at != std::string::npos);
+  const auto begin = key_at + files_key.size();
+  const auto end = manifest.find(",\"outputs\":", begin);
+  REQUIRE(end != std::string::npos);
+  const auto files_json = manifest.substr(begin, end - begin);
+  REQUIRE(fs::permissions(d->manifest_path, fs::perms::owner_all));
+
+  const auto replace_files = [&](std::string_view replacement) {
+    auto changed = manifest;
+    changed.replace(begin, end - begin, replacement);
+    write_file(d->manifest_path, changed);
+    return changed;
+  };
+  const auto reject_files = [&](std::string_view replacement) {
+    const auto changed = replace_files(replacement);
+    const auto rejected = views.resolve_derivation(d->id);
+    REQUIRE_FALSE(rejected);
+    CHECK(rejected.error().kind == memix::ErrorKind::InvalidData);
+    CHECK_FALSE(views.resolve_environment(e->id));
+    CHECK(read_file(d->manifest_path) == changed);
+  };
+
+  SECTION("files must be an array of objects with the expected count") {
+    for (const std::string_view value : {
+             "null",
+             "false",
+             "42",
+             "\"not an array\"",
+             "{}",
+             "[]",
+             "[null]",
+             "[false]",
+             "[42]",
+             "[\"not an object\"]",
+             "[[]]",
+             "[{}]",
+         }) {
+      DYNAMIC_SECTION("files: " << value) { reject_files(value); }
+    }
+    const auto entry = files_json.substr(1, files_json.size() - 2);
+    reject_files("[" + entry + "," + entry + "]");
+  }
+
+  SECTION("every output and raw source field is checked") {
+    using Change = std::pair<std::string_view, std::string_view>;
+    const std::array changes{
+        Change{R"("path":"rules/a.md")", R"("path":"rules/b.md")"},
+        Change{R"("path":"rules/a.md")", R"("path":null)"},
+        Change{R"("role":"source")", R"("role":"derived")"},
+        Change{R"("media_type":"application/octet-stream")",
+               R"("media_type":"text/plain")"},
+        Change{R"("size_bytes":8)", R"("size_bytes":9)"},
+        Change{R"("size_bytes":8)", R"("size_bytes":-1)"},
+        Change{R"("size_bytes":8)", R"("size_bytes":8.0)"},
+        Change{R"("size_bytes":8)", R"("size_bytes":"8")"},
+        Change{R"("size_bytes":8)", R"("size_bytes":18446744073709551615)"},
+        Change{R"("content_hash":")", R"("content_hash":"bad)"},
+        Change{R"("kind":"raw_blob")", R"("kind":"local")"},
+        Change{R"("type":"rules")", R"("type":"documents")"},
+        Change{R"("blob":")", R"("blob":"bad)"},
+        Change{R"("role":"source",)", ""},
+        Change{R"("kind":"raw_blob",)", ""},
+        Change{R"("role":"source")", R"("role":"source","role":"source")"},
+        Change{R"("kind":"raw_blob")",
+               R"("kind":"raw_blob","kind":"raw_blob")"},
+        Change{R"("role":"source")", R"("role":"source","extra":true)"},
+        Change{R"("kind":"raw_blob")", R"("kind":"raw_blob","extra":true)"},
+    };
+    for (const auto &[before, after] : changes) {
+      DYNAMIC_SECTION(before << " -> " << after) {
+        auto changed = files_json;
+        const auto at = changed.find(before);
+        REQUIRE(at != std::string::npos);
+        changed.replace(at, before.size(), after);
+        reject_files(changed);
+      }
+    }
+  }
+
+  SECTION("source must be an object rather than an arbitrary JSON value") {
+    const auto at = files_json.find("\"source\":");
+    REQUIRE(at != std::string::npos);
+    for (const std::string_view value : {"null", "[]", "\"raw_blob\""}) {
+      DYNAMIC_SECTION("source: " << value) {
+        reject_files(files_json.substr(0, at)
+                     + "\"source\":"
+                     + std::string(value)
+                     + "}]");
+      }
+    }
+  }
+
+  SECTION("member order and equivalent JSON escapes do not change identity") {
+    const auto &blob = ingested.blob.object;
+    const auto reordered = std::format(
+        R"([{{"source":{{"blob":"{}","type":"rules","kind":"raw_blob"}},)"
+        R"("content_hash":"{}","size_bytes":{},)"
+        R"("media_type":"application/octet-stream","role":"source",)"
+        R"("path":"rules\u002fa.md"}}])",
+        blob.id, blob.hash, blob.size_bytes);
+    const auto changed = replace_files(reordered);
+    const auto loaded = views.resolve_derivation(d->id);
+    REQUIRE(loaded);
+    CHECK(loaded->id == d->id);
+    CHECK(loaded->ir_hash == d->ir_hash);
+    const auto composed = views.resolve_environment(e->id);
+    REQUIRE(composed);
+    CHECK(composed->id == e->id);
+    const auto contents = views.read_output(
+        {.kind = memix::ViewObjectKind::Derivation, .id = d->id}, "rules/a.md");
+    REQUIRE(contents);
+    CHECK(contents->contents == "payload\n");
+    CHECK(read_file(d->manifest_path) == changed);
+  }
 }
 
 TEST_CASE(
