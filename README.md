@@ -32,8 +32,8 @@ Treat memory as immutable evidence plus reproducible views, not as a mutable not
 
 * 📌 **Immutable blobs** — Stored blobs are immutable and content-addressed. Changed content becomes a new object instead of overwriting history.
 * 🌳 **Versioned trees** — Logical trees, generations, and refs describe how memory evolves while allowing old states to coexist and remain replayable.
-* 🔁 **Composable views** — Views are first-class derived artifacts, not new sources of truth. They can reference and mount existing view environments while preserving transitive provenance.
-* 🧾 **Provenance built-in** — A view retains its source generations, blob identities, derivation, artifacts, and environment closure.
+* 🔁 **Composable views** — Select independently readable Derivations, then mount one or more directly in an Environment. Composition does not create a synthetic Derivation.
+* 🧾 **Provenance built-in** — Derivations freeze source generations, blob identities, recipes and guidance. Environments retain explicit bindings and a verified closure.
 * 🎯 **Explicit selection** — Memix does not invent hidden dependencies or silently activate additional memory.
 * 🔗 **Profile-style activation** — Built views attach to a workspace through numbered profile generations and one switchable `current` pointer, the only mutable layer in the system.
 * 📂 **Honest packaging** — A `file_tree` view packages selected files at stable paths; it does not merge Markdown, resolve directive precedence, summarize content, or settle semantic conflicts.
@@ -267,7 +267,8 @@ Use the unified command for new workflows:
 ```bash
 memix --help
 memix store --help
-memix view build --help
+memix view select --help
+memix view compose --help
 memix tui --help
 memix --store-root /tmp/memix-store store list --json
 ```
@@ -277,8 +278,8 @@ within it. The old `memix-store`, `memix-view`, and `memix-tui` entrypoints
 have been removed: update scripts to `memix store`, `memix view`, and
 `memix tui`, respectively. Remove any old standalone binaries left by a
 previous installation. Activation, generations, and rollback remain under
-`memix view`; this change does not alter the store format or introduce a
-`profile` namespace.
+`memix view`; there is no separate `profile` namespace. Raw Store formats are
+unchanged, but the latest-only view-model update below breaks old view formats.
 
 ```bash
 ./build/bin/Release/memix store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
@@ -292,84 +293,86 @@ previous installation. Activation, generations, and rollback remain under
 ./build/bin/Release/memix store --help
 ```
 
-Build a reproducible `file_tree` view and attach it to the current directory
-as `./.memory`, Nix-profile style. Activation records a numbered generation
-in a per-workspace store profile and switches its `current` pointer;
-read memory with ordinary file tools, roll back with `rollback`, and inspect
-the attachment with `status`:
+Select an independently readable `file_tree` **Derivation**, then explicitly
+compose an **Environment** for delivery. Profiles activate Environments only.
+The example uses the source files ingested above:
 
 ```bash
-QUEST=$(./build/bin/Release/memix view --store-root /tmp/memix-store define --source rules/README.md --intent "repository documentation" --name "README context" | head -n1 | awk '{print $2}')
+QUEST=$(./build/bin/Release/memix view --store-root /tmp/memix-store define --kind selection --source rules/README.md --intent "repository documentation" --name "README context" | head -n1 | awk '{print $2}')
 ./build/bin/Release/memix view --store-root /tmp/memix-store quests
 ./build/bin/Release/memix view --store-root /tmp/memix-store find repository --covers rules/README.md
-ENV=$(./build/bin/Release/memix view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
-./build/bin/Release/memix view --store-root /tmp/memix-store freshness "$QUEST"
-./build/bin/Release/memix view --store-root /tmp/memix-store stats "$QUEST" --json
-./build/bin/Release/memix view --store-root /tmp/memix-store list --json
-./build/bin/Release/memix view --store-root /tmp/memix-store tree "$ENV" --depth 2
-./build/bin/Release/memix view --store-root /tmp/memix-store cat "$ENV" rules/README.md
-./build/bin/Release/memix view --store-root /tmp/memix-store build --view "$ENV=prior" --source documents/notes/README.md --intent "README with prior context" --name "composed README"
+D=$(./build/bin/Release/memix view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
+./build/bin/Release/memix view --store-root /tmp/memix-store list --kind derivation --json
+./build/bin/Release/memix view --store-root /tmp/memix-store ls "derivation:$D" rules
+./build/bin/Release/memix view --store-root /tmp/memix-store cat "derivation:$D" rules/README.md
+./build/bin/Release/memix view --store-root /tmp/memix-store show "derivation:$D" --json
+DOC_D=$(./build/bin/Release/memix view --store-root /tmp/memix-store select --source documents/notes/README.md --intent "Reference documentation" | head -n1 | awk '{print $2}')
+ENV=$(./build/bin/Release/memix view --store-root /tmp/memix-store compose --mount "$D=prior" --mount "$DOC_D" --intent "Documentation workspace" | head -n1 | awk '{print $2}')
+./build/bin/Release/memix view --store-root /tmp/memix-store tree "environment:$ENV" --depth 2
+./build/bin/Release/memix view --store-root /tmp/memix-store cat "$ENV" prior/rules/README.md
 ./build/bin/Release/memix view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
 cat ./.memory/README.md
-cat ./.memory/rules/README.md
+cat ./.memory/prior/rules/README.md
+./build/bin/Release/memix view --store-root /tmp/memix-store freshness "$QUEST" --json
+./build/bin/Release/memix view --store-root /tmp/memix-store stats "$QUEST" --json
 ./build/bin/Release/memix view --store-root /tmp/memix-store generations --into ./.memory
 ./build/bin/Release/memix view --store-root /tmp/memix-store status --into ./.memory
 ./build/bin/Release/memix view --store-root /tmp/memix-store deactivate --into ./.memory
 ```
 
-Every `build` persists its canonical query as a quest and records the resulting
-derivation/environment resolution. `define` creates or annotates that quest
-without building; `find` searches intent/name text or uses `--covers` for
-structural path lookup; `quests` lists the public quest catalog; `freshness`
-compares the latest resolution with the refs it followed; and `resolve`
-re-runs a quest against current refs. `build --intent TEXT --name TEXT`
-upserts the same annotations while building. The older `list` command remains
-available for low-level environment debugging.
+`select` publishes D without an E. `compose --mount DERIVATION[=MOUNT]`
+publishes E without another D; repeat `--mount` for multiple bindings.
+Bindings are canonicalized, directory merging is allowed, and duplicate
+bindings, file collisions (even identical bytes) and file/directory conflicts
+are rejected. Root mount is omitted or written as `.`.
 
-`activate` includes a read-only `README.md` at the attachment root in both
-link and copy modes. It records the activated environment and derivation IDs,
-plus the corresponding quest's ID and frozen name and intent. The complete
-query definition is omitted from the README; it remains in the store with its
-existing version bindings.
-The runtime quest instructions are frozen in the derivation at build time and
-participate in its identity. Changing the quest's name, intent, or query and
-then rebuilding produces a new environment. Updating the quest catalog alone
-does not change an existing environment: repeated activation, activation in
-another workspace, and rollback reproduce the same README from its build
-snapshot, even if the quest has since been deleted.
+Each operation has its own Quest. `define --kind selection --source …` or
+`define --kind composition --mount …` registers a recipe without resolving
+it; the default kind is selection. `select`, `compose` and `resolve --json`
+return `quest`, `result: {kind, id}`, and `inserted`. Discovery JSON includes
+`result_kind` and `latest_result` (null before resolution).
+`find` searches intent/name text; `--covers` matches direct Store selectors,
+not transitive composition contents.
 
-Legacy derivations without an instruction snapshot use a fixed missing-snapshot
-notice instead of current quest annotations. Older generation links and cached
-READMEs are upgraded on activation or rollback. The original environment tree
-is unchanged. An environment with a root `README.md` entry cannot be activated
-because that path is reserved for the generated README.
+`cat`, `ls`, `tree` and `show` accept `derivation:ID` or
+`environment:ID`. A bare ID always names E, never a namespace guess.
+`ls VIEW [PATH]` lists immediate children; `tree` supports path/depth limits.
+`list` inventories E; `list --kind derivation` inventories D.
+`cat` returns verified bytes rather than reopening an unchecked tree link.
 
-The plain `quests` and `find` tables shorten long intent/name cells with `...`
-so columns stay separate; their `--json` forms always retain the complete
-strings. Freshness uses the derivation manifest's `input_resolutions`: one
-record per context input before file deduplication, including optional inputs
-that resolved no files. Composed `--view` inputs are omitted because their
-resolved environment IDs are content-pinned; therefore a quest containing only
-view inputs reports an empty input list and `stale: false`. A deleted followed
-ref is reported with `pinned: false`, `current_generation: null`, and
-`fresh: false`. Legacy manifests without `input_resolutions` fall back to
-matching locators in `resolved_inputs`; any context locator absent there is
-conservatively reported `fresh: false` rather than silently skipped.
+Activation produces a read-only root `README.md` containing the E identity,
+composition guidance, and all canonical bindings with their frozen D guidance.
+Updating or deleting Quest catalog entries does not change saved replay bytes.
+Rebuilding can freeze new guidance: changing composition annotations changes E,
+not its D inputs. Root `README.md` is reserved at the assembled E root.
+Link and Copy consume E's complete output set; Copy verifies its delivered bytes.
+Profile generation and marker v2 records reference E, not a single owning D.
 
-Successful `memix view cat` and `tree` calls, including `tree --json`, and
-every successful `activate` append best-effort consumption receipts to the
-quest's `receipts.jsonl`. Activation is recorded even for a no-op
-re-activation, and rollback records the environment it recommits. Once
-attached, ordinary reads through `./.memory` bypass the CLI; activation is the
-observable proxy for that otherwise invisible use and the strongest admission
-signal. Receipt bookkeeping never makes the primary operation fail, legacy
-environments without a quest are silently skipped, and `deactivate` records
-nothing. `stats` presents activation totals and per-profile counts before read
-totals, cat/tree counts, and per-environment reuse. `quests` and `find` show
-`READS` and `ACTS`; their JSON also includes read and activation recency.
-This remains evidence for future admission policy, not a promotion or eviction
-policy itself. `show` is provenance debugging and does not count as
-consumption.
+Selection freshness uses one `input_resolutions` record per context input,
+including optional empty selections and overlapping inputs. It remains a
+type-generation, on-demand check, not semantic relevance or proactive notification.
+Composition pins D IDs, so `stale: false` means no followed-ref drift.
+Refreshing a selection does not update an existing E: compose the new D
+explicitly, which changes the composition recipe/Quest.
+
+Successful `cat/ls/tree` operations record typed best-effort receipts for the
+selected D or E's own Quest. E activation and rollback belong only to the
+composition Quest, with no per-binding fan-out; reactivation is still an event.
+`show`, Inspector previews and deactivation do not record consumption.
+`stats` separates D/E reads and counts `ls` independently. Receipt failure
+does not fail a successful primary operation; missing catalog entries do not
+prevent replay. Statistics are observed usage, not proof of comprehension.
+Malformed logs are reported by `stats`; history appends reject corrupt or
+unterminated records rather than silently repairing them.
+
+**Breaking format boundary:** the old `build` / `--view` workflow, D v1–v3,
+E v1–v2, and old Quest/Profile records are unsupported. There are no adapters,
+receipt sidecars, or automatic Store migrations. Use the latest model in a
+deliberately chosen Store; never delete existing data to make an example work.
+Raw selection is implemented; external `derive`, generated/local payloads,
+semantic priority rules and proactive invalidation are not.
+See [VIEW_OBJECT_MODEL.md](VIEW_OBJECT_MODEL.md) for the current contract and
+[DERIVED_ARTIFACTS.md](DERIVED_ARTIFACTS.md) for the separate generated-output proposal.
 
 `memix store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
 then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,

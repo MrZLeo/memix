@@ -40,7 +40,9 @@ enum class ViewCommand : std::uint8_t {
   List,
   Tree,
   Cat,
-  Build,
+  Select,
+  Compose,
+  Ls,
   Define,
   Find,
   Resolve,
@@ -58,18 +60,20 @@ enum class ViewCommand : std::uint8_t {
 struct ViewCliOptions {
   std::optional<std::size_t> tree_depth;
   std::vector<std::string> sources;
-  std::vector<std::string> view_sources;
+  std::vector<std::string> mounts;
   std::vector<std::string> find_terms;
   std::optional<fs::path> covers;
   std::string intent;
   std::string name;
   std::string quest_id;
-  std::string tree_environment_id;
+  std::string tree_reference;
   fs::path tree_path;
-  std::string cat_environment_id;
+  std::string cat_reference;
   fs::path cat_path;
   std::string target_name = "file_tree";
-  std::string show_view_environment_id;
+  std::string quest_kind = "selection";
+  std::string object_kind = "environment";
+  std::string show_reference;
   std::string activate_environment_id;
   std::string into_path = ".memory";
   std::string profile_name;
@@ -79,7 +83,7 @@ struct ViewCliOptions {
   ViewCommand command = ViewCommand::None;
   bool list_json = false;
   bool tree_json = false;
-  bool build_json = false;
+  bool materialization_json = false;
   bool define_json = false;
   bool find_json = false;
   bool resolve_json = false;
@@ -95,7 +99,7 @@ struct ViewCliOptions {
 
 struct ViewEnvironmentInfoJson {
   std::string id;
-  std::string derivation;
+  std::size_t binding_count = 0;
   std::size_t file_count = 0;
   std::uintmax_t size_bytes = 0;
   std::size_t upstream_environment_count = 0;
@@ -109,15 +113,20 @@ struct ViewCatalogEntryJson {
   std::string blob;
 };
 
+struct ViewReferenceJson {
+  std::string kind;
+  std::string id;
+};
+
 struct QuestInfoJson {
   std::string ir_hash;
+  std::string result_kind;
   std::string intent;
   std::string name;
   std::string created_at;
   std::size_t resolution_count = 0;
   std::string last_resolved_at;
-  std::string latest_derivation_id;
-  std::string latest_environment_id;
+  std::optional<ViewReferenceJson> latest_result;
   std::size_t read_count = 0;
   std::string last_read_at;
   std::size_t activation_count = 0;
@@ -126,6 +135,7 @@ struct QuestInfoJson {
 
 struct QuestDefinitionJson {
   std::string ir_hash;
+  std::string result_kind;
   std::string intent;
   std::string name;
   std::string created_at;
@@ -142,7 +152,7 @@ struct QuestFreshnessInputJson {
 
 struct QuestFreshnessJson {
   std::string ir_hash;
-  std::string derivation_id;
+  ViewReferenceJson result;
   std::string resolved_at;
   std::vector<QuestFreshnessInputJson> inputs;
   bool stale = false;
@@ -150,6 +160,11 @@ struct QuestFreshnessJson {
 
 struct QuestEnvironmentReadsJson {
   std::string environment_id;
+  std::size_t read_count = 0;
+};
+
+struct QuestDerivationReadsJson {
+  std::string derivation_id;
   std::size_t read_count = 0;
 };
 
@@ -172,7 +187,19 @@ struct QuestStatsJson {
   std::size_t cat_count = 0;
   std::size_t tree_count = 0;
   std::vector<QuestEnvironmentReadsJson> reads_by_environment;
+  std::vector<QuestDerivationReadsJson> reads_by_derivation;
+  std::size_t ls_count = 0;
 };
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const ViewReferenceJson &reference) {
+  builder.start_object();
+  builder.template append_key_value<"kind">(reference.kind);
+  builder.append_comma();
+  builder.template append_key_value<"id">(reference.id);
+  builder.end_object();
+}
 
 template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
@@ -180,7 +207,7 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.start_object();
   builder.template append_key_value<"id">(environment.id);
   builder.append_comma();
-  builder.template append_key_value<"derivation">(environment.derivation);
+  builder.template append_key_value<"binding_count">(environment.binding_count);
   builder.append_comma();
   builder.template append_key_value<"file_count">(environment.file_count);
   builder.append_comma();
@@ -211,6 +238,8 @@ template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
                 const QuestInfoJson &quest) {
   builder.start_object();
+  builder.template append_key_value<"result_kind">(quest.result_kind);
+  builder.append_comma();
   builder.template append_key_value<"ir_hash">(quest.ir_hash);
   builder.append_comma();
   builder.template append_key_value<"intent">(quest.intent);
@@ -223,18 +252,13 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.append_comma();
   builder.template append_key_value<"last_resolved_at">(quest.last_resolved_at);
   builder.append_comma();
-  builder.template append_key_value<"latest_derivation_id">(
-      quest.latest_derivation_id);
-  builder.append_comma();
-  builder.template append_key_value<"latest_environment_id">(
-      quest.latest_environment_id);
+  builder.template append_key_value<"latest_result">(quest.latest_result);
   builder.append_comma();
   builder.template append_key_value<"read_count">(quest.read_count);
   builder.append_comma();
   builder.template append_key_value<"last_read_at">(quest.last_read_at);
   builder.append_comma();
-  builder.template append_key_value<"activation_count">(
-      quest.activation_count);
+  builder.template append_key_value<"activation_count">(quest.activation_count);
   builder.append_comma();
   builder.template append_key_value<"last_activated_at">(
       quest.last_activated_at);
@@ -245,6 +269,8 @@ template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
                 const QuestDefinitionJson &quest) {
   builder.start_object();
+  builder.template append_key_value<"result_kind">(quest.result_kind);
+  builder.append_comma();
   builder.template append_key_value<"ir_hash">(quest.ir_hash);
   builder.append_comma();
   builder.template append_key_value<"intent">(quest.intent);
@@ -281,7 +307,7 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.start_object();
   builder.template append_key_value<"ir_hash">(freshness.ir_hash);
   builder.append_comma();
-  builder.template append_key_value<"derivation_id">(freshness.derivation_id);
+  builder.template append_key_value<"result">(freshness.result);
   builder.append_comma();
   builder.template append_key_value<"resolved_at">(freshness.resolved_at);
   builder.append_comma();
@@ -296,6 +322,16 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
                 const QuestEnvironmentReadsJson &reads) {
   builder.start_object();
   builder.template append_key_value<"environment_id">(reads.environment_id);
+  builder.append_comma();
+  builder.template append_key_value<"read_count">(reads.read_count);
+  builder.end_object();
+}
+
+template <typename Builder>
+void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
+                const QuestDerivationReadsJson &reads) {
+  builder.start_object();
+  builder.template append_key_value<"derivation_id">(reads.derivation_id);
   builder.append_comma();
   builder.template append_key_value<"read_count">(reads.read_count);
   builder.end_object();
@@ -322,8 +358,7 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.append_comma();
   builder.template append_key_value<"last_resolved_at">(stats.last_resolved_at);
   builder.append_comma();
-  builder.template append_key_value<"activation_count">(
-      stats.activation_count);
+  builder.template append_key_value<"activation_count">(stats.activation_count);
   builder.append_comma();
   builder.template append_key_value<"first_activated_at">(
       stats.first_activated_at);
@@ -346,6 +381,11 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.append_comma();
   builder.template append_key_value<"reads_by_environment">(
       stats.reads_by_environment);
+  builder.append_comma();
+  builder.template append_key_value<"reads_by_derivation">(
+      stats.reads_by_derivation);
+  builder.append_comma();
+  builder.template append_key_value<"ls_count">(stats.ls_count);
   builder.end_object();
 }
 
@@ -360,7 +400,7 @@ make_service(const ViewCliOptions &options) {
 }
 
 memix::cli_detail::Result<memix::ViewTargetKind>
-require_build_target(std::string_view target_name) {
+require_selection_target(std::string_view target_name) {
   const std::optional<memix::ViewTargetKind> target =
       memix::parse_view_target_kind(target_name);
   if (!target.has_value() || *target != memix::ViewTargetKind::FileTree) {
@@ -386,13 +426,19 @@ memix::cli_detail::VoidResult print_json(const Values &values) {
 QuestInfoJson quest_info_json_for(const memix::QuestInfo &info) {
   return QuestInfoJson{
       .ir_hash = info.ir_hash,
+      .result_kind = std::string(memix::to_string(info.result_kind)),
       .intent = info.intent,
       .name = info.name,
       .created_at = info.created_at,
       .resolution_count = info.resolution_count,
       .last_resolved_at = info.last_resolved_at,
-      .latest_derivation_id = info.latest_derivation_id,
-      .latest_environment_id = info.latest_environment_id,
+      .latest_result =
+          info.latest_result.transform([](const memix::ViewReference &result) {
+            return ViewReferenceJson{
+                .kind = std::string(memix::to_string(result.kind)),
+                .id = result.id,
+            };
+          }),
       .read_count = info.read_count,
       .last_read_at = info.last_read_at,
       .activation_count = info.activation_count,
@@ -404,47 +450,13 @@ memix::cli_detail::Result<memix::AuthoredViewExpression>
 expression_from_cli(const memix::ViewService &service,
                     const ViewCliOptions &options,
                     memix::ViewTargetKind target) {
-  memix::ViewResult<memix::AuthoredViewExpression> expression =
-      service.expression_from_sources(options.sources, target);
-  if (options.view_sources.empty()) {
-    if (!expression) {
-      return memix::cli_detail::unexpected_error(expression.error());
-    }
-    return std::move(*expression);
+  if (!options.mounts.empty()) {
+    return memix::cli_detail::unexpected_error(
+        "--mount requires a composition, not a selection");
   }
-  std::vector<memix::AuthoredViewInput> inputs;
-  inputs.reserve(options.sources.size() + options.view_sources.size());
-  for (const std::string &source : options.sources) {
-    inputs.push_back(memix::AuthoredViewInput{
-        .kind = memix::ViewInputKind::Context,
-        .locator = source,
-        .environment_id = {},
-        .output_role = "file_tree",
-        .mount = {},
-    });
-  }
-  for (const std::string &view_source : options.view_sources) {
-    const std::size_t separator = view_source.find('=');
-    const std::string environment = view_source.substr(0, separator);
-    if (environment.empty()) {
-      return memix::cli_detail::unexpected_error(
-          "--view expects ENVIRONMENT[=MOUNT]");
-    }
-    const fs::path mount = separator == std::string::npos
-                             ? fs::path{}
-                             : fs::path(view_source.substr(separator + 1));
-    inputs.push_back(memix::AuthoredViewInput{
-        .kind = memix::ViewInputKind::Environment,
-        .locator = {},
-        .environment_id = environment,
-        .output_role = "file_tree",
-        .mount = mount,
-    });
-  }
-  expression = service.expression_from_inputs(std::move(inputs), target);
-  if (!expression) {
+  auto expression = service.expression_from_sources(options.sources, target);
+  if (!expression)
     return memix::cli_detail::unexpected_error(expression.error());
-  }
   return std::move(*expression);
 }
 
@@ -471,7 +483,7 @@ void print_quest_table(const std::vector<memix::QuestInfo> &quests) {
   std::println(
       "{:<66}  {:<28}  {:<24}  {:>12}  {:>8}  {:>8}  {:<22}  {:<22}  {:<15}",
       "QUEST", "INTENT", "NAME", "RESOLUTIONS", "READS", "ACTS",
-      "LAST_RESOLVED", "LAST_READ", "ENVIRONMENT");
+      "LAST_RESOLVED", "LAST_READ", "RESULT");
   for (const memix::QuestInfo &quest : quests) {
     std::println(
         "{:<66}  {:<28}  {:<24}  {:>12}  {:>8}  {:>8}  {:<22}  {:<22}  {:<15}",
@@ -479,7 +491,14 @@ void print_quest_table(const std::vector<memix::QuestInfo> &quests) {
         truncate_table_cell(quest.name, name_width), quest.resolution_count,
         quest.read_count, quest.activation_count, quest.last_resolved_at,
         quest.last_read_at,
-        memix::cli_detail::short_id(quest.latest_environment_id));
+        !quest.latest_result
+            ? "-"
+            : std::format(
+                  "{}:{}",
+                  quest.latest_result->kind == memix::ViewObjectKind::Derivation
+                      ? "D"
+                      : "E",
+                  memix::cli_detail::short_id(quest.latest_result->id)));
   }
 }
 
@@ -496,12 +515,59 @@ print_quests(const std::vector<memix::QuestInfo> &quests, bool json) {
   return {};
 }
 
+memix::cli_detail::VoidResult
+list_derivations(const memix::ViewService &service, bool json) {
+  auto derivations = service.list_derivations();
+  if (!derivations)
+    return memix::cli_detail::unexpected_error(derivations.error());
+  if (!json)
+    std::println("{:<66}{:>8}{:>12}", "DERIVATION", "FILES", "SIZE_BYTES");
+  simdjson::builder::string_builder builder;
+  builder.start_array();
+  bool first = true;
+  for (const auto &derivation : *derivations) {
+    std::uintmax_t bytes = 0;
+    for (const auto &file : derivation.resolved_files)
+      bytes += file.blob.size_bytes;
+    if (!json)
+      std::println("{:<66}{:>8}{:>12}", derivation.id,
+                   derivation.resolved_files.size(), bytes);
+    if (!first)
+      builder.append_comma();
+    first = false;
+    builder.start_object();
+    builder.append_key_value<"id">(derivation.id);
+    builder.append_comma();
+    builder.append_key_value<"kind">("derivation");
+    builder.append_comma();
+    builder.append_key_value<"quest">(derivation.ir_hash);
+    builder.append_comma();
+    builder.append_key_value<"file_count">(derivation.resolved_files.size());
+    builder.append_comma();
+    builder.append_key_value<"size_bytes">(bytes);
+    builder.end_object();
+  }
+  builder.end_array();
+  if (json) {
+    auto text = memix::detail::json_from_builder(builder);
+    if (!text)
+      return memix::cli_detail::unexpected_error(text.error().message);
+    std::println("{}", *text);
+  }
+  return {};
+}
+
 memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
   const memix::cli_detail::Result<memix::ViewService> service =
       make_service(options);
   if (!service) {
     return std::unexpected(service.error());
   }
+  if (options.object_kind == "derivation")
+    return list_derivations(*service, options.list_json);
+  if (options.object_kind != "environment")
+    return memix::cli_detail::unexpected_error(
+        "--kind must be derivation or environment");
   const memix::ViewResult<std::vector<memix::ViewEnvironmentInfo>>
       environments = service->list_environments();
   if (!environments) {
@@ -513,7 +579,7 @@ memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
         | std::views::transform([](const memix::ViewEnvironmentInfo &info) {
             return ViewEnvironmentInfoJson{
                 .id = info.id,
-                .derivation = info.derivation_id,
+                .binding_count = info.binding_count,
                 .file_count = info.file_count,
                 .size_bytes = info.total_size_bytes,
                 .upstream_environment_count = info.upstream_environment_count,
@@ -522,33 +588,104 @@ memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
         | std::ranges::to<std::vector>();
     return print_json(json);
   }
-  std::println("{:<66}{:<66}{:>8}{:>12}{:>10}", "ENVIRONMENT", "DERIVATION",
+  std::println("{:<66}{:<66}{:>8}{:>12}{:>10}", "ENVIRONMENT", "BINDINGS",
                "FILES", "SIZE_BYTES", "UPSTREAMS");
   for (const memix::ViewEnvironmentInfo &environment : *environments) {
     std::println("{:<66}{:<66}{:>8}{:>12}{:>10}", environment.id,
-                 environment.derivation_id, environment.file_count,
+                 environment.binding_count, environment.file_count,
                  environment.total_size_bytes,
                  environment.upstream_environment_count);
   }
   return {};
 }
 
-memix::cli_detail::VoidResult run_tree(const ViewCliOptions &options) {
-  if (options.tree_environment_id.empty()) {
+memix::cli_detail::Result<memix::ViewReference>
+view_reference(std::string_view value) {
+  auto kind = memix::ViewObjectKind::Environment;
+  if (value.starts_with("derivation:")) {
+    kind = memix::ViewObjectKind::Derivation;
+    value.remove_prefix(std::string_view("derivation:").size());
+  } else if (value.starts_with("environment:")) {
+    value.remove_prefix(std::string_view("environment:").size());
+  } else if (value.contains(':')) {
     return memix::cli_detail::unexpected_error(
-        "tree expects an environment id");
+        "expected derivation:ID or environment:ID");
+  }
+  if (value.empty())
+    return memix::cli_detail::unexpected_error("view id is required");
+  return memix::ViewReference{.kind = kind, .id = std::string(value)};
+}
+
+memix::cli_detail::Result<std::vector<memix::ViewEnvironmentBinding>>
+bindings_from_cli(const ViewCliOptions &options) {
+  if (!options.sources.empty())
+    return memix::cli_detail::unexpected_error(
+        "compose does not accept --source");
+  std::vector<memix::ViewEnvironmentBinding> bindings;
+  for (const auto &value : options.mounts) {
+    const auto equal = value.find('=');
+    const auto id = value.substr(0, equal);
+    const auto mount =
+        equal == std::string::npos ? "" : value.substr(equal + 1);
+    if (id.empty() || mount.contains('=')) {
+      return memix::cli_detail::unexpected_error(
+          "--mount expects DERIVATION[=MOUNT]");
+    }
+    bindings.push_back({
+        .mount = fs::path(mount),
+        .derivation_id = id,
+        .output_role = "file_tree",
+    });
+  }
+  return bindings;
+}
+
+memix::cli_detail::VoidResult
+print_resolution(const memix::ViewResolution &resolution, bool json) {
+  if (!json) {
+    std::println("{}: {}", memix::to_string(resolution.result.kind),
+                 resolution.result.id);
+    std::println("quest: {}", resolution.ir_hash);
+    std::println("inserted: {}", resolution.inserted);
+    return {};
+  }
+  simdjson::builder::string_builder builder;
+  builder.start_object();
+  builder.append_key_value<"quest">(resolution.ir_hash);
+  builder.append_raw(",\"result\":{");
+  builder.append_key_value<"kind">(memix::to_string(resolution.result.kind));
+  builder.append_comma();
+  builder.append_key_value<"id">(resolution.result.id);
+  builder.end_object();
+  builder.append_comma();
+  builder.append_key_value<"inserted">(resolution.inserted);
+  builder.end_object();
+  auto text = memix::detail::json_from_builder(builder);
+  if (!text)
+    return memix::cli_detail::unexpected_error(text.error().message);
+  std::println("{}", *text);
+  return {};
+}
+
+memix::cli_detail::VoidResult run_tree(const ViewCliOptions &options) {
+  if (options.tree_reference.empty()) {
+    return memix::cli_detail::unexpected_error("tree expects a typed view id");
   }
   const memix::cli_detail::Result<memix::ViewService> service =
       make_service(options);
   if (!service) {
     return std::unexpected(service.error());
   }
-  const memix::ViewResult<std::vector<memix::ViewCatalogEntry>> entries =
-      service->environment_tree(options.tree_environment_id,
-                                memix::ViewCatalogOptions{
-                                    .path = options.tree_path,
-                                    .depth = options.tree_depth,
-                                });
+  auto reference = view_reference(options.tree_reference);
+  if (!reference)
+    return std::unexpected(reference.error());
+  const auto entries =
+      options.command == ViewCommand::Ls
+          ? service->view_ls(*reference, options.tree_path)
+          : service->view_tree(*reference, {
+                                               .path = options.tree_path,
+                                               .depth = options.tree_depth,
+                                           });
   if (!entries) {
     return memix::cli_detail::unexpected_error(entries.error());
   }
@@ -578,8 +715,8 @@ memix::cli_detail::VoidResult run_tree(const ViewCliOptions &options) {
 }
 
 memix::cli_detail::VoidResult run_cat(const ViewCliOptions &options) {
-  if (options.cat_environment_id.empty()) {
-    return memix::cli_detail::unexpected_error("cat expects an environment id");
+  if (options.cat_reference.empty()) {
+    return memix::cli_detail::unexpected_error("cat expects a typed view id");
   }
   if (options.cat_path.empty()) {
     return memix::cli_detail::unexpected_error("cat expects a view path");
@@ -589,19 +726,13 @@ memix::cli_detail::VoidResult run_cat(const ViewCliOptions &options) {
   if (!service) {
     return std::unexpected(service.error());
   }
-  const memix::ViewResult<memix::ResolvedViewFile> file =
-      service->read_environment_file(options.cat_environment_id,
-                                     options.cat_path);
-  if (!file) {
+  auto reference = view_reference(options.cat_reference);
+  if (!reference)
+    return std::unexpected(reference.error());
+  auto file = service->read_output(*reference, options.cat_path);
+  if (!file)
     return memix::cli_detail::unexpected_error(file.error());
-  }
-  const memix::cli_detail::Result<std::string> contents =
-      memix::cli_detail::read_file_contents(file->blob.object_dir
-                                            / file->blob.content_path);
-  if (!contents) {
-    return std::unexpected(contents.error());
-  }
-  std::print("{}", *contents);
+  std::print("{}", file->contents);
   return {};
 }
 
@@ -622,66 +753,83 @@ void print_view_environment_summary(const memix::ViewEnvironment &environment) {
                environment.closure.raw_objects.size());
 }
 
-memix::cli_detail::VoidResult run_build(const ViewCliOptions &options) {
-  const memix::cli_detail::Result<memix::ViewTargetKind> target =
-      require_build_target(options.target_name);
-  if (!target) {
-    return std::unexpected(target.error());
-  }
-  const memix::cli_detail::Result<memix::ViewService> service =
-      make_service(options);
-  if (!service) {
+memix::cli_detail::VoidResult
+run_materialization(const ViewCliOptions &options) {
+  auto service = make_service(options);
+  if (!service)
     return std::unexpected(service.error());
+  const memix::BuildOptions metadata{
+      .intent = options.intent,
+      .name = options.name,
+  };
+  if (options.command == ViewCommand::Compose) {
+    auto bindings = bindings_from_cli(options);
+    if (!bindings)
+      return std::unexpected(bindings.error());
+    auto result = service->compose(std::move(*bindings), metadata);
+    if (!result)
+      return memix::cli_detail::unexpected_error(result.error());
+    return print_resolution(
+        {
+            .result =
+                {
+                    .kind = memix::ViewObjectKind::Environment,
+                    .id = result->id,
+                },
+            .ir_hash = result->ir_hash,
+            .inserted = result->inserted,
+        },
+        options.materialization_json);
   }
-  const memix::cli_detail::Result<memix::AuthoredViewExpression> expression =
-      expression_from_cli(*service, options, *target);
-  if (!expression) {
+  auto target = require_selection_target(options.target_name);
+  if (!target)
+    return std::unexpected(target.error());
+  auto expression = expression_from_cli(*service, options, *target);
+  if (!expression)
     return std::unexpected(expression.error());
-  }
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      service->build(*expression, memix::BuildOptions{
-                                      .intent = options.intent,
-                                      .name = options.name,
-                                  });
-  if (!environment) {
-    return memix::cli_detail::unexpected_error(environment.error());
-  }
-  if (options.build_json) {
-    const memix::cli_detail::Result<std::string> contents =
-        memix::cli_detail::read_file_contents(environment->manifest_path);
-    if (!contents) {
-      return std::unexpected(contents.error());
-    }
-    std::println("{}", *contents);
-    return {};
-  }
-  print_view_environment_summary(*environment);
-  std::println("quest: {}", environment->derivation.ir_hash);
-  return {};
+  auto result = service->select(*expression, metadata);
+  if (!result)
+    return memix::cli_detail::unexpected_error(result.error());
+  return print_resolution(
+      {
+          .result =
+              {
+                  .kind = memix::ViewObjectKind::Derivation,
+                  .id = result->id,
+              },
+          .ir_hash = result->ir_hash,
+          .inserted = result->inserted,
+      },
+      options.materialization_json);
 }
 
 memix::cli_detail::VoidResult run_define(const ViewCliOptions &options) {
-  const memix::cli_detail::Result<memix::ViewService> service =
-      make_service(options);
-  if (!service) {
+  auto service = make_service(options);
+  if (!service)
     return std::unexpected(service.error());
+  const memix::QuestDefinitionOptions metadata{
+      .intent = options.intent_provided
+                  ? std::optional<std::string>{options.intent}
+                  : std::nullopt,
+      .name = options.name_provided ? std::optional<std::string>{options.name}
+                                    : std::nullopt,
+  };
+  memix::ViewResult<memix::QuestDefinition> definition;
+  if (options.quest_kind == "composition") {
+    auto bindings = bindings_from_cli(options);
+    if (!bindings)
+      return std::unexpected(bindings.error());
+    definition = service->define_composition(std::move(*bindings), metadata);
+  } else if (options.quest_kind == "selection") {
+    auto expression =
+        expression_from_cli(*service, options, memix::ViewTargetKind::FileTree);
+    if (!expression)
+      return std::unexpected(expression.error());
+    definition = service->define_quest(*expression, metadata);
+  } else {
+    return memix::cli_detail::unexpected_error(
+        "--kind must be selection or composition");
   }
-  const memix::cli_detail::Result<memix::AuthoredViewExpression> expression =
-      expression_from_cli(*service, options, memix::ViewTargetKind::FileTree);
-  if (!expression) {
-    return std::unexpected(expression.error());
-  }
-  const memix::ViewResult<memix::QuestDefinition> definition =
-      service->define_quest(
-          *expression,
-          memix::QuestDefinitionOptions{
-              .intent = options.intent_provided
-                          ? std::optional<std::string>{options.intent}
-                          : std::nullopt,
-              .name = options.name_provided
-                        ? std::optional<std::string>{options.name}
-                        : std::nullopt,
-          });
   if (!definition) {
     return memix::cli_detail::unexpected_error(definition.error());
   }
@@ -699,6 +847,7 @@ memix::cli_detail::VoidResult run_define(const ViewCliOptions &options) {
   if (options.define_json) {
     return print_json(QuestDefinitionJson{
         .ir_hash = info->ir_hash,
+        .result_kind = std::string(memix::to_string(info->result_kind)),
         .intent = info->intent,
         .name = info->name,
         .created_at = info->created_at,
@@ -759,6 +908,13 @@ memix::cli_detail::VoidResult run_stats(const ViewCliOptions &options) {
             };
           })
         | std::ranges::to<std::vector>();
+    std::vector<QuestDerivationReadsJson> derivation_reads;
+    for (const auto &reads : stats->reads_by_derivation) {
+      derivation_reads.push_back({
+          .derivation_id = reads.derivation_id,
+          .read_count = reads.read_count,
+      });
+    }
     return print_json(QuestStatsJson{
         .ir_hash = stats->ir_hash,
         .resolution_count = stats->resolution_count,
@@ -773,6 +929,8 @@ memix::cli_detail::VoidResult run_stats(const ViewCliOptions &options) {
         .cat_count = stats->cat_count,
         .tree_count = stats->tree_count,
         .reads_by_environment = reads_by_environment,
+        .reads_by_derivation = std::move(derivation_reads),
+        .ls_count = stats->ls_count,
     });
   }
   std::println("quest: {}", stats->ir_hash);
@@ -791,6 +949,12 @@ memix::cli_detail::VoidResult run_stats(const ViewCliOptions &options) {
   std::println("last_read: {}", stats->last_read_at);
   std::println("cat_reads: {}", stats->cat_count);
   std::println("tree_reads: {}", stats->tree_count);
+  std::println("ls_reads: {}", stats->ls_count);
+  std::println("reads_by_derivation:");
+  for (const auto &reads : stats->reads_by_derivation) {
+    std::println("  {} {}", memix::cli_detail::short_id(reads.derivation_id),
+                 reads.read_count);
+  }
   std::println("reads_by_environment:");
   for (const memix::QuestEnvironmentReads &reads :
        stats->reads_by_environment) {
@@ -819,31 +983,15 @@ memix::cli_detail::VoidResult run_find(const ViewCliOptions &options) {
 }
 
 memix::cli_detail::VoidResult run_resolve(const ViewCliOptions &options) {
-  if (options.quest_id.empty()) {
+  if (options.quest_id.empty())
     return memix::cli_detail::unexpected_error("resolve expects a quest id");
-  }
-  const memix::cli_detail::Result<memix::ViewService> service =
-      make_service(options);
-  if (!service) {
+  auto service = make_service(options);
+  if (!service)
     return std::unexpected(service.error());
-  }
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      service->resolve_quest(options.quest_id);
-  if (!environment) {
-    return memix::cli_detail::unexpected_error(environment.error());
-  }
-  if (options.resolve_json) {
-    const memix::cli_detail::Result<std::string> contents =
-        memix::cli_detail::read_file_contents(environment->manifest_path);
-    if (!contents) {
-      return std::unexpected(contents.error());
-    }
-    std::println("{}", *contents);
-    return {};
-  }
-  print_view_environment_summary(*environment);
-  std::println("quest: {}", environment->derivation.ir_hash);
-  return {};
+  auto resolution = service->resolve_quest(options.quest_id);
+  if (!resolution)
+    return memix::cli_detail::unexpected_error(resolution.error());
+  return print_resolution(*resolution, options.resolve_json);
 }
 
 memix::cli_detail::VoidResult run_freshness(const ViewCliOptions &options) {
@@ -875,7 +1023,11 @@ memix::cli_detail::VoidResult run_freshness(const ViewCliOptions &options) {
         | std::ranges::to<std::vector>();
     return print_json(QuestFreshnessJson{
         .ir_hash = freshness->ir_hash,
-        .derivation_id = freshness->derivation_id,
+        .result =
+            {
+                .kind = std::string(memix::to_string(freshness->result.kind)),
+                .id = freshness->result.id,
+            },
         .resolved_at = freshness->resolved_at,
         .inputs = inputs,
         .stale = freshness->stale,
@@ -901,30 +1053,38 @@ memix::cli_detail::VoidResult run_freshness(const ViewCliOptions &options) {
 }
 
 memix::cli_detail::VoidResult run_show(const ViewCliOptions &options) {
-  if (options.show_view_environment_id.empty()) {
-    return memix::cli_detail::unexpected_error(
-        "show expects an environment id");
-  }
-  const memix::cli_detail::Result<memix::ViewService> service =
-      make_service(options);
-  if (!service) {
+  auto reference = view_reference(options.show_reference);
+  if (!reference)
+    return std::unexpected(reference.error());
+  auto service = make_service(options);
+  if (!service)
     return std::unexpected(service.error());
-  }
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      service->resolve_environment(options.show_view_environment_id);
-  if (!environment) {
-    return memix::cli_detail::unexpected_error(environment.error());
-  }
-  if (options.show_json) {
-    const memix::cli_detail::Result<std::string> contents =
-        memix::cli_detail::read_file_contents(environment->manifest_path);
-    if (!contents) {
-      return std::unexpected(contents.error());
+  fs::path manifest;
+  if (reference->kind == memix::ViewObjectKind::Derivation) {
+    auto derivation = service->resolve_derivation(reference->id);
+    if (!derivation)
+      return memix::cli_detail::unexpected_error(derivation.error());
+    manifest = derivation->manifest_path;
+    if (!options.show_json) {
+      std::println("derivation: {}\nquest: {}\nfiles: {}\nmanifest: {}",
+                   derivation->id, derivation->ir_hash,
+                   derivation->resolved_files.size(), manifest.string());
+      return {};
     }
-    std::println("{}", *contents);
-    return {};
+  } else {
+    auto environment = service->resolve_environment(reference->id);
+    if (!environment)
+      return memix::cli_detail::unexpected_error(environment.error());
+    manifest = environment->manifest_path;
+    if (!options.show_json) {
+      print_view_environment_summary(*environment);
+      return {};
+    }
   }
-  print_view_environment_summary(*environment);
+  auto contents = memix::cli_detail::read_file_contents(manifest);
+  if (!contents)
+    return std::unexpected(contents.error());
+  std::println("{}", *contents);
   return {};
 }
 
@@ -964,7 +1124,6 @@ void print_activation_summary(const memix::ViewActivation &activation) {
   std::println("profile: {}", activation.profile);
   std::println("generation: {}", activation.generation);
   std::println("environment: {}", activation.environment_id);
-  std::println("derivation: {}", activation.derivation_id);
   std::println("workspace: {}", activation.workspace_path.string());
   std::println("switched: {}", activation.switched ? "true" : "false");
   std::println("materialized: {}", activation.materialized ? "true" : "false");
@@ -990,8 +1149,15 @@ memix::cli_detail::VoidResult run_activate(const ViewCliOptions &options) {
   if (!service) {
     return std::unexpected(service.error());
   }
-  const memix::ViewResult<memix::ViewActivation> activation = service->activate(
-      options.activate_environment_id, memix::ActivationOptions{
+  auto reference = view_reference(options.activate_environment_id);
+  if (!reference)
+    return std::unexpected(reference.error());
+  if (reference->kind != memix::ViewObjectKind::Environment) {
+    return memix::cli_detail::unexpected_error(
+        "activate requires an Environment; compose the Derivation first");
+  }
+  const memix::ViewResult<memix::ViewActivation> activation =
+      service->activate(reference->id, memix::ActivationOptions{
                                            .profile = *profile,
                                            .into = fs::path(options.into_path),
                                            .mode = *mode,
@@ -1108,24 +1274,29 @@ memix::cli_detail::VoidResult run_status(const ViewCliOptions &options) {
   std::println("profile: {}", status->profile);
   std::println("generation: {}", status->generation);
   std::println("environment: {}", status->environment_id);
-  std::println("derivation: {}", status->derivation_id);
   std::println("stale: {}", status->stale ? "true" : "false");
   return {};
 }
 
 void add_list_command(Argum::Parser &parser, ViewCliOptions &options) {
+  parser.add(Argum::Option("--kind")
+                 .argName("derivation|environment")
+                 .handler([&options](std::string_view value) {
+                   options.object_kind = value;
+                 }));
   parser.add(Argum::Option("--json")
-                 .help("Emit environment summaries as JSON.")
+                 .help("Emit summaries for the selected object kind as JSON.")
                  .handler([&options] { options.list_json = true; }));
 }
 
 void add_tree_command(Argum::Parser &parser, ViewCliOptions &options) {
-  parser.add(Argum::Positional("environment-id")
-                 .help("View environment id or unique prefix.")
-                 .occurs(Argum::neverOrOnce)
-                 .handler([&options](std::string_view value) {
-                   options.tree_environment_id = value;
-                 }));
+  parser.add(
+      Argum::Positional("view-id")
+          .help("derivation:ID or environment:ID; bare IDs name environments.")
+          .occurs(Argum::neverOrOnce)
+          .handler([&options](std::string_view value) {
+            options.tree_reference = value;
+          }));
   parser.add(Argum::Option("--path")
                  .argName("PATH")
                  .help("Limit output to one path or subtree.")
@@ -1155,12 +1326,13 @@ void add_tree_command(Argum::Parser &parser, ViewCliOptions &options) {
 }
 
 void add_cat_command(Argum::Parser &parser, ViewCliOptions &options) {
-  parser.add(Argum::Positional("environment-id")
-                 .help("View environment id or unique prefix.")
-                 .occurs(Argum::neverOrOnce)
-                 .handler([&options](std::string_view value) {
-                   options.cat_environment_id = value;
-                 }));
+  parser.add(
+      Argum::Positional("view-id")
+          .help("derivation:ID or environment:ID; bare IDs name environments.")
+          .occurs(Argum::neverOrOnce)
+          .handler([&options](std::string_view value) {
+            options.cat_reference = value;
+          }));
   parser.add(Argum::Positional("path")
                  .help("File path inside the selected view.")
                  .occurs(Argum::neverOrOnce)
@@ -1177,13 +1349,15 @@ void add_view_inputs(Argum::Parser &parser, ViewCliOptions &options) {
                  .handler([&options](std::string_view value) {
                    options.sources.emplace_back(value);
                  }));
+}
+
+void add_mount_inputs(Argum::Parser &parser, ViewCliOptions &options) {
   parser.add(
-      Argum::Option("--view")
-          .argName("ENVIRONMENT[=MOUNT]")
-          .help("Compose an existing view environment, optionally below a "
-                "relative mount path. Repeat for multiple views.")
+      Argum::Option("--mount")
+          .argName("DERIVATION[=MOUNT]")
+          .help("Mount an immutable Derivation; repeat for multiple bindings.")
           .handler([&options](std::string_view value) {
-            options.view_sources.emplace_back(value);
+            options.mounts.emplace_back(value);
           }));
 }
 
@@ -1204,22 +1378,52 @@ void add_quest_metadata(Argum::Parser &parser, ViewCliOptions &options) {
                  }));
 }
 
-void add_build_command(Argum::Parser &parser, ViewCliOptions &options) {
+void add_select_command(Argum::Parser &parser, ViewCliOptions &options) {
   add_view_inputs(parser, options);
   parser.add(Argum::Option("--target")
                  .argName("TEXT")
-                 .help("Build target. Only file_tree is supported.")
+                 .help("Selection target. Only raw file_tree is supported.")
                  .handler([&options](std::string_view value) {
                    options.target_name = value;
                  }));
   add_quest_metadata(parser, options);
   parser.add(Argum::Option("--json")
-                 .help("Emit the view environment manifest JSON.")
-                 .handler([&options] { options.build_json = true; }));
+                 .help("Emit a typed Derivation resolution as JSON.")
+                 .handler([&options] { options.materialization_json = true; }));
+}
+
+void add_compose_command(Argum::Parser &parser, ViewCliOptions &options) {
+  add_mount_inputs(parser, options);
+  add_quest_metadata(parser, options);
+  parser.add(Argum::Option("--json").handler(
+      [&options] { options.materialization_json = true; }));
+}
+
+void add_ls_command(Argum::Parser &parser, ViewCliOptions &options) {
+  parser.add(
+      Argum::Positional("view-id")
+          .occurs(Argum::neverOrOnce)
+          .help("derivation:ID or environment:ID; bare IDs name environments.")
+          .handler([&options](std::string_view value) {
+            options.tree_reference = value;
+          }));
+  parser.add(Argum::Positional("path")
+                 .occurs(Argum::neverOrOnce)
+                 .handler([&options](std::string_view value) {
+                   options.tree_path = fs::path(value);
+                 }));
+  parser.add(Argum::Option("--json").handler(
+      [&options] { options.tree_json = true; }));
 }
 
 void add_define_command(Argum::Parser &parser, ViewCliOptions &options) {
   add_view_inputs(parser, options);
+  add_mount_inputs(parser, options);
+  parser.add(Argum::Option("--kind")
+                 .argName("selection|composition")
+                 .handler([&options](std::string_view value) {
+                   options.quest_kind = value;
+                 }));
   add_quest_metadata(parser, options);
   parser.add(Argum::Option("--json")
                  .help("Emit the quest definition as JSON.")
@@ -1279,14 +1483,15 @@ void add_stats_command(Argum::Parser &parser, ViewCliOptions &options) {
 }
 
 void add_show_command(Argum::Parser &parser, ViewCliOptions &options) {
-  parser.add(Argum::Positional("environment-id")
-                 .help("View environment id or unique prefix.")
-                 .occurs(Argum::neverOrOnce)
-                 .handler([&options](std::string_view value) {
-                   options.show_view_environment_id = value;
-                 }));
+  parser.add(
+      Argum::Positional("view-id")
+          .help("derivation:ID or environment:ID; bare IDs name environments.")
+          .occurs(Argum::neverOrOnce)
+          .handler([&options](std::string_view value) {
+            options.show_reference = value;
+          }));
   parser.add(Argum::Option("--json")
-                 .help("Emit the view environment manifest JSON.")
+                 .help("Emit the selected object manifest as JSON.")
                  .handler([&options] { options.show_json = true; }));
 }
 
@@ -1368,7 +1573,8 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
           .help("Subcommand: define, find, resolve, freshness, quests, stats, "
-                "list, tree, cat, build, show, activate, generations, "
+                "list, ls, tree, cat, select, compose, show, activate, "
+                "generations, "
                 "rollback, deactivate, or status.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
@@ -1387,9 +1593,19 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
               add_cat_command(parser, options);
               return {};
             }
-            if (value == "build") {
-              options.command = ViewCommand::Build;
-              add_build_command(parser, options);
+            if (value == "select") {
+              options.command = ViewCommand::Select;
+              add_select_command(parser, options);
+              return {};
+            }
+            if (value == "compose") {
+              options.command = ViewCommand::Compose;
+              add_compose_command(parser, options);
+              return {};
+            }
+            if (value == "ls") {
+              options.command = ViewCommand::Ls;
+              add_ls_command(parser, options);
               return {};
             }
             if (value == "define") {
@@ -1455,7 +1671,8 @@ void add_commands(Argum::Parser &parser, ViewCliOptions &options) {
             return memix::cli_detail::argum_validation_error(std::format(
                 "unsupported command `{}`; expected "
                 "define|find|resolve|freshness|quests|stats|list|tree|cat|"
-                "build|show|activate|generations|rollback|deactivate|status",
+                "select|compose|ls|show|activate|generations|rollback|"
+                "deactivate|status",
                 value));
           }));
 }
@@ -1492,12 +1709,25 @@ void print_cat_help(std::string_view program_name) {
   std::print("{}", parser.formatHelp(std::format("{} cat", program_name)));
 }
 
-void print_build_help(std::string_view program_name) {
+void print_materialization_help(std::string_view program_name,
+                                bool compose = false) {
   Argum::Parser parser;
   ViewCliOptions options;
   memix::cli_detail::add_common_options(parser, options.common);
-  add_build_command(parser, options);
-  std::print("{}", parser.formatHelp(std::format("{} build", program_name)));
+  if (compose)
+    add_compose_command(parser, options);
+  else
+    add_select_command(parser, options);
+  std::print("{}", parser.formatHelp(std::format(
+                       "{} {}", program_name, compose ? "compose" : "select")));
+}
+
+void print_ls_help(std::string_view program_name) {
+  Argum::Parser parser;
+  ViewCliOptions options;
+  memix::cli_detail::add_common_options(parser, options.common);
+  add_ls_command(parser, options);
+  std::print("{}", parser.formatHelp(std::format("{} ls", program_name)));
 }
 
 void print_define_help(std::string_view program_name) {
@@ -1610,8 +1840,14 @@ void print_selected_help(ViewCommand command, std::string_view program_name) {
   case ViewCommand::Cat:
     print_cat_help(program_name);
     return;
-  case ViewCommand::Build:
-    print_build_help(program_name);
+  case ViewCommand::Select:
+    print_materialization_help(program_name);
+    return;
+  case ViewCommand::Compose:
+    print_materialization_help(program_name, true);
+    return;
+  case ViewCommand::Ls:
+    print_ls_help(program_name);
     return;
   case ViewCommand::Define:
     print_define_help(program_name);
@@ -1663,8 +1899,11 @@ memix::cli_detail::VoidResult dispatch(const ViewCliOptions &options) {
     return run_tree(options);
   case ViewCommand::Cat:
     return run_cat(options);
-  case ViewCommand::Build:
-    return run_build(options);
+  case ViewCommand::Select:
+  case ViewCommand::Compose:
+    return run_materialization(options);
+  case ViewCommand::Ls:
+    return run_tree(options);
   case ViewCommand::Define:
     return run_define(options);
   case ViewCommand::Find:

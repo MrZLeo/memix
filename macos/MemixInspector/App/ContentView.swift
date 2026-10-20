@@ -189,7 +189,7 @@ private struct ActiveEnvironmentRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Label(model.shortID(environment.environmentID), systemImage: "lock")
-            Text(model.shortID(environment.derivation.derivationID))
+            Text("\(environment.bindings.count) bindings")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -463,9 +463,9 @@ private struct ViewEnvironmentList: View {
                     Text(model.shortID(environment.environmentID))
                         .font(.system(.body, design: .monospaced))
                     HStack {
-                        Text("\(environment.derivation.resolvedFiles.count) files")
+                        Text("\(environment.resolvedFiles.count) files")
                         Text("\(environment.closure.rawObjects.count) objects")
-                        Text(model.shortID(environment.derivation.derivationID))
+                        Text("\(environment.bindings.count) bindings")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -523,7 +523,7 @@ private struct FileDetail: View {
         var rows: [(String, String)] = []
         if let environment = model.activeViewEnvironment {
             rows.append(("Environment", environment.environmentID))
-            rows.append(("Derivation", environment.derivation.derivationID))
+            rows.append(("Bindings", "\(environment.bindings.count)"))
         }
         if let locator = file.locator {
             rows.append(("Locator", locator))
@@ -610,21 +610,10 @@ private struct EnvironmentDetail: View {
             ("Environment", environment.environmentID),
             ("Environment manifest", environment.manifestPath),
             ("Environment inserted", environment.inserted ? "true" : "false"),
-            ("Derivation", environment.derivation.derivationID),
-            ("IR hash", environment.derivation.irHash),
-            ("Target", environment.derivation.target.title),
-            ("Resolved files", "\(environment.derivation.resolvedFiles.count)"),
-            ("Outputs", environment.derivation.outputs.map(\.role).joined(separator: ", ")),
-            (
-                "Environment inputs",
-                environment.derivation.environmentInputs
-                    .map { "\($0.mount):\($0.outputRole) ← \($0.environmentID)" }
-                    .joined(separator: ", ")
-            ),
-            ("Derivation manifest", environment.derivation.manifestPath),
-            ("Tree", environment.derivation.treePath),
-            ("Derivation inserted", environment.derivation.inserted ? "true" : "false"),
-            ("Bindings", environment.bindings.map { "\($0.mount):\($0.outputRole)" }.joined(separator: ", ")),
+            ("Derivations", environment.derivations.map(\.derivationID).joined(separator: ", ")),
+            ("Composition quest", environment.irHash),
+            ("Resolved files", "\(environment.resolvedFiles.count)"),
+            ("Bindings", environment.bindings.map { "\($0.mount):\($0.outputRole) ← \($0.derivationID)" }.joined(separator: ", ")),
             ("Closure environments", "\(environment.closure.environments.count)"),
             ("Closure derivations", "\(environment.closure.derivations.count)"),
             ("Closure artifacts", "\(environment.closure.artifacts.count)"),

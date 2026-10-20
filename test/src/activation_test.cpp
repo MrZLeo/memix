@@ -2,6 +2,7 @@
 #include "memix/fs.hpp"
 #include "memix/store.hpp"
 #include "memix/view.hpp"
+#include "view_test_helpers.hpp"
 
 #include "detail/hash.hpp"
 
@@ -174,7 +175,7 @@ build_rules_environment(const memix::ViewService &views,
       views.expression_from_sources({std::string(source)});
   REQUIRE(expression.has_value());
   const memix::ViewResult<memix::ViewEnvironment> environment =
-      views.build(*expression, options);
+      compose_for_test(views, *expression, options);
   REQUIRE(environment.has_value());
   return *environment;
 }
@@ -257,7 +258,7 @@ TEST_CASE("activation links a workspace into the profile generation chain",
 
   const std::string metadata =
       read_file(profile_dir / "generations" / "1.json");
-  REQUIRE(metadata.find("\"schema\":\"memix.view.activation.v1\"")
+  REQUIRE(metadata.find("\"schema\":\"memix.view.activation.v2\"")
           != std::string::npos);
   REQUIRE(metadata.find("\"generation\":1") != std::string::npos);
   REQUIRE(metadata.find(environment.id) != std::string::npos);
@@ -289,16 +290,20 @@ TEST_CASE("activation includes the corresponding quest in a read-only README",
   const memix::ViewEnvironment environment = build_rules_environment(
       fixture.views, kRulesLocator,
       {.intent = "实现功能\n保留 `API` 兼容性", .name = "Repository context"});
-  const std::string manifest = read_file(environment.derivation.manifest_path);
+  const std::string manifest =
+      read_file(environment.derivations.at(0).manifest_path);
   const std::string environment_manifest = read_file(environment.manifest_path);
   const fs::path definition_path = fixture.store_root
                                  / "views"
                                  / "quests"
-                                 / environment.derivation.ir_hash
+                                 / environment.derivations.at(0).ir_hash
                                  / "ir.json";
   const std::string definition = read_file(definition_path);
-  REQUIRE(environment.derivation.runtime_quest);
-  CHECK(environment.derivation.runtime_quest->contains(definition));
+  REQUIRE(environment.derivations.at(0).runtime_quest);
+  CHECK_FALSE(
+      environment.derivations.at(0).runtime_quest->contains(definition));
+  REQUIRE(memix::view_ir_json(environment.derivations.at(0).recipe)
+          == definition);
 
   // A newer resolution of the same quest must not change which environment
   // the activation README describes.
@@ -314,8 +319,8 @@ TEST_CASE("activation includes the corresponding quest in a read-only README",
   const std::string readme = read_file(readme_path);
   CHECK(readme.contains(environment.id));
   CHECK_FALSE(readme.contains(newer.id));
-  CHECK(readme.contains(environment.derivation.id));
-  CHECK(readme.contains(environment.derivation.ir_hash));
+  CHECK(readme.contains(environment.derivations.at(0).id));
+  CHECK(readme.contains(environment.derivations.at(0).ir_hash));
   CHECK(readme.contains("Repository context"));
   CHECK(readme.contains("实现功能\n保留 `API` 兼容性"));
   CHECK_FALSE(readme.contains("### Definition"));
@@ -324,8 +329,9 @@ TEST_CASE("activation includes the corresponding quest in a read-only README",
   const memix::FsResult<fs::file_status> status = fs::status(readme_path);
   REQUIRE(status);
   CHECK((status->permissions() & fs::perms::owner_write) == fs::perms::none);
-  CHECK_FALSE(path_exists(environment.derivation.tree_path / "README.md"));
-  CHECK(read_file(environment.derivation.manifest_path) == manifest);
+  CHECK_FALSE(
+      path_exists(environment.derivations.at(0).tree_path / "README.md"));
+  CHECK(read_file(environment.derivations.at(0).manifest_path) == manifest);
   CHECK(read_file(environment.manifest_path) == environment_manifest);
   CHECK(read_file(definition_path) == definition);
   CHECK(read_file(fixture.memory_link() / "rules" / "repo" / "AGENTS.md")
@@ -367,10 +373,10 @@ TEST_CASE(
   const memix::ViewEnvironment updated =
       build_rules_environment(fixture.views, kRulesLocator);
   REQUIRE(first.id != updated.id);
-  CHECK(first.derivation.id != updated.derivation.id);
-  CHECK(first.derivation.ir_hash == updated.derivation.ir_hash);
-  CHECK(first.derivation.resolved_files.front().blob.id
-        == updated.derivation.resolved_files.front().blob.id);
+  CHECK(first.derivations.at(0).id != updated.derivations.at(0).id);
+  CHECK(first.derivations.at(0).ir_hash == updated.derivations.at(0).ir_hash);
+  CHECK(first.resolved_files.front().blob.id
+        == updated.resolved_files.front().blob.id);
   const memix::ViewActivation second =
       fixture.activate(updated, "test-profile", mode);
   REQUIRE(second.generation == 2);
@@ -391,20 +397,28 @@ TEST_CASE(
   REQUIRE(rolled_back);
   CHECK(rolled_back->generation == 1);
   CHECK(read_file(fixture.memory_link() / "README.md") == original);
-  const auto resolved = fixture.views.resolve_quest(first.derivation.ir_hash);
+  const auto resolved =
+      fixture.views.resolve_quest(first.derivations.at(0).ir_hash);
   REQUIRE(resolved);
-  CHECK(resolved->id == updated.id);
+  CHECK(resolved->result.kind == memix::ViewObjectKind::Derivation);
+  CHECK(resolved->result.id == updated.derivations.at(0).id);
   REQUIRE(
       fixture.views.define_quest(*expression, "Original intent", "Renamed"));
-  const auto renamed = fixture.views.resolve_quest(first.derivation.ir_hash);
+  const auto renamed =
+      fixture.views.resolve_quest(first.derivations.at(0).ir_hash);
   REQUIRE(renamed);
-  CHECK(renamed->id != first.id);
-  CHECK(renamed->derivation.ir_hash == first.derivation.ir_hash);
+  CHECK(renamed->result.id != first.derivations.at(0).id);
+  CHECK(renamed->ir_hash == first.derivations.at(0).ir_hash);
   REQUIRE(fixture.views.define_quest(*expression, "Original intent", "First"));
-  const auto restored = fixture.views.resolve_quest(first.derivation.ir_hash);
+  const auto restored =
+      fixture.views.resolve_quest(first.derivations.at(0).ir_hash);
   REQUIRE(restored);
-  CHECK(restored->id == first.id);
-  CHECK(restored->derivation.runtime_quest == first.derivation.runtime_quest);
+  CHECK(restored->result.id == first.derivations.at(0).id);
+  const auto restored_derivation =
+      fixture.views.resolve_derivation(restored->result.id);
+  REQUIRE(restored_derivation);
+  CHECK(restored_derivation->runtime_quest
+        == first.derivations.at(0).runtime_quest);
 }
 
 TEST_CASE("activation preserves frozen instructions after deleting the quest",
@@ -422,10 +436,10 @@ TEST_CASE("activation preserves frozen instructions after deleting the quest",
   REQUIRE(fs::remove_all(fixture.store_root
                          / "views"
                          / "quests"
-                         / environment.derivation.ir_hash));
+                         / environment.derivations.at(0).ir_hash));
   fixture.activate(environment, "test-profile", mode);
   const std::string readme = read_file(fixture.memory_link() / "README.md");
-  CHECK(readme.contains(environment.derivation.ir_hash));
+  CHECK(readme.contains(environment.derivations.at(0).ir_hash));
   CHECK(readme.contains(intent));
   CHECK(readme.contains("Frozen name"));
   CHECK_FALSE(readme.contains("memix.view.ir."));
@@ -447,11 +461,12 @@ TEST_CASE(
   fixture.activate(environment, "test-profile", mode);
   const std::string readme = read_file(fixture.memory_link() / "README.md");
   REQUIRE_FALSE(readme.contains("### Definition"));
-  REQUIRE(environment.derivation.runtime_quest);
-  const std::string previous = std::format(
-      "# Activated memory\n\n- Environment: `{}`\n- Derivation: `{}`\n\n{}",
-      environment.id, environment.derivation.id,
-      *environment.derivation.runtime_quest);
+  REQUIRE(environment.derivations.at(0).runtime_quest);
+  const std::string previous =
+      std::format("# Activated memory\n\n- Environment: `{}`\n- Derivation: "
+                  "`{}`\n\n{}\n### Definition\n\ncached recipe",
+                  environment.id, environment.derivations.at(0).id,
+                  *environment.derivations.at(0).runtime_quest);
   REQUIRE(previous.contains("### Definition"));
   const fs::path cached_readme =
       fixture.profile_dir("test-profile") / "generations" / "1" / "README.md";
@@ -461,19 +476,17 @@ TEST_CASE(
 
   const auto activated = fixture.activate(environment, "test-profile", mode);
   CHECK(activated.environment_id == environment.id);
-  CHECK(activated.derivation_id == environment.derivation.id);
   CHECK(read_file(fixture.memory_link() / "README.md") == readme);
   const auto rolled_back = fixture.views.rollback("test-profile", 1);
   INFO((rolled_back ? "rollback succeeded" : rolled_back.error().message));
   REQUIRE(rolled_back);
   check_generation_read_only(cached_readme.parent_path());
   CHECK(rolled_back->environment_id == environment.id);
-  CHECK(rolled_back->derivation_id == environment.derivation.id);
   CHECK(read_file(fixture.memory_link() / "README.md") == readme);
   const auto rebuilt = build_rules_environment(fixture.views, kRulesLocator);
   CHECK(rebuilt.id == environment.id);
-  CHECK(rebuilt.derivation.runtime_quest
-        == environment.derivation.runtime_quest);
+  CHECK(rebuilt.derivations.at(0).runtime_quest
+        == environment.derivations.at(0).runtime_quest);
 }
 
 TEST_CASE("runtime quest snapshots are checked against the derivation identity",
@@ -485,20 +498,15 @@ TEST_CASE("runtime quest snapshots are checked against the derivation identity",
       fixture.views, kRulesLocator,
       {.intent = "Frozen instructions", .name = "Frozen name"});
   SECTION("context input") {}
-  SECTION("environment input") {
-    memix::AuthoredViewExpression expression;
-    expression.inputs.push_back({
-        .kind = memix::ViewInputKind::Environment,
-        .locator = {},
-        .environment_id = environment.id,
-        .output_role = "file_tree",
-        .mount = "prior",
-    });
-    const auto composed = fixture.views.build(expression);
+  SECTION("mounted derivation") {
+    const auto composed = fixture.views.compose(
+        {{.mount = "prior",
+          .derivation_id = environment.derivations.at(0).id,
+          .output_role = "file_tree"}});
     REQUIRE(composed);
     environment = *composed;
   }
-  memix::ViewDerivation changed = environment.derivation;
+  memix::ViewDerivation changed = environment.derivations.at(0);
   REQUIRE(changed.runtime_quest);
   *changed.runtime_quest += "\nChanged after building\n";
   const auto changed_json = memix::view_derivation_json(changed);
@@ -529,70 +537,43 @@ TEST_CASE("runtime quest snapshots are checked against the derivation identity",
   CHECK(incomplete.error().kind == memix::ErrorKind::InvalidData);
 }
 
-TEST_CASE(
-    "legacy environments reproduce a fixed README on activation and rollback",
-    "[activation][quest]") {
+TEST_CASE("unsupported derivations are rejected without migration",
+          "[activation][quest]") {
   ActivationFixture fixture;
   memix::ActivationMode mode = memix::ActivationMode::Link;
   SECTION("link") {}
   SECTION("copy") { mode = memix::ActivationMode::Copy; }
   write_file(fixture.source, "repo rules\n");
   ingest_rules(fixture.store, fixture.source, "rules");
-  const memix::ViewEnvironment environment = build_rules_environment(
-      fixture.views, kRulesLocator,
-      {.intent = "Mutable instructions", .name = "Mutable name"});
-  memix::ViewDerivation legacy = environment.derivation;
-  legacy.runtime_quest.reset();
-  const auto legacy_json = memix::view_derivation_json(legacy);
-  REQUIRE(legacy_json);
-  REQUIRE(fs::permissions(legacy.manifest_path, fs::perms::owner_all));
-  write_file(legacy.manifest_path, *legacy_json);
-
+  const auto environment =
+      build_rules_environment(fixture.views, kRulesLocator);
   fixture.activate(environment, "test-profile", mode);
-  const std::string original = read_file(fixture.memory_link() / "README.md");
-  CHECK(original.contains("instructions were not recorded"));
-  CHECK_FALSE(original.contains("Mutable instructions"));
-  CHECK_FALSE(original.contains("Mutable name"));
-  const fs::path cached_readme =
-      fixture.profile_dir("test-profile") / "generations" / "1" / "README.md";
-  REQUIRE(fs::permissions(cached_readme, fs::perms::owner_all));
-  write_file(cached_readme, "README from an older activation\n");
-  const auto same = fixture.views.rollback("test-profile", 1);
-  INFO((same ? "rollback succeeded" : same.error().message));
-  REQUIRE(same);
-  check_generation_read_only(cached_readme.parent_path());
-  CHECK_FALSE(same->switched);
-  CHECK(same->materialized);
-  CHECK(read_file(fixture.memory_link() / "README.md") == original);
-
-  const memix::ViewEnvironment updated = build_rules_environment(
-      fixture.views, kRulesLocator,
-      {.intent = "Updated instructions", .name = "Updated name"});
-  fixture.activate(updated, "test-profile", mode);
-  REQUIRE(fs::permissions(cached_readme, fs::perms::owner_all));
-  write_file(cached_readme, "Another outdated activation README\n");
-  REQUIRE(fs::remove_all(fixture.store_root
-                         / "views"
-                         / "quests"
-                         / environment.derivation.ir_hash));
-  const auto rolled_back = fixture.views.rollback("test-profile");
-  INFO((rolled_back ? "rollback succeeded" : rolled_back.error().message));
-  REQUIRE(rolled_back);
-  CHECK(rolled_back->generation == 1);
-  check_generation_read_only(cached_readme.parent_path());
-  CHECK(read_file(fixture.memory_link() / "README.md") == original);
-
-  const fs::path elsewhere = fixture.directory.path() / "elsewhere" / ".memory";
-  REQUIRE(fixture.views.activate(
-      environment.id,
-      {.profile = "other-profile", .into = elsewhere, .mode = mode}));
-  CHECK(read_file(elsewhere / "README.md") == original);
-  CHECK(read_file(fixture.memory_link() / "rules" / "repo" / "AGENTS.md")
-        == "repo rules\n");
+  const auto manifest = environment.derivations.at(0).manifest_path;
+  const auto original = read_file(manifest);
+  const auto readme = read_file(fixture.memory_link() / "README.md");
+  for (const char version : {'1', '2', '3'}) {
+    auto old = original;
+    const auto pos = old.find("memix.view.derivation.v4");
+    REQUIRE(pos != std::string::npos);
+    old[pos + std::string_view("memix.view.derivation.v").size()] = version;
+    REQUIRE(fs::permissions(manifest, fs::perms::owner_all));
+    write_file(manifest, old);
+    const auto failed =
+        fixture.views.activate(environment.id, {.profile = "test-profile",
+                                                .into = fixture.memory_link(),
+                                                .mode = mode});
+    REQUIRE_FALSE(failed);
+    CHECK(failed.error().kind == memix::ErrorKind::InvalidData);
+    REQUIRE_FALSE(fixture.views.rollback("test-profile", 1));
+    CHECK(read_file(manifest) == old);
+    CHECK(read_file(fixture.memory_link() / "README.md") == readme);
+    CHECK(read_link(fixture.profile_dir("test-profile") / "current")
+          == fs::path("generations/1"));
+  }
 }
 
 TEST_CASE(
-    "activation upgrades legacy generation links and can roll back to them",
+    "activation repairs a substituted generation link without changing its D",
     "[activation]") {
   ActivationFixture fixture;
   memix::ActivationMode mode = memix::ActivationMode::Link;
@@ -605,26 +586,27 @@ TEST_CASE(
   fixture.activate(environment, "test-profile", mode);
   const fs::path generation =
       fixture.profile_dir("test-profile") / "generations" / "1";
-  const auto tree_status = fs::status(environment.derivation.tree_path);
+  const auto tree_status = fs::status(environment.derivations.at(0).tree_path);
   REQUIRE(tree_status);
   REQUIRE(fs::permissions(generation, fs::perms::owner_all));
   REQUIRE(fs::permissions(generation / "README.md", fs::perms::owner_all));
   REQUIRE(fs::permissions(generation / "rules", fs::perms::owner_all));
   REQUIRE(fs::permissions(generation / "rules" / "repo", fs::perms::owner_all));
   REQUIRE(fs::remove_all(generation));
-  REQUIRE(fs::create_directory_symlink(environment.derivation.tree_path,
+  REQUIRE(fs::create_directory_symlink(environment.derivations.at(0).tree_path,
                                        generation));
   const memix::ViewActivation upgraded =
       fixture.activate(environment, "test-profile", mode);
   REQUIRE(upgraded.generation == 2);
   const std::string readme = read_file(fixture.memory_link() / "README.md");
-  CHECK(readme.contains(environment.derivation.ir_hash));
+  CHECK(readme.contains(environment.derivations.at(0).ir_hash));
   const auto rolled_back = fixture.views.rollback("test-profile");
   INFO((rolled_back ? "rollback succeeded" : rolled_back.error().message));
   REQUIRE(rolled_back);
   CHECK(rolled_back->generation == 1);
   check_generation_read_only(generation);
-  const auto tree_status_after = fs::status(environment.derivation.tree_path);
+  const auto tree_status_after =
+      fs::status(environment.derivations.at(0).tree_path);
   REQUIRE(tree_status_after);
   CHECK(tree_status_after->permissions() == tree_status->permissions());
   CHECK(read_file(fixture.memory_link() / "README.md") == readme);
@@ -645,29 +627,17 @@ TEST_CASE(
       build_rules_environment(fixture.views, kRulesLocator);
   fixture.activate(environment, "test-profile", mode);
   const std::string original = read_file(fixture.memory_link() / "README.md");
-  memix::AuthoredViewExpression expression;
-  expression.inputs.push_back({
-      .kind = memix::ViewInputKind::Environment,
-      .locator = {},
-      .environment_id = environment.id,
-      .output_role = "file_tree",
-      .mount = "README.md",
-  });
-  const auto conflicting = fixture.views.build(expression);
-  REQUIRE(conflicting);
-  const auto failed = fixture.views.activate(
-      conflicting->id,
-      {.profile = "test-profile", .into = fixture.memory_link(), .mode = mode});
-  REQUIRE_FALSE(failed);
-  CHECK(failed.error().kind == memix::ErrorKind::Conflict);
+  const auto conflicting =
+      fixture.views.compose({{.mount = "README.md",
+                              .derivation_id = environment.derivations.at(0).id,
+                              .output_role = "file_tree"}});
+  REQUIRE_FALSE(conflicting);
+  CHECK(conflicting.error().kind == memix::ErrorKind::Conflict);
   CHECK(read_file(fixture.memory_link() / "README.md") == original);
   CHECK_FALSE(
       path_exists(fixture.profile_dir("test-profile") / "generations" / "2"));
-  CHECK(read_file(conflicting->derivation.tree_path
-                  / "README.md"
-                  / "rules"
-                  / "repo"
-                  / "AGENTS.md")
+  CHECK(read_file(environment.derivations.at(0).tree_path
+                  / "rules/repo/AGENTS.md")
         == "repo rules\n");
 }
 
@@ -884,25 +854,16 @@ TEST_CASE("failed copy activation after a switch restores current and "
       build_rules_environment(fixture.views, kRulesLocator);
   REQUIRE(second_environment.id != first_environment.id);
 
-  // Corrupt the new derivation tree with a dangling symlink so copy
-  // materialization fails after the profile current has already switched.
-  const fs::path tree_file =
-      second_environment.derivation.tree_path / "rules" / "repo" / "AGENTS.md";
-  REQUIRE(fs::permissions(tree_file.parent_path(), fs::perms::owner_all));
-  const memix::FsResult<bool> removed_tree_file = fs::remove(tree_file);
-  REQUIRE(removed_tree_file.value_or(false));
-  REQUIRE(
-      fs::create_symlink(fixture.directory.path() / "missing-blob", tree_file)
-          .has_value());
-
-  const memix::ViewResult<memix::ViewActivation> failed =
-      fixture.views.activate(second_environment.id,
-                             {
-                                 .profile = "test-profile",
-                                 .into = fixture.memory_link(),
-                                 .mode = memix::ActivationMode::Copy,
-                             });
-  REQUIRE_FALSE(failed.has_value());
+  // A valid destination basename becomes too long only when Copy creates
+  // its staging directory after the profile switch.
+  const auto failing_workspace = fixture.workspace / std::string(250, 'x');
+  const auto failed = fixture.views.activate(
+      second_environment.id, {.profile = "test-profile",
+                              .into = failing_workspace,
+                              .mode = memix::ActivationMode::Copy});
+  INFO((failed ? "unexpected success" : failed.error().message));
+  REQUIRE_FALSE(failed);
+  CHECK(failed.error().message.contains(".tmp-"));
 
   const fs::path profile_dir = fixture.profile_dir("test-profile");
   REQUIRE(read_link(profile_dir / "current") == fs::path("generations/1"));
@@ -1183,12 +1144,12 @@ TEST_CASE("copy activation rejects a matching forged marker without replacing "
   write_file(valuable / "sentinel", "valuable user data\n");
 
   const std::string forged_marker =
-      std::format("{{\"schema\":\"memix.view.activation.marker.v1\","
+      std::format("{{\"schema\":\"memix.view.activation.marker.v2\","
                   "\"profile\":\"{}\",\"generation\":1,"
-                  "\"environment\":\"{}\",\"derivation\":\"{}\","
+                  "\"environment\":\"{}\","
                   "\"activated_at\":\"2026-01-01T00:00:00Z\",\"mode\":\"copy\","
                   "\"workspace\":\"{}\"}}",
-                  profile, environment.id, environment.derivation.id,
+                  profile, environment.id,
                   activation_workspace_path(valuable).generic_string());
   const fs::path marker_path = valuable / ".memix-activation.json";
   write_file(marker_path, forged_marker);
@@ -1345,7 +1306,6 @@ TEST_CASE("activation status resolves link chains and rejects foreign paths",
   REQUIRE(status->profile == "test-profile");
   REQUIRE(status->generation == 1);
   REQUIRE(status->environment_id == environment.id);
-  REQUIRE(status->derivation_id == environment.derivation.id);
 
   const fs::path untouched = fixture.workspace / "nothing-here";
   const memix::ViewResult<memix::ViewActivationStatus> inactive =
@@ -1387,7 +1347,7 @@ TEST_CASE("deactivate removes the workspace link and optionally wipes the "
   REQUIRE((copied_status->permissions() & fs::perms::owner_write)
           == fs::perms::none);
   const memix::FsResult<fs::file_status> tree_status_before =
-      fs::status(environment.derivation.tree_path);
+      fs::status(environment.derivations.at(0).tree_path);
   REQUIRE(tree_status_before.has_value());
   const memix::ViewResult<memix::ViewDeactivation> wiped =
       fixture.views.deactivate(fixture.memory_link(), true);
@@ -1395,7 +1355,7 @@ TEST_CASE("deactivate removes the workspace link and optionally wipes the "
   REQUIRE(wiped->wiped_profile);
   REQUIRE_FALSE(path_exists(fixture.profile_dir("test-profile")));
   const memix::FsResult<fs::file_status> tree_status_after =
-      fs::status(environment.derivation.tree_path);
+      fs::status(environment.derivations.at(0).tree_path);
   REQUIRE(tree_status_after.has_value());
   REQUIRE(tree_status_after->permissions()
           == tree_status_before->permissions());
@@ -1414,10 +1374,11 @@ TEST_CASE("deactivate rejects a self-referential marker for a missing "
   REQUIRE(fs::create_directories(copied));
   write_file(copied / "sentinel", "keep me\n");
   write_file(copied / ".memix-activation.json",
-             std::format("{{\"schema\":\"memix.view.activation.marker.v1\","
+             std::format("{{\"schema\":\"memix.view.activation.marker.v2\","
                          "\"profile\":\"missing-profile\",\"generation\":1,"
-                         "\"environment\":\"forged-environment\","
-                         "\"derivation\":\"forged-derivation\","
+                         "\"environment\":"
+                         "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                         "aaaaaaaaaaaaa\","
                          "\"activated_at\":\"2026-01-01T00:00:00Z\","
                          "\"mode\":\"copy\",\"workspace\":\"{}\"}}",
                          activation_workspace_path(copied).generic_string()));
@@ -1585,13 +1546,10 @@ TEST_CASE("profile wipe rejects forged metadata for a valid copy profile",
   std::string marker = read_file(marker_path);
   const std::size_t environment_position = marker.find(environment.id);
   REQUIRE(environment_position != std::string::npos);
-  marker.replace(environment_position, environment.id.size(),
-                 "forged-environment");
-  const std::size_t derivation_position =
-      marker.find(environment.derivation.id);
-  REQUIRE(derivation_position != std::string::npos);
-  marker.replace(derivation_position, environment.derivation.id.size(),
-                 "forged-derivation");
+  marker.replace(
+      environment_position, environment.id.size(),
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  CHECK_FALSE(marker.contains("\"derivation\""));
   REQUIRE(fs::permissions(marker_path, fs::perms::owner_all));
   write_file(marker_path, marker);
 
@@ -1654,10 +1612,11 @@ TEST_CASE("unsafe copy marker profiles are rejected before deactivation",
   const fs::path copied = fixture.memory_link();
   REQUIRE(fs::create_directories(copied));
   write_file(copied / ".memix-activation.json",
-             std::format("{{\"schema\":\"memix.view.activation.marker.v1\","
+             std::format("{{\"schema\":\"memix.view.activation.marker.v2\","
                          "\"profile\":\"{}\",\"generation\":1,"
-                         "\"environment\":\"forged-environment\","
-                         "\"derivation\":\"forged-derivation\","
+                         "\"environment\":"
+                         "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                         "aaaaaaaaaaaaa\","
                          "\"activated_at\":\"2026-01-01T00:00:00Z\","
                          "\"mode\":\"copy\",\"workspace\":\"{}\"}}",
                          victim.generic_string(), copied.generic_string()));
@@ -1749,4 +1708,65 @@ TEST_CASE("rollback does not create a missing profile", "[activation]") {
   REQUIRE_FALSE(rolled_back.has_value());
   REQUIRE(rolled_back.error().kind == memix::ErrorKind::NotFound);
   REQUIRE_FALSE(path_exists(missing_profile));
+}
+
+TEST_CASE("multi-derivation activation and rollback replay frozen environment "
+          "bindings",
+          "[activation][d2]") {
+  ActivationFixture f;
+  memix::ActivationMode mode = memix::ActivationMode::Link;
+  SECTION("link") {}
+  SECTION("copy") { mode = memix::ActivationMode::Copy; }
+  write_file(f.source, "one\n");
+  ingest_rules(f.store, f.source, "one");
+  const auto expression =
+      f.views.expression_from_sources({std::string(kRulesLocator)});
+  REQUIRE(expression);
+  const auto one =
+      f.views.select(*expression, {.intent = "first guidance", .name = {}});
+  REQUIRE(one);
+  write_file(f.source, "two\n");
+  ingest_rules(f.store, f.source, "two");
+  const auto two =
+      f.views.select(*expression, {.intent = "second guidance", .name = {}});
+  REQUIRE(two);
+  const std::vector<memix::ViewEnvironmentBinding> bindings{
+      {.mount = "one", .derivation_id = one->id, .output_role = "file_tree"},
+      {.mount = "two", .derivation_id = two->id, .output_role = "file_tree"}};
+  const auto first =
+      f.views.compose(bindings, {.intent = "frozen assembly", .name = {}});
+  REQUIRE(first);
+  const auto activation = f.activate(*first, "multi", mode);
+  CHECK(activation.environment_id == first->id);
+  const auto readme = read_file(f.memory_link() / "README.md");
+  CHECK(readme.contains(one->id));
+  CHECK(readme.contains(two->id));
+  CHECK(readme.contains("first guidance"));
+  CHECK(readme.contains("second guidance"));
+  CHECK(readme.contains("frozen assembly"));
+  CHECK(read_file(f.memory_link() / "one/rules/repo/AGENTS.md") == "one\n");
+  CHECK(read_file(f.memory_link() / "two/rules/repo/AGENTS.md") == "two\n");
+  const auto metadata =
+      read_file(f.profile_dir("multi") / "generations/1.json");
+  CHECK(metadata.contains("memix.view.activation.v2"));
+  CHECK_FALSE(metadata.contains("\"derivation\""));
+  REQUIRE(f.views.define_composition(
+      bindings, {.intent = "mutable catalog", .name = {}}));
+  f.activate(*first, "multi", mode);
+  CHECK(read_file(f.memory_link() / "README.md") == readme);
+  const auto second = f.views.compose(
+      {{.mount = "one", .derivation_id = two->id, .output_role = "file_tree"},
+       {.mount = "two", .derivation_id = one->id, .output_role = "file_tree"}});
+  REQUIRE(second);
+  f.activate(*second, "multi", mode);
+  CHECK(read_file(f.memory_link() / "one/rules/repo/AGENTS.md") == "two\n");
+  REQUIRE(f.views.list_derivations()->size() == 2);
+  REQUIRE(fs::remove_all(f.store_root / "views/quests" / first->ir_hash));
+  REQUIRE(fs::remove_all(f.store_root / "views/quests" / one->ir_hash));
+  const auto rolled = f.views.rollback("multi");
+  REQUIRE(rolled);
+  CHECK(rolled->environment_id == first->id);
+  CHECK(read_file(f.memory_link() / "README.md") == readme);
+  CHECK(read_file(f.memory_link() / "one/rules/repo/AGENTS.md") == "one\n");
+  CHECK(read_file(f.memory_link() / "two/rules/repo/AGENTS.md") == "two\n");
 }

@@ -73,33 +73,40 @@ Never edit projection files: they hardlink immutable blobs. Do not use `expose` 
 
 ## Quests: Discover, Define, Resolve
 
-A Quest stores a reusable query plus name/intent annotations; resolutions associate it with built Environments. Use the public catalog:
+A Quest stores a canonical recipe and mutable name/intent annotations.
+Selection results are D; composition results are E. Discover by metadata:
 
 ```text
 memix view find deployment --json
 memix view find deployment postgres --json
 memix view find --covers documents/projects/example/decisions.md --json
 memix view quests --json
-```
-
-`find` matches substrings in name and intent, with ASCII case-insensitivity. Several terms are an AND filter, not alternatives or semantic search. Terms and `--covers` also combine as filters. Plain tables truncate long annotations; use JSON for their full text.
-
-`--covers` checks structural relationships against the Quest's direct context inputs, not whether content supports a claim. It does not traverse composed `--view` inputs. Thus, no coverage match does not rule out a relevant composed Environment; inspect its metadata and derived paths instead.
-
-```text
-memix view define --source documents/projects/example/ --name "Example decisions" --intent "Project decisions; start at documents/projects/example/decisions.md" --json
+memix view define --kind selection --source documents/projects/example/ --name "Example decisions" --intent "Project decisions" --json
 memix view resolve <quest-id> --json
 memix view freshness <quest-id> --json
 ```
 
-`define` creates or annotates a Quest without building. `resolve` builds its query; `build` defines and resolves in one operation. Equivalent canonical queries reuse their Quest identity. Retain the Quest ID from `define` or catalog JSON; an Environment ID is not a Quest ID.
+`find` is ASCII case-insensitive substring matching on name/intent, not payload
+or semantic search. Multiple terms and `--covers` are AND filters.
+`--covers` inspects direct Store selectors, not a composition's transitive
+files. An empty metadata search is not proof that memory is absent.
 
-Before following a Quest's latest result:
+`define` registers a recipe without materialization; its default kind is
+selection. `define --kind composition --mount D[=MOUNT]` registers pinned
+bindings. `select/compose/resolve --json` return `quest`, typed `result`
+and `inserted`. Discovery returns `result_kind` and `latest_result`.
 
-- If `resolution_count` is zero or `latest_environment_id` is empty, resolve it when building fits the request. `freshness` on an unresolved Quest reports an error, not a fresh result.
-- Otherwise check `freshness`, and reuse the catalog's latest Environment or resolve stale inputs as appropriate. Resolve failure does not authorize dropping inputs or substituting unrelated material.
-- Freshness compares recorded context-input generations with their selected versions. Deleted followed refs have `current_generation: null`, `pinned: false`, and `fresh: false`.
-- Composed Environment inputs are content-pinned and omitted from this comparison. A View-only Quest has `inputs: []` and `stale: false`, even if the original upstream sources have changed.
+Before choosing a current result:
+
+- A null `latest_result` means there is no usable latest result in the catalog.
+  Resolve only when appropriate; freshness requires an existing resolution.
+- Otherwise preserve its `kind` and full `id`. An explicit historical D/E
+  must not be replaced just because a newer result exists.
+- Selection freshness compares per-input source generations. Deleted refs have
+  `current_generation: null`, `pinned: false`, `fresh: false`.
+- Composition pins D IDs and has no ref drift. Re-resolving it does not refresh
+  the Ds. Resolve the selection and explicitly compose updated D IDs when
+  authorized; replacing a D changes the composition Quest.
 
 ## Source Locators and Version Choice
 
@@ -114,48 +121,75 @@ Before following a Quest's latest result:
 
 Directory locators end in `/` before any `@version`. These are source-generation refs, not Profile generation numbers. The CLI can read custom refs but does not create or manage them.
 
-An unqualified locator follows latest at build/resolve time. The resulting Environment remains immutable; rerunning the query after its refs move may produce another Environment. Use followed sources for ongoing context and explicit generation pins for reproducible inputs. Do not silently refresh a supplied historical Environment.
+An unqualified locator follows latest at select/resolve time. The resulting D remains immutable; changed refs may produce a new D. Existing E bindings do not follow it. Use explicit source-generation pins for reproducible inputs; never silently refresh a supplied historical D/E.
 
-## Build and Compose Environments
+## Select Derivations and Compose Environments
 
 ```text
-memix view build --source rules/projects/example/AGENTS.md --source documents/projects/example/ --name "Example workspace" --intent "Project rules and decisions for current work" --json
-memix view build --view <environment-a> --view <environment-b> --intent "Combined project context" --json
-memix view build --view <environment-a>=prior --source documents/projects/example/decisions.md --json
+memix view select --source rules/projects/example/AGENTS.md --source documents/projects/example/ --name "Example selection" --intent "Project rules and decisions" --json
+memix view compose --mount <derivation-a>=rules --mount <derivation-b>=docs --intent "Combined project context" --json
+memix view compose --mount <derivation-id> --json
 ```
 
-The only target is `file_tree`, also the default. It packages selected files at stable paths without merging their contents. Use one source if that is sufficient; do not create a wrapper View solely to select an existing Environment.
+The implemented target is raw-only `file_tree`. Selection produces D without
+E; composition binds existing Ds without producing another D.
+`--mount DERIVATION[=MOUNT]` accepts a D ID or unique D prefix, then pins the
+full ID. Root mount is omitted or `.`; paths must be safe relative POSIX paths.
 
-`--view ENVIRONMENT[=MOUNT]` accepts a full Environment ID or unique prefix and may repeat. It pins the resolved full ID, not a Profile's mutable current pointer. With no mount, upstream paths stay unchanged; an optional safe relative mount prefixes them.
+- Raw selection may deduplicate the same path/blob while preserving all input
+  resolutions. Different blobs at the same selected path conflict.
+- Composition canonicalizes binding order. Duplicate bindings, any colliding
+  final file paths (even identical bytes), and file/directory conflicts fail.
+  Directories may merge. Use distinct mounts or ask which sources are intended.
+- Composition does not accept E, Store paths, Quest IDs, latest, or subtree
+  mounts. Reuse D bindings explicitly; do not re-ingest outputs to compose.
 
-- Same output path and same blob deduplicate.
-- Same output path and different blobs conflict. Use distinct mounts if both versions are needed, or choose the intended version; do not silently discard a source.
-- Composition preserves direct and transitive upstream Environment, Derivation, artifact, and raw-object IDs. A View is a derived input, not another source type; do not ingest its output merely to reference it.
+Name/intent explain supported scope and entry paths. D and E each freeze their
+own recipe/guidance; updating catalog annotations does not alter saved replay.
+Changing composition guidance and recomposing changes only E. Activation's
+README lists E plus every canonical D binding and frozen guidance, not the
+complete machine recipe. The assembled E root `README.md` is reserved.
 
-Give the query a concise searchable name. Intent should explain source-supported scope and use; include entry paths, directory roles, and version conventions when useful for navigation. Do not claim coverage absent from the selected files.
-
-Quest name, intent, and query are snapshotted into the Derivation at build time and participate in its identity. Changing annotations and rebuilding can change the Environment even with identical payloads. Updating the catalog alone leaves existing Environments unchanged; source `freshness` does not detect an annotation-only change. Rebuild/resolve when the new navigation description is wanted.
-
-Activation generates a root `README.md` with Environment/Derivation IDs and the frozen Quest ID, name, and intent; it omits the full query definition. Re-activation and rollback reproduce that snapshot, not the latest catalog wording. The generated README is an attachment file, not part of the derived payload tree. Root `README.md` is reserved for activation; an Environment already containing that output path cannot be activated.
+Old `build/--view`, D-v1/v2/v3, E-v1/v2, and old Quest/Profile formats are
+unsupported. There is no migration or fallback. Report errors; do not delete,
+rehash, or silently replace the user's Store to get a successful command.
 
 ## Read, Audit, and Interpret Usage
 
 ```text
-memix view tree <environment-id> --depth 2 --json
-memix view tree <environment-id> --path documents/projects/example --depth 2 --json
-memix view cat <environment-id> documents/projects/example/decisions.md
-memix view show <environment-id> --json
+memix view ls derivation:<derivation-id>
+memix view tree derivation:<derivation-id> --depth 2 --json
+memix view cat derivation:<derivation-id> documents/projects/example/decisions.md
+memix view tree environment:<environment-id> --path docs --depth 2 --json
+memix view cat environment:<environment-id> docs/documents/projects/example/decisions.md
+memix view show derivation:<derivation-id> --json
+memix view show environment:<environment-id> --json
 memix view stats <quest-id> --json
 ```
 
-Use derived paths from `tree`, especially for mounted compositions. `tree` and `cat` work without activation. `show` is manifest/provenance inspection, not a payload read.
+Use output paths returned by `ls/tree`, especially under mounts. D browsing
+needs no E or Profile. Bare IDs always mean E; they never probe both namespaces.
+`cat` returns verified bytes; `show` is receipt-free provenance inspection.
+D manifests expose frozen recipes and source resolutions; E manifests expose
+composition recipes, bindings and closure. Follow D bindings for source
+provenance rather than assuming E has one owner.
 
-`build --json`, `resolve --json`, and `show --json` expose the Environment ID, binding Derivation IDs, and closure IDs, not filesystem paths or each source's resolved generation. Plain build/show output includes the Environment manifest path, not the materialized tree path. For exact source provenance, retain ingest generation IDs or inspect the Derivation manifest; do not infer resolved generations from Environment JSON alone.
+`list --json` is an E inventory with binding/file/byte counts.
+`list --kind derivation --json` inventories D. Use the Quest catalog for
+task discovery rather than repeatedly dumping these inventories.
 
-`memix view list --json` is a low-level Environment inventory with full IDs, Derivation IDs, file/byte counts, and upstream counts. Use it for debugging, not as the default discovery catalog.
+Successful `cat/ls/tree` add best-effort typed receipts to the object's own
+Quest. E activation (including reactivation) and rollback belong to its
+composition Quest, not its mounted selection Quests. No per-binding fan-out
+occurs. `ls` counts separately; `stats` separates reads by D and E.
+Inspector/show/deactivation do not count consumption; ordinary attachment
+reads bypass CLI receipts. Usage is not comprehension, relevance, or truth.
 
-Successful CLI `cat`, `tree`, and `activate` record best-effort consumption receipts. Activation records even a no-op reactivation; rollback records the Environment it recommits; deactivate records nothing. Ordinary attachment reads bypass CLI receipts. `stats` and catalog usage counts show observed operations, not payload comprehension, semantic relevance, or evidence quality.
+`stats` reports corrupt logs; history refuses append-through-corruption.
+A history error may name an already published reusable D/E. Retain that ID,
+report the failure, and do not silently repair logs or switch a Profile.
 
-The CLI does not provide semantic conflict resolution, summarization/context-pack generation, or remote synchronization. Those are not implicit effects of a successful build.
-
-For activation, shared Profiles, copies, rollback, or recovery, read [Profiles and recovery](profiles-and-recovery.md).
+There is no semantic conflict resolution, external derive, generated/local
+payload support, context-pack generation or remote synchronization.
+For activation, shared Profiles, Copy, rollback and recovery, read
+[Profiles and recovery](profiles-and-recovery.md).

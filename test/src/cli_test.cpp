@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -143,12 +144,11 @@ CliResult run_command(const fs::path &directory, std::string_view command,
 }
 
 std::string latest_environment(const fs::path &directory) {
-  const memix::ViewService views{memix::Store(directory / "store with spaces")};
-  const auto quests = views.list_quests();
-  REQUIRE(quests);
-  REQUIRE(quests->size() == 1);
-  REQUIRE_FALSE(quests->front().latest_environment_id.empty());
-  return quests->front().latest_environment_id;
+  const auto text = read_text(directory / "stdout.txt");
+  const std::string prefix = "\"result\":{\"kind\":\"environment\",\"id\":\"";
+  const auto begin = text.find(prefix);
+  REQUIRE(begin != std::string::npos);
+  return text.substr(begin + prefix.size(), 64);
 }
 
 } // namespace
@@ -200,8 +200,8 @@ TEST_CASE("unified CLI provides nested help", "[cli]") {
   }
   for (const auto *command :
        {"define", "find", "resolve", "freshness", "quests", "stats", "list",
-        "tree", "cat", "build", "show", "activate", "generations", "rollback",
-        "deactivate", "status"}) {
+        "tree", "ls", "cat", "select", "compose", "show", "activate",
+        "generations", "rollback", "deactivate", "status"}) {
     const auto help = run(directory.path(), {"view", command, "--help"});
     REQUIRE(help.status == 0);
     REQUIRE(help.output.contains(std::format("Usage: memix view {}", command)));
@@ -349,9 +349,18 @@ TEST_CASE("unified CLI preserves store view and activation workflows",
         {"ingest", "--type", "rules", "--dest", "AGENTS.md", source.string()});
   };
   const auto build = [&] {
-    return run_command(root, "view",
-                       {"build", "--source", "rules/AGENTS.md", "--intent",
-                        "CLI migration test", "--json"});
+    const auto selected = run_command(root, "view",
+                                      {"select", "--source", "rules/AGENTS.md",
+                                       "--intent", "CLI selection", "--json"});
+    INFO(selected.error);
+    REQUIRE(selected.status == 0);
+    const std::string prefix = "\"id\":\"";
+    const auto begin = selected.output.find(prefix);
+    REQUIRE(begin != std::string::npos);
+    const auto id = selected.output.substr(begin + prefix.size(), 64);
+    return run_command(
+        root, "view",
+        {"compose", "--mount", id, "--intent", "CLI composition", "--json"});
   };
   const auto activate = [&](const std::string &environment) {
     return run_command(root, "view",
@@ -442,4 +451,162 @@ TEST_CASE("unified binary runs without sibling executables", "[cli]") {
                      {"view", "--store-root", store, "list", "--json"})
               .output
           == "[]\n");
+}
+
+#ifdef __linux__
+TEST_CASE(
+    "environment metadata commands verify large files with bounded memory",
+    "[cli][view][memory]") {
+#ifdef __SANITIZE_ADDRESS__
+  SKIP("AddressSanitizer reserves more virtual memory than this test allows.");
+#elifdef __has_feature
+#if __has_feature(address_sanitizer)
+  SKIP("AddressSanitizer reserves more virtual memory than this test allows.");
+#endif
+#endif
+  TemporaryDirectory directory;
+  const auto &root = directory.path();
+  const auto source = root / "large.bin";
+  write_file(source, "large payload\n");
+  constexpr std::uintmax_t kPayloadBytes = std::uintmax_t{64} * 1024U * 1024U;
+  std::error_code error;
+  std::filesystem::resize_file(source, kPayloadBytes, error);
+  REQUIRE_FALSE(error);
+  const memix::Store store(root / "store with spaces");
+  REQUIRE(store.ingest_file({.type = memix::MemoryObjectType::Documents,
+                             .source_path = source,
+                             .context_path = "large.bin",
+                             .message = "large payload"}));
+  const auto small = root / "small.md";
+  write_file(small, "small payload\n");
+  REQUIRE(store.ingest_file({.type = memix::MemoryObjectType::Documents,
+                             .source_path = small,
+                             .context_path = "small.md",
+                             .message = "small payload"}));
+  const memix::ViewService views(store);
+  const auto expression = views.expression_from_sources(
+      {"documents/large.bin", "documents/small.md"});
+  REQUIRE(expression);
+  const auto selected = views.select(*expression);
+  REQUIRE(selected);
+
+  // Limit only a fresh CLI subprocess, not Catch2 or the fixture setup. The
+  // previous full-buffer verification aborts even for ls/list at this limit.
+  const auto limited = [&](const std::vector<std::string> &arguments) {
+    std::vector<std::string> shell_arguments{
+        "-c",
+        "ulimit -c 0 && ulimit -v 131072 && exec \"$@\"",
+        "memix-limited",
+        unified_binary(),
+        "view",
+        "--store-root",
+        store.root().string(),
+    };
+    shell_arguments.append_range(arguments);
+    const auto result = run_binary(root, "/bin/sh", shell_arguments);
+    INFO(result.error);
+    REQUIRE(result.status == 0);
+    return result.output;
+  };
+  const auto composed = limited({"compose", "--mount", selected->id, "--json"});
+  CHECK(composed.contains("\"kind\":\"environment\""));
+  const auto environment = latest_environment(root);
+  CHECK(limited({"list", "--json"}).contains(environment));
+  CHECK(limited({"ls", environment, "documents", "--json"})
+            .contains("documents/large.bin"));
+  CHECK(limited({"tree", environment, "--depth", "2", "--json"})
+            .contains("documents/small.md"));
+  CHECK(limited({"cat", environment, "documents/small.md"})
+        == "small payload\n");
+  CHECK(limited({"show", environment, "--json"})
+            .contains("memix.view.environment.v3"));
+  const auto attachment = root / "attachment";
+  CHECK(limited({"activate", environment, "--into", attachment.string()})
+            .contains(environment));
+  CHECK(read_text(attachment / "documents/small.md") == "small payload\n");
+}
+#endif
+
+TEST_CASE("view CLI exposes typed selection composition and independent "
+          "derivation reads",
+          "[cli][d2]") {
+  TemporaryDirectory directory;
+  const auto root = directory.path();
+  const auto source = root / "input.md";
+  write_file(source, "independent\n");
+  REQUIRE(run_command(root, "store",
+                      {"ingest", "--type", "rules", "--dest", "AGENTS.md",
+                       source.string()})
+              .status
+          == 0);
+  const auto invoke = [&](const std::vector<std::string> &args) {
+    const auto result = run_command(root, "view", args);
+    INFO(result.error);
+    REQUIRE(result.status == 0);
+    return result.output;
+  };
+  const auto field = [](const std::string &json, std::string_view name) {
+    const auto prefix = std::format("\"{}\":\"", name);
+    const auto at = json.find(prefix);
+    REQUIRE(at != std::string::npos);
+    return json.substr(at + prefix.size(), 64);
+  };
+  const auto selected =
+      invoke({"select", "--source", "rules/AGENTS.md", "--json"});
+  CHECK(selected.contains("\"kind\":\"derivation\""));
+  const auto d = field(selected, "id");
+  const auto dq = field(selected, "quest");
+  CHECK(invoke({"list", "--json"}) == "[]\n");
+  CHECK(invoke({"list", "--kind", "derivation", "--json"}).contains(d));
+  CHECK(invoke({"show", "derivation:" + d, "--json"})
+            .contains("memix.view.derivation.v4"));
+  CHECK(invoke({"cat", "derivation:" + d, "rules/AGENTS.md"})
+        == "independent\n");
+  CHECK(invoke({"tree", "derivation:" + d, "--json"})
+            .contains("rules/AGENTS.md"));
+  CHECK(invoke({"ls", "derivation:" + d, "rules", "--json"})
+            .contains("rules/AGENTS.md"));
+  const auto denied = run_command(
+      root, "view",
+      {"activate", "derivation:" + d, "--into", (root / "denied").string()});
+  CHECK(denied.status != 0);
+  CHECK(denied.error.contains("compose"));
+  CHECK_FALSE(fs::exists(root / "denied").value_or(true));
+  CHECK(invoke({"list", "--json"}) == "[]\n");
+  const auto definition =
+      invoke({"define", "--kind", "composition", "--mount", d + "=left",
+              "--mount", d + "=right", "--json"});
+  CHECK(definition.contains("\"result_kind\":\"environment\""));
+  CHECK(invoke({"list", "--json"}) == "[]\n");
+  const auto eq = field(definition, "ir_hash");
+  const auto resolved = invoke({"resolve", eq, "--json"});
+  CHECK(resolved.contains("\"kind\":\"environment\""));
+  const auto e = field(resolved, "id");
+  CHECK(invoke({"cat", "environment:" + e, "right/rules/AGENTS.md"})
+        == "independent\n");
+  CHECK(invoke({"cat", e, "left/rules/AGENTS.md"}) == "independent\n");
+  CHECK(invoke({"show", e, "--json"}).contains("memix.view.environment.v3"));
+  CHECK(
+      invoke({"freshness", eq, "--json"}).contains("\"kind\":\"environment\""));
+  CHECK(invoke({"quests", "--json"}).contains("\"latest_result\":{"));
+  CHECK(invoke({"stats", dq, "--json"}).contains("\"read_count\":3"));
+  CHECK(invoke({"stats", dq, "--json"}).contains("\"ls_count\":1"));
+  CHECK(invoke({"stats", eq, "--json"}).contains("\"read_count\":2"));
+  const memix::ViewService views{memix::Store(root / "store with spaces")};
+  REQUIRE(views.list_derivations()->size() == 1);
+  CHECK(
+      run_command(root, "view", {"build", "--source", "rules/AGENTS.md"}).status
+      != 0);
+  CHECK(run_command(root, "view", {"compose", "--view", e}).status != 0);
+  const auto derivation = views.resolve_derivation(d);
+  REQUIRE(derivation);
+  const auto &blob = derivation->resolved_files.front().blob;
+  const auto bytes = blob.object_dir / blob.content_path;
+  REQUIRE(fs::permissions(bytes, fs::perms::owner_all));
+  write_file(bytes, "corrupted\n");
+  const auto failed =
+      run_command(root, "view", {"cat", "derivation:" + d, "rules/AGENTS.md"});
+  CHECK(failed.status != 0);
+  CHECK(failed.output.empty());
+  CHECK(invoke({"stats", dq, "--json"}).contains("\"read_count\":3"));
 }

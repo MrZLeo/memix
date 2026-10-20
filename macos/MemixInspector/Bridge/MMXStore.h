@@ -63,15 +63,6 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
 @property(nonatomic, copy, readonly) NSArray<NSString *> *environments;
 @end
 
-@interface MMXResolvedViewEnvironmentInput : NSObject
-@property(nonatomic, copy, readonly) NSString *environmentID;
-@property(nonatomic, copy, readonly) NSString *derivationID;
-@property(nonatomic, copy, readonly) NSString *artifactID;
-@property(nonatomic, copy, readonly) NSString *outputRole;
-@property(nonatomic, copy, readonly) NSString *mount;
-@property(nonatomic, strong, readonly) MMXViewEnvironmentClosure *closure;
-@end
-
 @interface MMXViewDerivation : NSObject
 @property(nonatomic, copy, readonly) NSString *derivationID;
 @property(nonatomic, copy, readonly) NSString *irHash;
@@ -80,8 +71,6 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
     NSArray<MMXResolvedViewFile *> *resolvedFiles;
 @property(nonatomic, copy, readonly)
     NSArray<MMXViewDerivationOutput *> *outputs;
-@property(nonatomic, copy, readonly)
-    NSArray<MMXResolvedViewEnvironmentInput *> *environmentInputs;
 @property(nonatomic, copy, readonly) NSString *manifestPath;
 @property(nonatomic, copy, readonly) NSString *treePath;
 @property(nonatomic, readonly) BOOL inserted;
@@ -99,7 +88,10 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
 @property(nonatomic, copy, readonly)
     NSArray<MMXViewEnvironmentBinding *> *bindings;
 @property(nonatomic, strong, readonly) MMXViewEnvironmentClosure *closure;
-@property(nonatomic, strong, readonly) MMXViewDerivation *derivation;
+@property(nonatomic, copy, readonly) NSArray<MMXViewDerivation *> *derivations;
+@property(nonatomic, copy, readonly)
+    NSArray<MMXResolvedViewFile *> *resolvedFiles;
+@property(nonatomic, copy, readonly) NSString *irHash;
 @property(nonatomic, readonly) BOOL inserted;
 @end
 

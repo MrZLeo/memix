@@ -304,7 +304,7 @@ final class InspectorModel: ObservableObject {
             if let activeViewEnvironment {
                 let refreshed = try store.resolveViewEnvironment(id: activeViewEnvironment.environmentID)
                 self.activeViewEnvironment = refreshed
-                activeResolvedFiles = refreshed.derivation.resolvedFiles
+                activeResolvedFiles = refreshed.resolvedFiles
                 objects = visibleObjects(in: activeResolvedFiles.map(InspectorFile.init(resolvedFile:)))
                 files = []
             } else {
@@ -382,7 +382,7 @@ final class InspectorModel: ObservableObject {
         }
 
         activeViewEnvironment = environment
-        activeResolvedFiles = environment.derivation.resolvedFiles
+        activeResolvedFiles = environment.resolvedFiles
         selectedFileID = nil
         selectedObjectID = nil
         previewText = ""

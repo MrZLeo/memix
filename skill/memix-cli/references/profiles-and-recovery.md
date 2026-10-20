@@ -4,6 +4,10 @@ Read the main [SKILL.md](../SKILL.md) for task routing and authorization. Exampl
 
 ## Activate Only When an Attachment Is Needed
 
+Only E can be activated. Generation/marker v2 records reference E, not a single
+D. Old view/Profile formats are unsupported; `--force` is not a migration
+command. Report incompatibility without deleting or rewriting Store history.
+
 ```text
 memix view activate <environment-id> --into ./.memory
 memix view status --into ./.memory
@@ -16,7 +20,7 @@ Before replacing an existing active attachment, understand its role in the curre
 
 Read `<attachment>/README.md` for the activated Environment's frozen Quest scope and entry points, then read the relevant payload. Retain the Environment ID, Profile generation number, and attachment path returned by activation. A successful mount alone does not mean the model has read the memory.
 
-Activation never grants write access to memory. Never edit through a linked attachment; copied files are disposable caches, not editable sources. To update memory, ingest changed source content and build/resolve the intended query before activating its result.
+Activation never grants write access to memory. Never edit through a linked attachment; copied files are disposable caches, not editable sources. To update memory, ingest changed source content, select/resolve the intended D, explicitly compose updated D bindings into E, then activate that E. D itself cannot be activated.
 
 ## Profile Selection
 

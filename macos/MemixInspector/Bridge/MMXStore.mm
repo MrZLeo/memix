@@ -43,9 +43,9 @@ NSError *MMXMakeError(const memix::ViewError &error) {
   return MMXMakeError(MMXString(error.message));
 }
 
-memix::FsError MMXMakeFilesystemError(std::string_view operation,
-                                      const std::error_code &error,
-                                      std::vector<fs::path> paths) {
+memix::FsError
+MMXMakeFilesystemError(std::string_view operation, const std::error_code &error,
+                       std::vector<fs::path> paths) {
   std::string message{operation};
   std::string_view separator = " `";
   for (const fs::path &path : paths) {
@@ -235,15 +235,6 @@ NSData *MMXReadData(const fs::path &path, NSError **out_error) {
   return data;
 }
 
-bool MMXPathIsSafeRelative(const fs::path &path) {
-  if (path.empty() || path.is_absolute()) {
-    return false;
-  }
-  return std::ranges::all_of(path, [](const fs::path &component) {
-    return !component.empty() && component != "." && component != "..";
-  });
-}
-
 bool MMXIsLowerHexSha256(std::string_view value) {
   if (value.size() != kSha256HexLength) {
     return false;
@@ -328,18 +319,6 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
 @implementation MMXViewEnvironmentClosure
 @end
 
-@interface MMXResolvedViewEnvironmentInput ()
-@property(nonatomic, copy, readwrite) NSString *environmentID;
-@property(nonatomic, copy, readwrite) NSString *derivationID;
-@property(nonatomic, copy, readwrite) NSString *artifactID;
-@property(nonatomic, copy, readwrite) NSString *outputRole;
-@property(nonatomic, copy, readwrite) NSString *mount;
-@property(nonatomic, strong, readwrite) MMXViewEnvironmentClosure *closure;
-@end
-
-@implementation MMXResolvedViewEnvironmentInput
-@end
-
 @interface MMXViewDerivation ()
 @property(nonatomic, copy, readwrite) NSString *derivationID;
 @property(nonatomic, copy, readwrite) NSString *irHash;
@@ -348,8 +327,6 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
     NSArray<MMXResolvedViewFile *> *resolvedFiles;
 @property(nonatomic, copy, readwrite)
     NSArray<MMXViewDerivationOutput *> *outputs;
-@property(nonatomic, copy, readwrite)
-    NSArray<MMXResolvedViewEnvironmentInput *> *environmentInputs;
 @property(nonatomic, copy, readwrite) NSString *manifestPath;
 @property(nonatomic, copy, readwrite) NSString *treePath;
 @property(nonatomic, readwrite) BOOL inserted;
@@ -373,7 +350,10 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
 @property(nonatomic, copy, readwrite)
     NSArray<MMXViewEnvironmentBinding *> *bindings;
 @property(nonatomic, strong, readwrite) MMXViewEnvironmentClosure *closure;
-@property(nonatomic, strong, readwrite) MMXViewDerivation *derivation;
+@property(nonatomic, copy, readwrite) NSArray<MMXViewDerivation *> *derivations;
+@property(nonatomic, copy, readwrite)
+    NSArray<MMXResolvedViewFile *> *resolvedFiles;
+@property(nonatomic, copy, readwrite) NSString *irHash;
 @property(nonatomic, readwrite) BOOL inserted;
 @end
 
@@ -460,30 +440,6 @@ MMXWrapViewEnvironmentClosure(const memix::ViewEnvironmentClosure &closure) {
   return wrapped;
 }
 
-MMXResolvedViewEnvironmentInput *MMXWrapResolvedViewEnvironmentInput(
-    const memix::ResolvedViewEnvironmentInput &input) {
-  MMXResolvedViewEnvironmentInput *const wrapped =
-      [[MMXResolvedViewEnvironmentInput alloc] init];
-  wrapped.environmentID = MMXString(input.environment_id);
-  wrapped.derivationID = MMXString(input.derivation_id);
-  wrapped.artifactID = MMXString(input.artifact_id);
-  wrapped.outputRole = MMXString(input.output_role);
-  wrapped.mount = MMXPathString(input.mount);
-  wrapped.closure = MMXWrapViewEnvironmentClosure(input.closure);
-  return wrapped;
-}
-
-NSArray<MMXResolvedViewEnvironmentInput *> *
-MMXWrapResolvedViewEnvironmentInputs(
-    const std::vector<memix::ResolvedViewEnvironmentInput> &inputs) {
-  NSMutableArray<MMXResolvedViewEnvironmentInput *> *const wrapped =
-      [[NSMutableArray alloc] initWithCapacity:inputs.size()];
-  for (const memix::ResolvedViewEnvironmentInput &input : inputs) {
-    [wrapped addObject:MMXWrapResolvedViewEnvironmentInput(input)];
-  }
-  return wrapped;
-}
-
 MMXViewDerivation *
 MMXWrapViewDerivation(const memix::ViewDerivation &derivation) {
   MMXViewDerivation *const wrapped = [[MMXViewDerivation alloc] init];
@@ -492,8 +448,6 @@ MMXWrapViewDerivation(const memix::ViewDerivation &derivation) {
   wrapped.target = MMXViewTargetKindFromMemory(derivation.target);
   wrapped.resolvedFiles = MMXWrapResolvedViewFiles(derivation.resolved_files);
   wrapped.outputs = MMXWrapViewDerivationOutputs(derivation.outputs);
-  wrapped.environmentInputs =
-      MMXWrapResolvedViewEnvironmentInputs(derivation.environment_inputs);
   wrapped.manifestPath = MMXPathString(derivation.manifest_path);
   wrapped.treePath = MMXPathString(derivation.tree_path);
   wrapped.inserted = derivation.inserted;
@@ -527,7 +481,14 @@ MMXWrapViewEnvironment(const memix::ViewEnvironment &environment) {
   wrapped.manifestPath = MMXPathString(environment.manifest_path);
   wrapped.bindings = MMXWrapViewEnvironmentBindings(environment.bindings);
   wrapped.closure = MMXWrapViewEnvironmentClosure(environment.closure);
-  wrapped.derivation = MMXWrapViewDerivation(environment.derivation);
+  NSMutableArray<MMXViewDerivation *> *derivations =
+      [[NSMutableArray alloc] init];
+  for (const auto &derivation : environment.derivations) {
+    [derivations addObject:MMXWrapViewDerivation(derivation)];
+  }
+  wrapped.derivations = derivations;
+  wrapped.resolvedFiles = MMXWrapResolvedViewFiles(environment.resolved_files);
+  wrapped.irHash = MMXString(environment.ir_hash);
   wrapped.inserted = environment.inserted;
   return wrapped;
 }
@@ -734,33 +695,17 @@ MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
 - (NSData *)readFileTreeViewDataWithEnvironmentID:(NSString *)environmentID
                                        outputPath:(NSString *)outputPath
                                             error:(NSError **)error {
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      MMXResolveViewEnvironment(_root, environmentID);
-  if (!environment) {
-    MMXSetViewError(error, environment.error());
+  const memix::ViewService views{memix::Store(_root)};
+  const auto contents =
+      views.read_output({.kind = memix::ViewObjectKind::Environment,
+                         .id = MMXStdString(environmentID)},
+                        MMXPath(outputPath), false);
+  if (!contents) {
+    MMXSetViewError(error, contents.error());
     return nil;
   }
-
-  const fs::path relative_path = MMXPath(outputPath);
-  if (!MMXPathIsSafeRelative(relative_path)) {
-    MMXSetError(error,
-                MMXMakeError(@"View path must be a relative file path."));
-    return nil;
-  }
-
-  const fs::path file_path = environment->derivation.tree_path / relative_path;
-  const memix::FsResult<fs::file_status> status = fs::symlink_status(file_path);
-  if (!status) {
-    MMXSetViewError(error, MMXMakeViewError(status.error()));
-    return nil;
-  }
-  const bool is_symlink = status->type() == fs::file_type::symlink;
-  if (!is_symlink) {
-    MMXSetError(error, MMXMakeError(@"View file is not present in this view."));
-    return nil;
-  }
-
-  return MMXReadData(file_path, error);
+  return [NSData dataWithBytes:contents->contents.data()
+                        length:contents->contents.size()];
 }
 
 - (MMXIngestResult *)ingestFileAtURL:(NSURL *)sourceURL
@@ -839,8 +784,14 @@ MMXResolveViewEnvironment(const fs::path &root, NSString *environmentID) {
     MMXSetViewError(error, expression.error());
     return nil;
   }
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      views.build(*expression);
+  const auto derivation = views.select(*expression);
+  if (!derivation) {
+    MMXSetViewError(error, derivation.error());
+    return nil;
+  }
+  const auto environment = views.compose({{.mount = {},
+                                           .derivation_id = derivation->id,
+                                           .output_role = "file_tree"}});
   if (!environment) {
     MMXSetViewError(error, environment.error());
     return nil;

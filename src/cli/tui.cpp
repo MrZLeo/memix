@@ -684,8 +684,8 @@ bool load_type_tree(TuiState &state, ListScreen &screen) {
     // top of the stack — no drilled descendants can exist at selection time.
     if (screen.path.empty()) {
       Entry hub(EntryAction::OpenGenerationList,
-                memix::tui::generation_hub_text(
-                    *generation, screen.generation.has_value()),
+                memix::tui::generation_hub_text(*generation,
+                                                screen.generation.has_value()),
                 "enter to browse generations", screen.type);
       hub.id = generation->id;
       entries.push_back(std::move(hub));
@@ -829,8 +829,8 @@ bool load_environment_tree(TuiState &state, ListScreen &screen) {
     return false;
   }
   const memix::tui::EnvironmentTreeSnapshot snapshot =
-      memix::tui::environment_tree_snapshot(
-          environment->derivation.resolved_files, screen.path);
+      memix::tui::environment_tree_snapshot(environment->resolved_files,
+                                            screen.path);
   if (!snapshot.path_exists) {
     record_error(state, std::format("view path does not exist `{}`",
                                     screen.path.generic_string()));
@@ -850,8 +850,8 @@ bool load_environment_tree(TuiState &state, ListScreen &screen) {
   screen.entries = std::move(entries);
   screen.environment_id = environment->id;
   screen.kind = ListKind::EnvironmentTree;
-  screen.scope = std::format("env {} locked",
-                             memix::tui::short_id(screen.environment_id));
+  screen.scope =
+      std::format("env {} locked", memix::tui::short_id(screen.environment_id));
   screen.count = pluralize(snapshot.file_count, "file", "files");
   apply_filter(screen);
   return true;
@@ -872,10 +872,10 @@ bool load_quest_list(TuiState &state, ListScreen &screen) {
             ? std::format("quest {}", memix::tui::short_id(quest.ir_hash))
             : memix::tui::normalize_line_breaks(quest.name);
     Entry row(EntryAction::OpenQuest, title,
-              memix::tui::normalize_line_breaks(std::format(
-                  "{} · {} · {} resolutions · {} reads", quest.intent,
-                  memix::tui::short_id(quest.ir_hash),
-                  quest.resolution_count, quest.read_count)));
+              memix::tui::normalize_line_breaks(
+                  std::format("{} · {} · {} resolutions · {} reads",
+                              quest.intent, memix::tui::short_id(quest.ir_hash),
+                              quest.resolution_count, quest.read_count)));
     row.id = quest.ir_hash;
     row.quest = quest;
     entries.push_back(std::move(row));
@@ -892,8 +892,7 @@ void append_provenance(std::vector<std::string> &lines,
                        const memix::tui::Provenance &provenance) {
   lines.emplace_back();
   lines.emplace_back("Provenance");
-  std::vector<std::string> metadata =
-      memix::tui::provenance_lines(provenance);
+  std::vector<std::string> metadata = memix::tui::provenance_lines(provenance);
   std::ranges::move(metadata, std::back_inserter(lines));
 }
 
@@ -904,8 +903,8 @@ read_content_prefix(const fs::path &path, std::uintmax_t total_size_bytes) {
     return memix::fs::fs_error(
         std::format("failed to open object content `{}`", path.string()));
   }
-  std::string contents(
-      memix::tui::bounded_content_read_size(total_size_bytes), '\0');
+  std::string contents(memix::tui::bounded_content_read_size(total_size_bytes),
+                       '\0');
   if (!contents.empty()) {
     input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
     contents.resize(static_cast<std::size_t>(input.gcount()));
@@ -919,9 +918,12 @@ read_content_prefix(const fs::path &path, std::uintmax_t total_size_bytes) {
 
 bool finish_object_content(TuiState &state, ContentScreen &screen,
                            const memix::StoredObject &object,
-                           memix::tui::Provenance provenance) {
-  const memix::FsResult<std::string> contents = read_content_prefix(
-      object.object_dir / object.content_path, object.size_bytes);
+                           memix::tui::Provenance provenance,
+                           std::optional<std::string> verified = std::nullopt) {
+  const memix::FsResult<std::string> contents =
+      verified ? memix::FsResult<std::string>(std::move(*verified))
+               : read_content_prefix(object.object_dir / object.content_path,
+                                     object.size_bytes);
   if (!contents) {
     record_error(state, contents.error().message);
     return false;
@@ -1002,18 +1004,16 @@ bool load_object_content(TuiState &state, ContentScreen &screen) {
                                memix::tui::Provenance{});
 }
 
-bool
-load_environment_file_content(TuiState &state, ContentScreen &screen) {
+bool load_environment_file_content(TuiState &state, ContentScreen &screen) {
   const memix::ViewResult<memix::ViewEnvironment> environment =
       state.views.resolve_environment(screen.environment_id);
   if (!environment) {
     record_error(state, environment.error().message);
     return false;
   }
-  const auto file =
-      std::ranges::find(environment->derivation.resolved_files, screen.path,
-                        &memix::ResolvedViewFile::output_path);
-  if (file == environment->derivation.resolved_files.end()) {
+  const auto file = std::ranges::find(environment->resolved_files, screen.path,
+                                      &memix::ResolvedViewFile::output_path);
+  if (file == environment->resolved_files.end()) {
     record_error(state, std::format("view file does not exist `{}`",
                                     screen.path.generic_string()));
     return false;
@@ -1031,8 +1031,8 @@ load_environment_file_content(TuiState &state, ContentScreen &screen) {
   screen.kind = ContentKind::EnvironmentFile;
   screen.title = screen.path.generic_string();
   screen.environment_id = environment->id;
-  screen.scope = std::format("env {} locked",
-                             memix::tui::short_id(screen.environment_id));
+  screen.scope =
+      std::format("env {} locked", memix::tui::short_id(screen.environment_id));
   memix::tui::Provenance provenance;
   provenance.generation =
       file->source_generation.empty()
@@ -1046,8 +1046,16 @@ load_environment_file_content(TuiState &state, ContentScreen &screen) {
       file->source_generation.empty()
           ? std::nullopt
           : std::optional<std::string>(file->source_generation);
-  return finish_object_content(state, screen, file->blob,
-                               std::move(provenance));
+  auto verified = state.views.read_output(
+      {.kind = memix::ViewObjectKind::Environment, .id = environment->id},
+      screen.path, false);
+  if (!verified) {
+    record_error(state, verified.error().message);
+    return false;
+  }
+  return finish_object_content(state, screen, verified->file.blob,
+                               std::move(provenance),
+                               std::move(verified->contents));
 }
 
 // The quest screen intentionally assembles all freshness and usage sections in
@@ -1092,8 +1100,8 @@ bool load_quest_content(TuiState &state, ContentScreen &screen) {
   std::vector<std::string> intent_lines = memix::tui::split_labeled_lines(
       {.label = "intent", .value = quest.intent});
   std::ranges::move(intent_lines, std::back_inserter(lines));
-  std::vector<std::string> name_lines = memix::tui::split_labeled_lines(
-      {.label = "name", .value = quest.name});
+  std::vector<std::string> name_lines =
+      memix::tui::split_labeled_lines({.label = "name", .value = quest.name});
   std::ranges::move(name_lines, std::back_inserter(lines));
   lines.insert(
       lines.end(),
@@ -1102,8 +1110,12 @@ bool load_quest_content(TuiState &state, ContentScreen &screen) {
           std::format("created_at: {}", quest.created_at),
           std::format("resolutions: {}", quest.resolution_count),
           std::format("last_resolved_at: {}", quest.last_resolved_at),
-          std::format("latest_derivation: {}", quest.latest_derivation_id),
-          std::format("latest_environment: {}", quest.latest_environment_id),
+          std::format("result_kind: {}", memix::to_string(quest.result_kind)),
+          quest.latest_result
+              ? std::format("latest_result: {}:{}",
+                            memix::to_string(quest.latest_result->kind),
+                            quest.latest_result->id)
+              : "latest_result: none",
           "",
           "Freshness",
       });
@@ -1133,10 +1145,15 @@ bool load_quest_content(TuiState &state, ContentScreen &screen) {
                                 activation.profile,
                                 activation.activation_count));
   }
-  lines.push_back(
-      std::format("reads: {} · cat {} · tree {} · first {} · last {}",
-                  stats->read_count, stats->cat_count, stats->tree_count,
-                  stats->first_read_at, stats->last_read_at));
+  lines.push_back(std::format(
+      "reads: {} · cat {} · ls {} · tree {} · first {} · last {}",
+      stats->read_count, stats->cat_count, stats->ls_count, stats->tree_count,
+      stats->first_read_at, stats->last_read_at));
+  for (const memix::QuestDerivationReads &reads : stats->reads_by_derivation) {
+    lines.push_back(std::format("  derivation {}: {} reads",
+                                memix::tui::short_id(reads.derivation_id),
+                                reads.read_count));
+  }
   for (const memix::QuestEnvironmentReads &reads :
        stats->reads_by_environment) {
     lines.push_back(std::format("  environment {}: {} reads",
@@ -1145,12 +1162,12 @@ bool load_quest_content(TuiState &state, ContentScreen &screen) {
   }
 
   std::optional<std::size_t> environment_line;
-  if (!quest.latest_environment_id.empty()) {
+  if (quest.latest_result
+      && quest.latest_result->kind == memix::ViewObjectKind::Environment) {
     lines.emplace_back();
     environment_line = lines.size();
-    lines.push_back(
-        std::format("Open latest environment {}",
-                    memix::tui::short_id(quest.latest_environment_id)));
+    lines.push_back(std::format("Open latest environment {}",
+                                memix::tui::short_id(quest.latest_result->id)));
   }
   screen.quest = quest;
   screen.kind = ContentKind::Quest;
@@ -1196,9 +1213,9 @@ bool refresh_screen(TuiState &state, TuiScreen &screen) {
   return false;
 }
 
-bool push_type_tree(TuiState &state, memix::MemoryObjectType type,
-                    fs::path path,
-                    std::optional<std::string> generation = std::nullopt) {
+bool
+push_type_tree(TuiState &state, memix::MemoryObjectType type, fs::path path,
+               std::optional<std::string> generation = std::nullopt) {
   ListScreen screen(ListKind::TypeTree);
   screen.type = type;
   screen.path = std::move(path);
@@ -1265,9 +1282,9 @@ bool push_quest_list(TuiState &state) {
   return true;
 }
 
-bool push_store_file(TuiState &state, memix::MemoryObjectType type,
-                     fs::path path,
-                     std::optional<std::string> generation = std::nullopt) {
+bool
+push_store_file(TuiState &state, memix::MemoryObjectType type, fs::path path,
+                std::optional<std::string> generation = std::nullopt) {
   ContentScreen screen(ContentKind::StoreFile);
   screen.type = type;
   screen.path = std::move(path);
@@ -1281,8 +1298,8 @@ bool push_store_file(TuiState &state, memix::MemoryObjectType type,
   return true;
 }
 
-bool push_object(TuiState &state, memix::MemoryObjectType type,
-                 std::string id) {
+bool
+push_object(TuiState &state, memix::MemoryObjectType type, std::string id) {
   ContentScreen screen(ContentKind::Object);
   screen.type = type;
   screen.object_id = std::move(id);
@@ -1417,12 +1434,14 @@ bool open_selected(TuiState &state) {
 
 std::expected<void, std::string>
 open_quest_environment(TuiState &state, ContentScreen &screen) {
-  if (!screen.quest.has_value()
-      || screen.quest->latest_environment_id.empty()) {
+  if (!screen.quest
+      || !screen.quest->latest_result
+      || screen.quest->latest_result->kind
+             != memix::ViewObjectKind::Environment) {
     return std::unexpected("quest has no resolved environment");
   }
   const memix::ViewResult<memix::ViewEnvironment> environment =
-      state.views.resolve_environment(screen.quest->latest_environment_id);
+      state.views.resolve_environment(screen.quest->latest_result->id);
   if (!environment) {
     record_error(state, environment.error().message);
     return std::unexpected(environment.error().message);
@@ -1471,8 +1490,7 @@ resolve_locator_generation(const TuiState &state,
 }
 
 std::expected<void, std::string>
-open_context_locator(TuiState &state,
-                     const memix::tui::Locator &locator) {
+open_context_locator(TuiState &state, const memix::tui::Locator &locator) {
   if (!locator.type.has_value()) {
     return std::unexpected("context locator has no object type");
   }
@@ -1863,9 +1881,8 @@ bool refuse_non_latest_pin(TuiState &state, memix::MemoryObjectType type,
   return false;
 }
 
-bool
-new_file_path_available(TuiState &state, memix::MemoryObjectType type,
-                        const fs::path &path) {
+bool new_file_path_available(TuiState &state, memix::MemoryObjectType type,
+                             const fs::path &path) {
   const memix::StoreResult<memix::StoredObject> existing =
       state.store.read_file(type, path);
   if (existing) {
@@ -1903,8 +1920,8 @@ bool rebuild_type_stack_after_mutation(TuiState &state,
                                        memix::tui::EditOperation operation,
                                        memix::MemoryObjectType type,
                                        const fs::path &path) {
-  const auto root = std::ranges::find_if(
-      state.stack, [type](const TuiScreen &candidate) {
+  const auto root =
+      std::ranges::find_if(state.stack, [type](const TuiScreen &candidate) {
         const auto *list = std::get_if<ListScreen>(&candidate);
         return list != nullptr
             && list->kind == ListKind::TypeTree
@@ -1971,8 +1988,7 @@ void record_projection_warning(TuiState &state,
   }
 }
 
-void
-commit_pending_mutation(TuiState &state, const std::string &message) {
+void commit_pending_mutation(TuiState &state, const std::string &message) {
   if (!state.pending_mutation.has_value()) {
     record_error(state, "edit message has no pending operation");
     return;
@@ -2026,8 +2042,8 @@ commit_pending_mutation(TuiState &state, const std::string &message) {
       "generation " + memix::tui::short_id(generation_id) + " created";
 }
 
-void begin_generation_message_prompt(TuiState &state,
-                                     PendingMutation mutation) {
+void
+begin_generation_message_prompt(TuiState &state, PendingMutation mutation) {
   discard_pending_mutation(state);
   const std::string default_message = memix::tui::default_edit_message(
       mutation.operation, mutation.type, mutation.path);
@@ -2044,9 +2060,8 @@ void begin_generation_message_prompt(TuiState &state,
   state.status.clear();
 }
 
-bool
-handle_footer_prompt_event(TuiState &state, const ftxui::Event &event,
-                           const ftxui::Closure &open_editor) {
+bool handle_footer_prompt_event(TuiState &state, const ftxui::Event &event,
+                                const ftxui::Closure &open_editor) {
   if (!state.prompt.has_value()) {
     return false;
   }
@@ -2110,8 +2125,8 @@ handle_footer_prompt_event(TuiState &state, const ftxui::Event &event,
   return true;
 }
 
-bool handle_delete_confirmation_event(TuiState &state,
-                                      const ftxui::Event &event) {
+bool
+handle_delete_confirmation_event(TuiState &state, const ftxui::Event &event) {
   if (!state.delete_confirmation.has_value()) {
     return false;
   }
@@ -2475,8 +2490,8 @@ bool handle_errors_event(TuiState &state, const ftxui::Event &event) {
   return true;
 }
 
-bool handle_list_event(TuiState &state, ListScreen &screen,
-                       ftxui::Event event, const ftxui::Closure &quit) {
+bool handle_list_event(TuiState &state, ListScreen &screen, ftxui::Event event,
+                       const ftxui::Closure &quit) {
   if (const int rows = wheel_rows(event); rows != 0) {
     resolve_pending_list_recenter(screen);
     const int previous = screen.scroll.top_row;
@@ -2606,8 +2621,8 @@ bool handle_content_event(TuiState &state, ContentScreen &screen,
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 bool
-handle_event(TuiState &state, ftxui::Event event,
-             const ftxui::Closure &quit, const ftxui::Closure &open_editor) {
+handle_event(TuiState &state, ftxui::Event event, const ftxui::Closure &quit,
+             const ftxui::Closure &open_editor) {
   if (state.show_errors) {
     if (const int rows = wheel_rows(event); rows != 0) {
       scroll_by_rows(state.error_scroll, rows);
@@ -2700,7 +2715,7 @@ render_entry(const Entry &entry, bool selected, bool drilled, int width) {
   if (drilled) {
     title = hbox({
         text(memix::tui::ellipsize(entry.title,
-                                       text_width > 2 ? text_width - 2 : 0))
+                                   text_width > 2 ? text_width - 2 : 0))
             | color(title_color)
             | xflex_shrink,
         filler(),
@@ -2846,8 +2861,7 @@ ftxui::Element footer_prompt(const FooterPrompt &prompt) {
   });
 }
 
-ftxui::Element
-list_footer(const TuiState &state, const ListScreen &screen) {
+ftxui::Element list_footer(const TuiState &state, const ListScreen &screen) {
   using namespace ftxui;
   Element help;
   if (state.prompt.has_value()) {
@@ -2910,13 +2924,12 @@ ftxui::Element render_list_body(ListScreen &screen, bool ancestor, int width) {
   }
   constexpr std::size_t overscan_rows =
       std::size_t{2} * static_cast<std::size_t>(kRowsPerEntry);
-  const memix::tui::RowWindow window =
-      memix::tui::virtualized_row_window({
-          .total_rows = static_cast<std::size_t>(total_rows),
-          .viewport_rows = static_cast<std::size_t>(viewport),
-          .requested_top_row = screen.scroll.top_row,
-          .overscan = overscan_rows,
-      });
+  const memix::tui::RowWindow window = memix::tui::virtualized_row_window({
+      .total_rows = static_cast<std::size_t>(total_rows),
+      .viewport_rows = static_cast<std::size_t>(viewport),
+      .requested_top_row = screen.scroll.top_row,
+      .overscan = overscan_rows,
+  });
   screen.scroll.top_row = static_cast<int>(window.top);
   screen.scroll.max_top_row = max_top;
 
@@ -3074,16 +3087,15 @@ ftxui::Element render_content_body(ContentScreen &screen) {
       screen.scroll.viewport_rows > 0 ? screen.scroll.viewport_rows : 60;
   const std::size_t total = screen.lines.size();
   constexpr std::size_t overscan = 2;
-  const memix::tui::RowWindow window =
-      memix::tui::virtualized_row_window({
-          .total_rows = total,
-          .viewport_rows = static_cast<std::size_t>(viewport),
-          .requested_top_row = screen.scroll.top_row,
-          .overscan = overscan,
-      });
+  const memix::tui::RowWindow window = memix::tui::virtualized_row_window({
+      .total_rows = total,
+      .viewport_rows = static_cast<std::size_t>(viewport),
+      .requested_top_row = screen.scroll.top_row,
+      .overscan = overscan,
+  });
   screen.scroll.top_row = static_cast<int>(window.top);
-  screen.scroll.max_top_row = static_cast<int>(memix::tui::max_scroll_top(
-      total, static_cast<std::size_t>(viewport)));
+  screen.scroll.max_top_row = static_cast<int>(
+      memix::tui::max_scroll_top(total, static_cast<std::size_t>(viewport)));
   const std::size_t first = window.first;
   const std::size_t last = window.last;
 
@@ -3185,8 +3197,8 @@ ftxui::Element render_stack_column(TuiScreen &screen, bool active,
   if (ancestors_dropped) {
     title = "… " + title;
   }
-  title = memix::tui::ellipsize(
-      title, static_cast<std::size_t>(std::max(0, width)));
+  title = memix::tui::ellipsize(title,
+                                static_cast<std::size_t>(std::max(0, width)));
   Element column = vbox({
       text(std::move(title))
           | bold
@@ -3202,8 +3214,7 @@ ftxui::Element render_stack_column(TuiScreen &screen, bool active,
 }
 
 ftxui::Element
-render_column_layout(TuiState &state,
-                     const memix::tui::ColumnWindow &window) {
+render_column_layout(TuiState &state, const memix::tui::ColumnWindow &window) {
   using namespace ftxui;
   Elements columns;
   for (std::size_t offset = 0; offset < window.widths.size(); ++offset) {

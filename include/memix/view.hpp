@@ -18,7 +18,20 @@ namespace memix {
 enum class ViewTargetKind : std::uint8_t { FileTree, ContextPack };
 enum class ViewVersionKind : std::uint8_t { Ref, Generation };
 enum class ActivationMode : std::uint8_t { Link, Copy };
-enum class ViewInputKind : std::uint8_t { Context, Environment };
+enum class ViewInputKind : std::uint8_t { Context };
+enum class ViewObjectKind : std::uint8_t { Derivation, Environment };
+
+[[nodiscard]] constexpr std::string_view
+to_string(ViewObjectKind kind) noexcept {
+  return kind == ViewObjectKind::Derivation ? "derivation" : "environment";
+}
+
+struct ViewReference {
+  ViewObjectKind kind = ViewObjectKind::Derivation;
+  std::string id;
+  friend bool
+  operator==(const ViewReference &, const ViewReference &) = default;
+};
 
 namespace detail {
 
@@ -80,10 +93,6 @@ inline constexpr std::array kViewInputKindTokens{
         .value = ViewInputKind::Context,
         .token = "context",
     },
-    ViewInputKindToken{
-        .value = ViewInputKind::Environment,
-        .token = "environment",
-    },
 };
 
 } // namespace detail
@@ -129,15 +138,10 @@ parse_view_input_kind(std::string_view value) noexcept {
 struct AuthoredViewInput {
   ViewInputKind kind = ViewInputKind::Context;
   std::string locator;
-  std::string environment_id;
-  std::string output_role = "file_tree";
-  fs::path mount;
 };
 
 struct AuthoredViewExpression {
-  std::string schema = "memix.view.expr.v1";
-  std::string profile;
-  std::vector<std::string> sources;
+  std::string schema = "memix.view.expr.v2";
   ViewTargetKind target = ViewTargetKind::FileTree;
   std::vector<AuthoredViewInput> inputs;
 };
@@ -155,9 +159,6 @@ struct ViewIrInput {
   bool recursive = false;
   bool required = true;
   ViewInputKind kind = ViewInputKind::Context;
-  std::string environment_id;
-  std::string output_role = "file_tree";
-  fs::path mount;
 };
 
 struct ViewIrTarget {
@@ -165,10 +166,17 @@ struct ViewIrTarget {
   std::string format;
 };
 
+struct ViewEnvironmentBinding {
+  fs::path mount;
+  std::string derivation_id;
+  std::string output_role = "file_tree";
+};
+
 struct ViewIr {
-  std::string schema = "memix.view.ir.v1";
+  std::string schema = "memix.view.select.v1";
   std::vector<ViewIrInput> inputs;
   ViewIrTarget target;
+  std::vector<ViewEnvironmentBinding> bindings;
 };
 
 struct ResolvedViewFile {
@@ -199,15 +207,6 @@ struct ViewEnvironmentClosure {
   std::vector<std::string> environments;
 };
 
-struct ResolvedViewEnvironmentInput {
-  std::string environment_id;
-  std::string derivation_id;
-  std::string artifact_id;
-  std::string output_role = "file_tree";
-  fs::path mount;
-  ViewEnvironmentClosure closure;
-};
-
 struct ViewDerivation {
   std::string id;
   std::string ir_hash;
@@ -217,19 +216,12 @@ struct ViewDerivation {
   fs::path manifest_path;
   fs::path tree_path;
   bool inserted = false;
-  std::vector<ResolvedViewEnvironmentInput> environment_inputs;
-  // Absent only for legacy manifests. New manifests contain one entry for
-  // every context input, including inputs that resolved no files.
+  // Published selections contain one entry for every context input,
+  // including inputs that resolved no files.
   std::optional<std::vector<ResolvedViewInputResolution>> input_resolutions;
-  // Frozen runtime instructions, included in the derivation identity.
-  // Absent only for legacy manifests; never filled from mutable quest metadata.
+  // Frozen instructions, included in identity; never refilled from the catalog.
   std::optional<std::string> runtime_quest;
-};
-
-struct ViewEnvironmentBinding {
-  fs::path mount;
-  std::string derivation_id;
-  std::string output_role;
+  ViewIr recipe;
 };
 
 struct ViewEnvironment {
@@ -237,8 +229,22 @@ struct ViewEnvironment {
   fs::path manifest_path;
   std::vector<ViewEnvironmentBinding> bindings;
   ViewEnvironmentClosure closure;
-  ViewDerivation derivation;
+  std::vector<ViewDerivation> derivations;
+  std::vector<ResolvedViewFile> resolved_files;
+  std::string ir_hash;
+  std::string runtime_quest;
   bool inserted = false;
+};
+
+struct ViewResolution {
+  ViewReference result;
+  std::string ir_hash;
+  bool inserted = false;
+};
+
+struct ViewFileContents {
+  ResolvedViewFile file;
+  std::string contents;
 };
 
 struct ViewCatalogOptions {
@@ -256,21 +262,21 @@ struct ViewCatalogEntry {
 
 struct ViewEnvironmentInfo {
   std::string id;
-  std::string derivation_id;
   std::size_t file_count = 0;
   std::uintmax_t total_size_bytes = 0;
   std::size_t upstream_environment_count = 0;
+  std::size_t binding_count = 0;
 };
 
 struct QuestInfo {
   std::string ir_hash;
+  ViewObjectKind result_kind = ViewObjectKind::Derivation;
   std::string intent;
   std::string name;
   std::string created_at;
   std::size_t resolution_count = 0;
   std::string last_resolved_at;
-  std::string latest_derivation_id;
-  std::string latest_environment_id;
+  std::optional<ViewReference> latest_result;
   std::size_t read_count = 0;
   std::string last_read_at;
   std::size_t activation_count = 0;
@@ -279,6 +285,11 @@ struct QuestInfo {
 
 struct QuestEnvironmentReads {
   std::string environment_id;
+  std::size_t read_count = 0;
+};
+
+struct QuestDerivationReads {
+  std::string derivation_id;
   std::size_t read_count = 0;
 };
 
@@ -301,6 +312,8 @@ struct QuestStats {
   std::size_t cat_count = 0;
   std::size_t tree_count = 0;
   std::vector<QuestEnvironmentReads> reads_by_environment;
+  std::vector<QuestDerivationReads> reads_by_derivation;
+  std::size_t ls_count = 0;
 };
 
 struct QuestDefinition {
@@ -321,13 +334,10 @@ struct QuestFreshnessInput {
 
 struct QuestFreshness {
   std::string ir_hash;
-  std::string derivation_id;
+  ViewReference result;
   std::string resolved_at;
-  // Contains context inputs only. Composed environment inputs are omitted:
-  // their resolved environment IDs are content-pinned and cannot drift. For
-  // legacy derivation manifests without per-input resolutions, freshness falls
-  // back to resolved-file locator matching and conservatively marks an input
-  // not represented there as not fresh.
+  // Selection input resolutions, including empty optional selections.
+  // Composition bindings are pinned D IDs, so they do not track Store refs.
   std::vector<QuestFreshnessInput> inputs;
   bool stale = false;
 };
@@ -355,7 +365,6 @@ struct ActivationOptions {
 struct ViewGenerationInfo {
   std::uint64_t number = 0;
   std::string environment_id;
-  std::string derivation_id;
   std::string activated_at;
   ActivationMode mode = ActivationMode::Link;
   bool current = false;
@@ -365,7 +374,6 @@ struct ViewActivation {
   std::string profile;
   std::uint64_t generation = 0;
   std::string environment_id;
-  std::string derivation_id;
   fs::path workspace_path;
   bool switched = false;
   bool materialized = false;
@@ -377,7 +385,6 @@ struct ViewActivationStatus {
   std::string profile;
   std::uint64_t generation = 0;
   std::string environment_id;
-  std::string derivation_id;
   bool stale = false;
   fs::path workspace_path;
 };
@@ -418,14 +425,39 @@ public:
   [[nodiscard]] ViewResult<ViewIr>
   lower_to_ir(const AuthoredViewExpression &expression) const;
 
+  // Accepts only memix.view.select.v1 without composition bindings.
+  // Invalid recipe shapes are rejected before any Store writes.
   [[nodiscard]] ViewResult<ViewDerivation> build_ir(const ViewIr &ir) const;
 
-  [[nodiscard]] ViewResult<ViewEnvironment>
-  build(const AuthoredViewExpression &expression) const;
+  [[nodiscard]] ViewResult<ViewDerivation>
+  select(const AuthoredViewExpression &expression,
+         const BuildOptions &options = {}) const;
 
   [[nodiscard]] ViewResult<ViewEnvironment>
-  build(const AuthoredViewExpression &expression,
-        const BuildOptions &options) const;
+  compose(std::vector<ViewEnvironmentBinding> bindings,
+          const BuildOptions &options = {}) const;
+
+  [[nodiscard]] ViewResult<QuestDefinition>
+  define_composition(std::vector<ViewEnvironmentBinding> bindings,
+                     const QuestDefinitionOptions &options = {}) const;
+
+  [[nodiscard]] ViewResult<ViewDerivation>
+  resolve_derivation(std::string_view derivation_prefix) const;
+
+  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
+  derivation_tree(std::string_view derivation_prefix,
+                  const ViewCatalogOptions &options = {}) const;
+
+  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
+  view_tree(ViewReference reference,
+            const ViewCatalogOptions &options = {}) const;
+
+  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
+  view_ls(ViewReference reference, const fs::path &path = {}) const;
+
+  [[nodiscard]] ViewResult<ViewFileContents>
+  read_output(ViewReference reference, const fs::path &path,
+              bool record_receipt = true) const;
 
   [[nodiscard]] ViewResult<QuestDefinition>
   define_quest(const AuthoredViewExpression &expression,
@@ -441,7 +473,7 @@ public:
   find_quests(std::vector<std::string> terms,
               std::optional<fs::path> covers = std::nullopt) const;
 
-  [[nodiscard]] ViewResult<ViewEnvironment>
+  [[nodiscard]] ViewResult<ViewResolution>
   resolve_quest(std::string_view quest_prefix) const;
 
   [[nodiscard]] ViewResult<QuestFreshness>
@@ -453,16 +485,15 @@ public:
   [[nodiscard]] ViewResult<ViewEnvironment>
   resolve_environment(std::string_view environment_prefix) const;
 
+  [[nodiscard]] ViewResult<std::vector<ViewDerivation>>
+  list_derivations() const;
+
   [[nodiscard]] ViewResult<std::vector<ViewEnvironmentInfo>>
   list_environments() const;
 
   [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
   environment_tree(std::string_view environment_prefix,
                    const ViewCatalogOptions &options = {}) const;
-
-  [[nodiscard]] ViewResult<ResolvedViewFile>
-  read_environment_file(std::string_view environment_prefix,
-                        const fs::path &path) const;
 
   [[nodiscard]] ViewResult<ViewActivation>
   activate(std::string_view environment_prefix,
@@ -482,6 +513,10 @@ public:
   deactivate(const fs::path &into, bool wipe_profile = false) const;
 
 private:
+  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
+  view_catalog(ViewReference reference, const ViewCatalogOptions &options,
+               bool shallow) const;
+
   [[nodiscard]] ViewResult<ViewDerivation>
   build_ir(const ViewIr &ir, const BuildOptions &options) const;
 
