@@ -1062,6 +1062,38 @@ TEST_CASE("direct reads survive missing catalogs and receipt append failures",
           .value_or(true));
 }
 
+TEST_CASE("quest log directories are not treated as empty logs", "[quest]") {
+  QuestFixture f;
+  const auto d = f.select();
+  std::string_view filename;
+  SECTION("history") { filename = "history.jsonl"; }
+  SECTION("receipts") { filename = "receipts.jsonl"; }
+  const auto path = f.root / "views" / "quests" / d.ir_hash / filename;
+  REQUIRE(fs::remove(path));
+  REQUIRE(fs::create_directory(path));
+  const auto preserved = path / "keep";
+  write_file(preserved, "not a log\n");
+
+  const auto stats = f.views.quest_stats(d.ir_hash);
+  REQUIRE_FALSE(stats);
+  CHECK(stats.error().kind == memix::ErrorKind::InvalidData);
+  CHECK(stats.error().message.contains("not a regular file"));
+  CHECK(stats.error().message.contains(path.string()));
+  const auto contents =
+      f.views.read_output(reference(d), "rules/repo/AGENTS.md");
+  REQUIRE(contents);
+  CHECK(contents->contents == "one\n");
+  if (filename == "history.jsonl") {
+    CHECK_FALSE(f.views.quest_freshness(d.ir_hash));
+    CHECK_FALSE(f.views.resolve_quest(d.ir_hash));
+  }
+  CHECK(read_file(preserved) == "not a log\n");
+  REQUIRE(fs::remove_all(path));
+  CHECK(f.views.quest_stats(d.ir_hash));
+  write_file(path, "");
+  CHECK(f.views.quest_stats(d.ir_hash));
+}
+
 TEST_CASE("statistics reject malformed receipt logs without repairing them",
           "[quest]") {
   QuestFixture f;

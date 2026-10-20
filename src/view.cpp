@@ -3246,13 +3246,32 @@ quest_history_entry_from_json(std::string_view text, const fs::path &path) {
   };
 }
 
+ViewResult<bool> quest_log_exists(const fs::path &path) {
+  const auto exists = fs::exists(path);
+  if (!exists)
+    return view_error(exists.error());
+  if (!*exists)
+    return false;
+  // libc++ can report EOF without badbit when reading a directory. Check the
+  // file type before opening a log rather than treating that as an empty log.
+  const auto regular = fs::is_regular_file(path);
+  if (!regular)
+    return view_error(regular.error());
+  if (!*regular) {
+    return view_error(
+        memix::ErrorKind::InvalidData,
+        std::format("quest log is not a regular file `{}`", path.string()));
+  }
+  return true;
+}
+
 ViewResult<std::vector<QuestHistoryEntry>>
 read_quest_history_unlocked(const fs::path &root, std::string_view ir_hash) {
   const fs::path path =
       quest_dir_for(root, ir_hash) / std::string(kQuestHistoryFilename);
-  const memix::FsResult<bool> exists = fs::exists(path);
+  const auto exists = quest_log_exists(path);
   if (!exists) {
-    return view_error(exists.error());
+    return std::unexpected(exists.error());
   }
   if (!*exists) {
     return std::vector<QuestHistoryEntry>{};
@@ -3499,9 +3518,9 @@ read_quest_receipt_summary_unlocked(const fs::path &root,
                                     std::string_view ir_hash) {
   const fs::path path =
       quest_dir_for(root, ir_hash) / std::string(kQuestReceiptsFilename);
-  const memix::FsResult<bool> exists = fs::exists(path);
+  const auto exists = quest_log_exists(path);
   if (!exists) {
-    return view_error(exists.error());
+    return std::unexpected(exists.error());
   }
   if (!*exists) {
     return QuestReceiptSummary{};
@@ -3533,7 +3552,7 @@ read_quest_receipt_summary_unlocked(const fs::path &root,
     }
     summarize_quest_receipt(*receipt, summary);
   }
-  if (!input.eof()) {
+  if (!input.eof() || input.bad()) {
     return view_error(
         std::format("failed to read quest receipts `{}`", path.string()));
   }
