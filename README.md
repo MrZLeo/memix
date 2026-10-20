@@ -11,7 +11,7 @@ Treat memory as immutable evidence plus reproducible views — not a mutable not
 [![Windows](https://github.com/MrZLeo/memix/actions/workflows/windows.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/windows.yml)
 [![Release](https://img.shields.io/github/v/release/MrZLeo/memix?include_prereleases&color=blue)](https://github.com/MrZLeo/memix/releases)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![C++26](https://img.shields.io/badge/C%2B%2B-26-00599C?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/w/cpp/26)
+[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/w/cpp/23)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#-self-contained-binaries)
 
 [🚀 Build](#-build) •
@@ -65,10 +65,10 @@ The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
 ## 🚀 Build
 
 Building from source requires **CMake 4.4 or newer**, **Ninja**, and a compiler
-with C++26 mode and the standard library features used by memix. The project
-requires C++26 without compiler extensions; it does not fall back to an older
+with C++23 mode and the standard library features used by memix. The project
+requires C++23 without compiler extensions; it does not fall back to an older
 standard. This applies to the library, CLIs, tests, and the optional
-Objective-C++ Inspector bridge. Individual C++26 features still depend on the
+Objective-C++ Inspector bridge. Individual C++23 features still depend on the
 compiler and standard library implementation.
 
 Use `nix develop` for the pinned toolchain described below. CI installs current
@@ -88,7 +88,7 @@ The default build produces the `memix` library and the `memix` CLI executable.
 
 The flake supports `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`
 (Apple Silicon). `nix develop` uses GCC on Linux and Clang on macOS, through
-nixpkgs' official `stdenv`. It provides the CMake 4.4+ / C++26 toolchain, plus
+nixpkgs' official `stdenv`. It provides the CMake 4.4+ / C++23 toolchain, plus
 Ninja, Git, pkg-config, ccache, and clang-tools (clang-tidy, clang-format,
 clangd). On Linux, `glibc.static` is available through a `LIBRARY_PATH`
 fallback for static linking, without overriding shared libc during ordinary
@@ -106,10 +106,10 @@ cmake --build build-nix --parallel
 ctest --test-dir build-nix --output-on-failure
 ```
 
-Add `-Dmemix_ENABLE_CLANG_TIDY=ON` to enable project analysis. The current
-locked Linux clang-tidy/libstdc++ pair has an upstream C++26 `<format>`
-compatibility issue, so leave this option off for Linux compiler/runtime
-validation until it is fixed. That is not a passing lint result; see
+Add `-Dmemix_ENABLE_CLANG_TIDY=ON` to enable project analysis. C++23 avoids
+the previously observed C++26 dynamic-width `<format>` incompatibility in the
+locked Linux clang-tidy/libstdc++ pair; disabling analysis is no longer needed
+for that issue. GCC's optimized-build warnings are a separate limitation; see
 [current toolchain limitations](CONTRIBUTING.md#current-toolchain-limitations).
 
 Core tools use the latest packaged versions in the locked `nixpkgs-unstable`
@@ -209,7 +209,7 @@ target_link_libraries(your_target PRIVATE memix::memix)
 ```
 
 Pass the prefix in `CMAKE_PREFIX_PATH`. The exported target supplies public
-headers and the C++26 requirement, but not memix's warning or exception flags.
+headers and the C++23 requirement, but not memix's warning or exception flags.
 Installations using the default relative install directories can be moved to a
 new prefix. Package matching follows CMake's `SemanticVersion` policy: 0.x
 releases require the same minor version (`0.6.0` does not satisfy `0.5.x`);

@@ -10,7 +10,7 @@ env:
   BUILD_TYPE: Release
   INSTALL_LOCATION: ".local"
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
-  # clang-cl supports C++26 while keeping the MSVC ABI, STL, and static CRT.
+  # clang-cl supports C++23 while keeping the MSVC ABI, STL, and static CRT.
   CC: C:/Program Files/LLVM/bin/clang-cl.exe
   CXX: C:/Program Files/LLVM/bin/clang-cl.exe
 

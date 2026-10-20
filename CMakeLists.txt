@@ -6,7 +6,7 @@ if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
 endif()
 
 # Initialize project targets and dependencies that do not choose their own standard.
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -32,7 +32,7 @@ if(memix_STATIC_LINK)
 endif()
 add_library(memix ${memix_library_type} ${sources})
 add_library(memix::memix ALIAS memix)
-target_compile_features(memix PUBLIC cxx_std_26)
+target_compile_features(memix PUBLIC cxx_std_23)
 target_sources(memix
   PUBLIC FILE_SET HEADERS
     BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include"
@@ -165,7 +165,7 @@ if(memix_BUILD_MACOS_INSPECTOR)
   if(NOT APPLE)
     message(FATAL_ERROR "memix_BUILD_MACOS_INSPECTOR is only supported on Apple platforms.")
   endif()
-  set(CMAKE_OBJCXX_STANDARD 26)
+  set(CMAKE_OBJCXX_STANDARD 23)
   set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
   set(CMAKE_OBJCXX_EXTENSIONS OFF)
   enable_language(OBJCXX)

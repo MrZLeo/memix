@@ -10,7 +10,7 @@ Thanks for helping improve `memix`.
 
 ## Development
 
-Builds require CMake 4.4+, Ninja, and a compiler with C++26 support. Older
+Builds require CMake 4.4+, Ninja, and a compiler with C++23 support. Older
 C++ standards and compiler extensions are not supported.
 
 For a pinned Linux/macOS toolchain, run `nix develop` first: GCC on Linux,
@@ -55,16 +55,15 @@ privileges after building.
 ### Current toolchain limitations
 
 The locked Linux environment combines GCC/libstdc++ 16.2 with clang-tidy
-23.1.3. Two optional strict checks currently have separate limitations:
+23.1.3. The project uses C++23 for both compilation and static analysis;
+keep these language modes aligned when validating changes.
 
-* clang-tidy's Clang frontend rejects valid C++26 dynamic-width `std::format`
-  calls against these libstdc++ headers. This reproduces without memix or
-  simdjson and corresponds to [GCC PR127220](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=127220)
+* The previous C++26 dynamic-width `std::format` clang-tidy failure no longer
+  blocks the project's C++23 configuration. The upstream Clang/libstdc++
+  incompatibility is tracked by [GCC PR127220](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=127220)
   / [LLVM #73232](https://github.com/llvm/llvm-project/issues/73232).
-  Until the upstream fix reaches the toolchain, use
-  `-Dmemix_ENABLE_CLANG_TIDY=OFF` for Linux compiler/runtime checks. This is a
-  known unpassed analysis gate, not a successful lint run. Do not work around
-  it by changing application formatting code or lowering the C++ standard.
+  Enable analysis with `-Dmemix_ENABLE_CLANG_TIDY=ON`; no application formatting
+  workaround or diagnostic suppression is needed for this issue.
 * GCC 16 emits `-Wnull-dereference` diagnostics in optimized CLI paths, with
   two distinct causes. The stream-buffer diagnostic reproduces using only
   `ifstream` and `istreambuf_iterator` at `-O2 -fno-exceptions`, in the known
@@ -85,9 +84,10 @@ The locked Linux environment combines GCC/libstdc++ 16.2 with clang-tidy
   Nix's fortify hardening injects optimization even when CMake Debug only
   supplies `-g`, so the build type alone does not imply an unoptimized build.
 
-Neither limitation is bypassed in the project's warning configuration, and
-`flake.lock` is not changed implicitly. macOS uses a different Clang/Apple
-standard-library combination; its lint result is separate from Linux's.
+The remaining GCC warnings are not suppressed in the project's warning
+configuration, and `flake.lock` is not changed implicitly. macOS uses a
+different Clang/Apple standard-library combination; its lint result is
+separate from Linux's.
 
 ## Style
 
