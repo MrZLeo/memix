@@ -15,10 +15,10 @@
 #include <system_error>
 #ifdef __linux__
 #include <fcntl.h>
-#endif
-#if defined(__linux__) || defined(__APPLE__)
-// POSIX rename extensions are declared by the C header, not ISO <cstdio>.
+// Linux rename extensions are declared by the C header, not ISO <cstdio>.
 #include <stdio.h> // NOLINT(modernize-deprecated-headers)
+#elifdef __APPLE__
+#include <sys/stdio.h>
 #endif
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
