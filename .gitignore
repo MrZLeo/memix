@@ -374,4 +374,8 @@ healthchecksdb
 # Backup folder for Package Reference Convert tool in Visual Studio 2017
 MigrationBackup/
 /.DS_Store
+
+# Local documents must not be uploaded to the repository.
+/DERIVED_ARTIFACTS.md
+/DESIGN_ALIGNMENT_REVIEW.md
 *.pdf
