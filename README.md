@@ -8,17 +8,34 @@ for a project, and let agents read the result as ordinary files under `.memory/`
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    Sources["Rules / Documents / Chats"] -->|ingest| Store[("Store")]
-    Store -->|select| Derivations["Derivations<br/>Pinned selections"]
-    Derivations -->|compose: mount by ID| Environment["Environment<br/>One file tree"]
-    Environment -->|activate| Profile["Profile<br/>Generations + current"]
-    Profile --> Workspace["project/.memory/"]
-
-    Quests["Quests<br/>Recipes, intent, history"] -.->|selection| Derivations
-    Quests -.->|composition| Environment
+```text
++------------------------------------------------+
+| Store: rules / documents / chat                |
+| immutable blobs + versioned trees              |
++------------------------+-----------------------+
+                         | select
+            +------------+------------+.............+
+            v                         v             :
++----------------------+  +----------------------+  : +----------------------+
+| Derivation A         |  | Derivation B         |  : | Quests               |
+| shared context       |  | project context      |  +.+ recipes + intent     |
++-----------+----------+  +-----------+----------+  : | result history       |
+            |                         |             : | on-demand freshness  |
+            +------------+------------+             : +----------------------+
+                         | compose                  :
+                         v                          :
++------------------------------------------------+  :
+| Environment                                    +..+
+| /shared -> A    /project -> B                  |
++------------------------+-----------------------+
+                         | activate
+                         v
++------------------------------------------------+         +------------+
+| Profile: generations -> current                +-------->| .memory/   |
++------------------------------------------------+         +------------+
 ```
+
+Dotted links connect Quests to selection and composition.
 
 | Object | Responsibility |
 | --- | --- |
@@ -52,7 +69,7 @@ Linux/macOS toolchain. These commands build the current source tree:
 
 ```bash
 cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
+cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
