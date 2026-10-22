@@ -8,20 +8,16 @@ for a project, and let agents read the result as ordinary files under `.memory/`
 
 ## Architecture
 
-```text
-Rules / Documents / Chats
-          │ ingest
-          ▼
-        Store
-          │ select
-          ▼
-   Derivations — pinned selections
-          │ compose: mount by ID
-          ▼
-   Environment — one file tree
-          │ activate via Profile
-          ▼
-   project/.memory/
+```mermaid
+flowchart TD
+    Sources["Rules / Documents / Chats"] -->|ingest| Store[("Store")]
+    Store -->|select| Derivations["Derivations<br/>Pinned selections"]
+    Derivations -->|compose: mount by ID| Environment["Environment<br/>One file tree"]
+    Environment -->|activate| Profile["Profile<br/>Generations + current"]
+    Profile --> Workspace["project/.memory/"]
+
+    Quests["Quests<br/>Recipes, intent, history"] -.->|selection| Derivations
+    Quests -.->|composition| Environment
 ```
 
 | Object | Responsibility |
