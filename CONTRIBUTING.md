@@ -13,10 +13,9 @@ Thanks for helping improve `memix`.
 Builds require CMake 4.4+, Ninja, and a compiler with C++23 support. Older
 C++ standards and compiler extensions are not supported.
 
-For a pinned Linux/macOS toolchain, run `nix develop` first: GCC on Linux,
-Clang on macOS. See the
-[Nix development environment](README.md#nix-development-environment) section
-for supported platforms and build instructions.
+For the pinned toolchain, run `nix develop` first. The flake supports
+`x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`, using GCC on Linux
+and Clang on macOS. Keep Nix and host-toolchain builds in separate directories.
 
 Build the project from the repository root:
 
@@ -47,10 +46,8 @@ clang-tidy/cppcheck integration covers the library and CLIs, not test macros.
 Use `memix_WARNINGS_AS_ERRORS=ON` to enforce compiler warnings on all project
 C++ targets, including tests, without imposing those flags on package consumers.
 
-The [Docker development environment](README.md#docker-development-environment)
-uses the same flake and lock file for Linux builds. Run permission-sensitive
-tests as an ordinary user, not root; the container example shows how to drop
-privileges after building.
+The [Dockerfile](Dockerfile) uses the same flake and lock file for Linux builds.
+Run permission-sensitive tests as an ordinary user, not root.
 
 ### Current toolchain limitations
 

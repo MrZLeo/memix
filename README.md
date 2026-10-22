@@ -1,490 +1,96 @@
-<div align="center">
+# Memix
 
-# 🧠 memix
+**Reproducible, versioned memory for AI agents.**
 
-**A Nix-inspired, provenance-aware build system for agent context**
+Inspired by Nix, Memix turns rules, documents, and past conversations into
+reusable context with stable identities. Select the sources once, compose them
+for a project, and let agents read the result as ordinary files under `.memory/`.
 
-Treat memory as immutable evidence plus reproducible views — not a mutable notes directory.
-
-[![Ubuntu](https://github.com/MrZLeo/memix/actions/workflows/ubuntu.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/ubuntu.yml)
-[![MacOS](https://github.com/MrZLeo/memix/actions/workflows/macos.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/macos.yml)
-[![Windows](https://github.com/MrZLeo/memix/actions/workflows/windows.yml/badge.svg)](https://github.com/MrZLeo/memix/actions/workflows/windows.yml)
-[![Release](https://img.shields.io/github/v/release/MrZLeo/memix?include_prereleases&color=blue)](https://github.com/MrZLeo/memix/releases)
-[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B&logoColor=white)](https://en.cppreference.com/w/cpp/23)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#-self-contained-binaries)
-
-[🚀 Build](#-build) •
-[🤖 Agent Install](#-install-with-an-agent) •
-[▶️ Usage](#️-run) •
-[📦 Releases](https://github.com/MrZLeo/memix/releases) •
-[🤝 Contributing](CONTRIBUTING.md)
-
-[![Stars](https://img.shields.io/github/stars/MrZLeo/memix?style=social)](https://github.com/MrZLeo/memix/stargazers)
-
-</div>
-
----
-
-## 💡 Mental model
-
-Treat memory as immutable evidence plus reproducible views, not as a mutable notes directory. Agents should consume an explicitly selected, versioned, provenance-carrying view rather than an untracked collection of files.
-
-* 📌 **Immutable blobs** — Stored blobs are immutable and content-addressed. Changed content becomes a new object instead of overwriting history.
-* 🌳 **Versioned trees** — Logical trees, generations, and refs describe how memory evolves while allowing old states to coexist and remain replayable.
-* 🔁 **Composable views** — Select independently readable Derivations, then mount one or more directly in an Environment. Composition does not create a synthetic Derivation.
-* 🧾 **Provenance built-in** — Derivations freeze source generations, blob identities, recipes and guidance. Environments retain explicit bindings and a verified closure.
-* 🎯 **Explicit selection** — Memix does not invent hidden dependencies or silently activate additional memory.
-* 🔗 **Profile-style activation** — Built views attach to a workspace through numbered profile generations and one switchable `current` pointer, the only mutable layer in the system.
-* 📂 **Honest packaging** — A `file_tree` view packages selected files at stable paths; it does not merge Markdown, resolve directive precedence, summarize content, or settle semantic conflicts.
-
-> [!NOTE]
-> The current CLI implements immutable storage, versioned logical trees, reproducible `file_tree` views, and profile-style activation with generations and rollback. Directive resolution and context-pack generation are separate future layers.
-
-## 🗂️ Project layout
-
-`memix` is implemented as a CMake-based C++ project with a Rust-style split between library code and executable entrypoints:
-
-* `include/` and `src/` contain the `memix` library
-* `src/cli/` contains shared store, view, TUI, and dispatch implementations
-* `src/bin/memix.cpp` is the sole CLI entrypoint, providing `memix store`, `memix view`, and `memix tui`
-
-The CLIs use [argum](https://github.com/gershnik/argum) for argument parsing.
-
-## 📦 Dependencies
-
-The project uses [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to fetch:
-
-| Dependency | Version | Purpose |
-| ---------- | ------- | ------- |
-| [argum](https://github.com/gershnik/argum/releases/tag/v2.8) | 2.8 | CLI parsing |
-| [simdjson](https://github.com/simdjson/simdjson/releases/tag/v5.0.3) | 5.0.3 | Metadata JSON parsing and writing |
-| [spdlog](https://github.com/gabime/spdlog/releases/tag/v1.17.0) | 1.17.0 | Executable logging |
-| [Catch2](https://github.com/catchorg/Catch2/releases/tag/v3.11.0) | 3.11.0 | Tests |
-
-## 🚀 Build
-
-Building from source requires **CMake 4.4 or newer**, **Ninja**, and a compiler
-with C++23 mode and the standard library features used by memix. The project
-requires C++23 without compiler extensions; it does not fall back to an older
-standard. This applies to the library, CLIs, tests, and the optional
-Objective-C++ Inspector bridge. Individual C++23 features still depend on the
-compiler and standard library implementation.
-
-Use `nix develop` for the pinned toolchain described below. CI installs current
-CMake and Ninja releases explicitly rather than relying on runner defaults.
-
-```bash
-cmake -G Ninja -S . -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
-
-cmake --build build
-```
-
-The default build produces the `memix` library and the `memix` CLI executable.
-
-### Nix development environment
-
-The flake supports `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`
-(Apple Silicon). `nix develop` uses GCC on Linux and Clang on macOS, through
-nixpkgs' official `stdenv`. It provides the CMake 4.4+ / C++23 toolchain, plus
-Ninja, Git, pkg-config, ccache, and clang-tools (clang-tidy, clang-format,
-clangd). On Linux, `glibc.static` is available through a `LIBRARY_PATH`
-fallback for static linking, without overriding shared libc during ordinary
-compiler checks and dynamic links.
-
-With [Nix](https://nixos.org/download/) installed and `nix-command` / `flakes`
-enabled, build in a separate directory from any host-toolchain build:
-
-```bash
-nix develop
-cmake -G Ninja -S . -B build-nix \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DCPM_SOURCE_CACHE="$HOME/.cache/CPM"
-cmake --build build-nix --parallel
-ctest --test-dir build-nix --output-on-failure
-```
-
-Add `-Dmemix_ENABLE_CLANG_TIDY=ON` to enable project analysis. C++23 avoids
-the previously observed C++26 dynamic-width `<format>` incompatibility in the
-locked Linux clang-tidy/libstdc++ pair; disabling analysis is no longer needed
-for that issue. GCC's optimized-build warnings are a separate limitation; see
-[current toolchain limitations](CONTRIBUTING.md#current-toolchain-limitations).
-
-Core tools use the latest packaged versions in the locked `nixpkgs-unstable`
-revision. To update versions, run `nix flake update nixpkgs` and commit the
-lock-file change. Validate with `nix flake check --all-systems --no-build`;
-format the flake with `nix fmt`.
-
-Ubuntu CI and Linux release builds use this same locked shell through
-`nix develop --no-update-lock-file`. Their compiler, CMake, Ninja, and coverage
-`gcov` come from the flake rather than the runner's preinstalled tools.
-Windows CI uses native `clang-cl` and `lld-link` with the MSVC standard library
-and static runtime; it does not use Nix.
-
-These are native C++ environments, not cross-compilation toolchains; Intel
-macOS and Windows are not included. CPM downloads project dependencies on the
-first configure. The optional SwiftUI Inspector still requires Xcode/Swift.
-
-### Docker development environment
-
-The Docker image uses the same `flake.nix` and `flake.lock`, not a separate
-apt/pip toolchain. Docker BuildKit selects the matching rolling
-`nixpkgs/nix-flakes:latest-x86_64-linux` or `latest-aarch64-linux` base for
-amd64 or arm64. These architecture-qualified tags are published independently;
-the Dockerfile does not use the old, unsuffixed `latest` manifest. The bases
-already enable flakes. The matching Linux dev shell supplies GCC and static
-libc. The image build preloads that shell, and every container command runs through
-`nix develop --no-update-lock-file --command`. Tool versions come from the
-lock file; required lock-file changes fail rather than being made silently.
-
-Build the image and open a development shell:
-
-```bash
-docker build --pull -t memix-dev .
-docker run --rm -it \
-  --mount type=bind,source="$PWD",target=/workspace \
-  memix-dev
-```
-
-Or build and test directly with the default compiler-only configuration:
-
-```bash
-docker run --rm \
-  --mount type=bind,source="$PWD",target=/workspace \
-  memix-dev bash -c '
-    set -e
-    cmake -G Ninja -S . -B build-container \
-      -DCMAKE_BUILD_TYPE=Debug -Dmemix_ENABLE_CLANG_TIDY=OFF
-    cmake --build build-container --parallel
-    mkdir -p build-container/Testing
-    chown -R 1000:1000 build-container/Testing
-    chroot --userspec=1000:1000 / \
-      "$(command -v env)" HOME=/tmp TMPDIR=/tmp \
-      "$(command -v ctest)" --test-dir /workspace/build-container \
-      --output-on-failure
-  '
-```
-
-Use a separate `build-container` directory: this is a Linux build, even on a
-macOS host. The initial image build downloads Linux Nix packages and can take
-time; unchanged base images and flake metadata reuse the cached image layer.
-CPM uses its default per-build dependency storage, which persists with the
-build directory in the source bind mount; no separate cache volume or cache
-variable is required. Builds run as root; the test command drops to UID/GID
-1000 because permission-sensitive tests must not run as root. Only the test log directory
-changes ownership. Linux bind mounts may therefore contain root- or
-UID-1000-owned build files. The image contains only the tools declared in the
-flake; add optional development tools there rather than maintaining another
-Docker package list.
-
-#### Apple container on macOS
-
-On Apple Silicon, the same Dockerfile also works with Apple's
-[`container`](https://github.com/apple/container) CLI:
-
-```bash
-container system start --enable-kernel-install
-container build --platform linux/arm64 \
-  --build-arg TARGETARCH=arm64 --pull -t memix-dev .
-container run --rm -it --cpus 6 --memory 16G \
-  --mount type=bind,source="$PWD",target=/workspace \
-  memix-dev
-```
-
-Inside the shell, use the CMake/build/test commands from the Docker example.
-Adjust the CPU and memory limits for your machine. With `container` 1.5.0,
-pass `TARGETARCH=arm64` explicitly: `--platform` alone does not populate that
-build argument. This is a native Linux arm64 build, not a macOS build. The
-bind-mounted build directory survives removal of the container.
-
-### CMake package consumers
-
-After `cmake --install build --prefix /your/prefix`, consumers can use:
-
-```cmake
-find_package(memix 0.6 CONFIG REQUIRED)
-target_link_libraries(your_target PRIVATE memix::memix)
-```
-
-Pass the prefix in `CMAKE_PREFIX_PATH`. The exported target supplies public
-headers and the C++23 requirement, but not memix's warning or exception flags.
-Installations using the default relative install directories can be moved to a
-new prefix. Package matching follows CMake's `SemanticVersion` policy: 0.x
-releases require the same minor version (`0.6.0` does not satisfy `0.5.x`);
-from 1.x onward, compatibility is within the same major version. In either
-case, the installed version must be at least the requested version.
-
-## 💿 Self-contained binaries
-
-`memix_STATIC_LINK=ON` is the default. Each generated CLI is self-contained
-with respect to memix and its third-party dependencies:
-
-* 🐧 **Linux** — executables are fully static and have no ELF interpreter or shared library dependency.
-* 🪟 **Windows** — executables use the static MSVC runtime (`/MT`).
-* 🍎 **macOS** — executables statically include memix and its third-party dependencies. Apple does not support fully static user executables, so `libc++` and `libSystem` remain system-provided dynamic libraries.
-
-The static-link setting also applies to Linux/MinGW test executables; tests
-retain exception support. To restore platform-default dynamic runtime
-linking, configure with `-Dmemix_STATIC_LINK=OFF`.
-
-Tag builds publish the unified `memix` executable and agent skill as GitHub release
-assets:
-
-| Platform | Assets |
-| -------- | ------ |
-| Linux x86_64 | `memix-linux-x86_64` |
-| macOS arm64 | `memix-macos-arm64`, `MemixInspector-macos-arm64.zip` |
-| Windows x86_64 | `memix-windows-x86_64.exe` |
-| Any | `memix-cli-skill.tar.gz` (platform-independent) |
-
-Each `memix` binary includes `store`, `view`, and `tui`; no additional CLI
-executables or compatibility aliases are built, installed, or published.
-
-On Linux or macOS, mark a downloaded asset executable before first use:
-
-```bash
-chmod +x memix-linux-x86_64
-./memix-linux-x86_64 --version
-```
-
-## 🤖 Install with an agent
-
-Copy this request into an agent:
+## Architecture
 
 ```text
-Install memix by reading and following https://raw.githubusercontent.com/MrZLeo/memix/master/AGENT_INSTALL.md. If your harness supports Agent Skills packages (for example Codex, pi, or Claude Code), install the complete version-matched memix CLI skill package before using memix.
+Rules / Documents / Chats
+          │ ingest
+          ▼
+        Store
+          │ select
+          ▼
+   Derivations — pinned selections
+          │ compose: mount by ID
+          ▼
+   Environment — one file tree
+          │ activate via Profile
+          ▼
+   project/.memory/
 ```
 
-The full bootstrap procedure is also available in
-[AGENT_INSTALL.md](AGENT_INSTALL.md).
+| Object | Responsibility |
+| --- | --- |
+| **Store** | Keeps immutable SHA-256 blobs in versioned trees, separately for `rules`, `documents`, and `chat`. Edits reuse unchanged subtrees; previous generations remain readable. |
+| **Derivation** | Freezes a selection of files, their source generations, blob identities, and provenance. Each selection can be read independently and reused across projects. |
+| **Environment** | Mounts one or more Derivations into a single file tree. Composition references existing Derivations; it does not create a combined Derivation. |
+| **Quest** | Records a selection or composition recipe, searchable intent, result history, and CLI usage receipts. Selection freshness is checked on demand against source generations. |
+| **Profile** | Binds an Environment to a workspace through numbered activations and a movable `current` pointer, supporting explicit upgrades and rollback. |
 
-## ▶️ Run
+**Selection and composition are separate.** Two projects can share a Derivation
+but mount it differently. Changing a mount or replacing a Derivation creates a
+new Environment; existing views keep their identities and contents.
 
-Use the unified command for new workflows:
+Store updates do not silently change delivered memory. Refresh the selection,
+compose a new Environment, then activate it. A Profile can roll back to a
+previously activated Environment without reselecting sources.
+
+The Store's read-only `latest/` projection supports discovery with ordinary
+filesystem tools. Built views pin their inputs instead of following that live
+projection.
+
+**Current scope:** raw file-tree selection, composition, explicit refresh, and
+activation. Generated summaries/embeddings, semantic conflict resolution, and
+proactive invalidation are not implemented. Composition rejects path collisions
+instead of silently overriding files.
+
+## Build
+
+Requires **C++23, CMake 4.4+, and Ninja**. Run `nix develop` first for the pinned
+Linux/macOS toolchain. These commands build the current source tree:
 
 ```bash
-memix --help
-memix store --help
-memix view select --help
-memix view compose --help
-memix tui --help
-memix --store-root /tmp/memix-store store list --json
+cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-Common options such as `--store-root` can appear before the namespace or
-within it. The old `memix-store`, `memix-view`, and `memix-tui` entrypoints
-have been removed: update scripts to `memix store`, `memix view`, and
-`memix tui`, respectively. Remove any old standalone binaries left by a
-previous installation. Activation, generations, and rollback remain under
-`memix view`; there is no separate `profile` namespace. Raw Store formats are
-unchanged, but the latest-only view-model update below breaks old view formats.
+The CLI is `build/bin/Release/memix`. Prebuilt binaries are available under
+[Releases](https://github.com/MrZLeo/memix/releases); for agent setup, see
+[the installation guide](AGENT_INSTALL.md).
+
+## Try it
+
+After building, run this Bash example from the repository root (`jq` required).
+It uses a temporary Store and workspace without changing your existing memory.
 
 ```bash
-./build/bin/Release/memix store --store-root /tmp/memix-store ingest --type rules --dest README.md README.md
-./build/bin/Release/memix store --store-root /tmp/memix-store ingest --type documents --dest notes/README.md README.md
-./build/bin/Release/memix store --store-root /tmp/memix-store rules tree
-./build/bin/Release/memix store --store-root /tmp/memix-store tree --all --depth 2 --json
-./build/bin/Release/memix store --store-root /tmp/memix-store list
-./build/bin/Release/memix store --store-root /tmp/memix-store list --json
-./build/bin/Release/memix store --store-root /tmp/memix-store expose
-./build/bin/Release/memix store --version
-./build/bin/Release/memix store --help
+demo="$(mktemp -d)"
+(
+  set -euo pipefail
+  export PATH="$PWD/build/bin/Release:$PATH"
+  export MEMIX_STORE_HOME="$demo/store"
+
+  memix store ingest --type rules --dest project/AGENTS.md AGENTS.md
+  d=$(memix view select --source rules/project/ --intent "Project rules" \
+    --json | jq -er '.result.id')
+  e=$(memix view compose --mount "$d" --intent "Project context" \
+    --json | jq -er '.result.id')
+  memix view activate "$e" --into "$demo/.memory"
+)
 ```
 
-Select an independently readable `file_tree` **Derivation**, then explicitly
-compose an **Environment** for delivery. Profiles activate Environments only.
-The example uses the source files ingested above:
+Read `$demo/.memory/README.md` for the context guide. The selected file is at
+`$demo/.memory/rules/project/AGENTS.md`.
 
-```bash
-QUEST=$(./build/bin/Release/memix view --store-root /tmp/memix-store define --kind selection --source rules/README.md --intent "repository documentation" --name "README context" | head -n1 | awk '{print $2}')
-./build/bin/Release/memix view --store-root /tmp/memix-store quests
-./build/bin/Release/memix view --store-root /tmp/memix-store find repository --covers rules/README.md
-D=$(./build/bin/Release/memix view --store-root /tmp/memix-store resolve "$QUEST" | head -n1 | awk '{print $2}')
-./build/bin/Release/memix view --store-root /tmp/memix-store list --kind derivation --json
-./build/bin/Release/memix view --store-root /tmp/memix-store ls "derivation:$D" rules
-./build/bin/Release/memix view --store-root /tmp/memix-store cat "derivation:$D" rules/README.md
-./build/bin/Release/memix view --store-root /tmp/memix-store show "derivation:$D" --json
-DOC_D=$(./build/bin/Release/memix view --store-root /tmp/memix-store select --source documents/notes/README.md --intent "Reference documentation" | head -n1 | awk '{print $2}')
-ENV=$(./build/bin/Release/memix view --store-root /tmp/memix-store compose --mount "$D=prior" --mount "$DOC_D" --intent "Documentation workspace" | head -n1 | awk '{print $2}')
-./build/bin/Release/memix view --store-root /tmp/memix-store tree "environment:$ENV" --depth 2
-./build/bin/Release/memix view --store-root /tmp/memix-store cat "$ENV" prior/rules/README.md
-./build/bin/Release/memix view --store-root /tmp/memix-store activate "$ENV" --into ./.memory
-cat ./.memory/README.md
-cat ./.memory/prior/rules/README.md
-./build/bin/Release/memix view --store-root /tmp/memix-store freshness "$QUEST" --json
-./build/bin/Release/memix view --store-root /tmp/memix-store stats "$QUEST" --json
-./build/bin/Release/memix view --store-root /tmp/memix-store generations --into ./.memory
-./build/bin/Release/memix view --store-root /tmp/memix-store status --into ./.memory
-./build/bin/Release/memix view --store-root /tmp/memix-store deactivate --into ./.memory
-```
+## Documentation
 
-`select` publishes D without an E. `compose --mount DERIVATION[=MOUNT]`
-publishes E without another D; repeat `--mount` for multiple bindings.
-Bindings are canonicalized, directory merging is allowed, and duplicate
-bindings, file collisions (even identical bytes) and file/directory conflicts
-are rejected. Root mount is omitted or written as `.`.
-
-Each operation has its own Quest. `define --kind selection --source …` or
-`define --kind composition --mount …` registers a recipe without resolving
-it; the default kind is selection. `select`, `compose` and `resolve --json`
-return `quest`, `result: {kind, id}`, and `inserted`. Discovery JSON includes
-`result_kind` and `latest_result` (null before resolution).
-`find` searches intent/name text; `--covers` matches direct Store selectors,
-not transitive composition contents.
-
-`cat`, `ls`, `tree` and `show` accept `derivation:ID` or
-`environment:ID`. A bare ID always names E, never a namespace guess.
-`ls VIEW [PATH]` lists immediate children; `tree` supports path/depth limits.
-`list` inventories E; `list --kind derivation` inventories D.
-`cat` returns verified bytes rather than reopening an unchecked tree link.
-
-Activation produces a read-only root `README.md` containing the E identity,
-composition guidance, and all canonical bindings with their frozen D guidance.
-Updating or deleting Quest catalog entries does not change saved replay bytes.
-Rebuilding can freeze new guidance: changing composition annotations changes E,
-not its D inputs. Root `README.md` is reserved at the assembled E root.
-Link and Copy consume E's complete output set; Copy verifies its delivered bytes.
-Profile generation and marker v2 records reference E, not a single owning D.
-
-Selection freshness uses one `input_resolutions` record per context input,
-including optional empty selections and overlapping inputs. It remains a
-type-generation, on-demand check, not semantic relevance or proactive notification.
-Composition pins D IDs, so `stale: false` means no followed-ref drift.
-Refreshing a selection does not update an existing E: compose the new D
-explicitly, which changes the composition recipe/Quest.
-
-Successful `cat/ls/tree` operations record typed best-effort receipts for the
-selected D or E's own Quest. E activation and rollback belong only to the
-composition Quest, with no per-binding fan-out; reactivation is still an event.
-`show`, Inspector previews and deactivation do not record consumption.
-`stats` separates D/E reads and counts `ls` independently. Receipt failure
-does not fail a successful primary operation; missing catalog entries do not
-prevent replay. Statistics are observed usage, not proof of comprehension.
-Malformed logs are reported by `stats`; history appends reject corrupt or
-unterminated records rather than silently repairing them.
-
-**Breaking format boundary:** the old `build` / `--view` workflow, D v1–v3,
-E v1–v2, and old Quest/Profile records are unsupported. There are no adapters,
-receipt sidecars, or automatic Store migrations. Use the latest model in a
-deliberately chosen Store; never delete existing data to make an example work.
-Raw selection is implemented; external `derive`, generated/local payloads,
-semantic priority rules and proactive invalidation are not.
-See [VIEW_OBJECT_MODEL.md](VIEW_OBJECT_MODEL.md) for the current contract and
-[DERIVED_ARTIFACTS.md](DERIVED_ARTIFACTS.md) for the separate generated-output proposal.
-
-`memix store` defaults to `MEMIX_STORE_HOME`, then `$XDG_DATA_HOME/memix`,
-then `$HOME/.memix`. The supported immutable object types are `rules`, `chat`,
-and `documents`. Stored bytes live as immutable SHA-256 blobs under each
-type's `blobs/` directory; when ingest uses `--dest`, memix also records the
-blob in that type's canonical context tree and advances the type's latest
-generation ref. `memix store rm --type <type> <path>` retracts a logical file
-or directory subtree by committing a new generation whose tree no longer
-contains the path. Removal is logical and history-preserving: blobs and prior
-generations remain immutable and readable, so pinned generation locators keep
-resolving.
-
-### Discovery surface
-
-`<store-root>/latest/` is a derived, read-only hardlink projection of every
-type's latest logical tree. It contains real directories and logical-path
-filenames, so ordinary tools work without special symlink flags:
-
-```bash
-rg -i "search terms" /tmp/memix-store/latest
-find /tmp/memix-store/latest -type f
-grep -R -i "search terms" /tmp/memix-store/latest
-```
-
-An ingest with `--dest` and `rm` refresh the projection after committing their
-new generation. Blob-only ingests have no logical path and do not appear.
-Refresh and `expose` serialize projection writers, validate the current trees
-and blobs, and build a complete read-only hardlink tree beside `latest/`.
-
-On Linux and macOS, publication replaces the **entire `latest/` tree** with one
-atomic directory exchange (or a rename for the first publication). A failed
-build or exchange leaves the prior projection intact; unsupported filesystems
-report an error rather than falling back to a non-atomic exchange. macOS
-briefly needs writable directory roots for the rename; descendants remain
-frozen and root permissions are restored afterwards. This is a publication
-boundary, not a transaction across the independently committed type refs,
-power-loss durability, or snapshot isolation across multiple independent
-lookups of `latest/`.
-
-Windows also builds the complete tree first, but uses a recoverable two-rename
-handoff: concurrent readers can still observe a brief missing `latest/` path.
-If installation fails, memix restores the old tree; if restoration also fails,
-the error identifies the retained tree's recovery path.
-
-Retired complete projections are retained in hidden `.tmp-latest-*` directories
-at the Store root so in-flight readers can finish traversing an old tree. These
-are **not automatically reclaimed temporary directories**. Each refresh
-revalidates/relinks all current files and retains another set of directories
-and hardlinks, but does not copy blob bytes. There is no automatic projection
-GC; removing retired trees requires quiescing readers and writers first.
-
-The projection contains no source-of-truth state. Repair it with
-`memix store --store-root /tmp/memix-store expose`; a refresh failure warns
-without rolling back a committed ingest or removal. Searching this surface is
-untracked exploration. Turn useful paths into quests with `find --covers`,
-`define`, or `build` so selection and subsequent consumption remain tracked.
-
-<details>
-<summary><b>🔍 Manual smoke check</b> (against the real default store root)</summary>
-
-```bash
-./build/bin/Release/memix store ingest --type rules --dest README.md README.md
-./build/bin/Release/memix store rules tree
-./build/bin/Release/memix store list --type rules
-```
-
-All object types can ingest plain blobs. Passing `--dest` stores the blob at a
-logical path inside that type's canonical context tree and advances its latest
-generation ref. Commands under `rules` operate on the rules logical tree. Refs
-such as `refs/rules/latest`, `refs/documents/latest`, and
-`refs/rules/generations/000001` are small mutable files containing immutable
-generation ids; each generation then points at its immutable root tree.
-
-That writes outside the repository, so use `--store-root` when you want an
-isolated test store.
-
-</details>
-
-## ✅ Tests
-
-```bash
-cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DCPM_SOURCE_CACHE=$HOME/.cache/CPM
-cmake --build build
-ctest --test-dir build -C Release -VV
-```
-
-## 🍺 Homebrew
-
-The repository includes a Homebrew formula under `Formula/memix.rb`. It is
-intended for a `MrZLeo/homebrew-memix` tap and declares the Homebrew dependencies
-needed to build and run the CLI. See `Formula/README.md` for publishing steps.
-
-## ⚙️ Common Options
-
-| Option | Default | Description |
-| ------ | ------- | ----------- |
-| `memix_BUILD_EXECUTABLE` | `ON` | Build CLI executables |
-| `memix_STATIC_LINK` | `ON` | Self-contained static binaries |
-| `memix_ENABLE_UNIT_TESTING` | `ON` | Build unit tests |
-| `memix_ENABLE_CLANG_TIDY` | `OFF` | Analyze library and CLI sources with clang-tidy |
-| `memix_ENABLE_CPPCHECK` | `OFF` | Analyze library and CLI sources with cppcheck |
-| `memix_ENABLE_CCACHE` | `ON` | Use ccache unless a compiler launcher is explicitly set |
-| `memix_WARNINGS_AS_ERRORS` | `OFF` | Treat project compiler warnings as errors |
-| `memix_ENABLE_CODE_COVERAGE` | `OFF` | Enable code coverage |
-| `memix_ENABLE_DOXYGEN` | `OFF` | Generate Doxygen docs |
-| `memix_ENABLE_LTO` | `OFF` | Enable link-time optimization |
-| `memix_ENABLE_ASAN` | `OFF` | Enable AddressSanitizer |
-
-For a shared library, configure with `-Dmemix_STATIC_LINK=OFF -DBUILD_SHARED_LIBS=ON`.
-With `memix_BUILD_EXECUTABLE=OFF`, library tests still build, but the `store_test`
-and `quest_test` targets are explicitly skipped because they also exercise the
-CLIs. Set `memix_ENABLE_UNIT_TESTING=OFF` for a library-only build without tests.
-The old header-only mode is unsupported; the template's `USE_ALT_NAMES` and
-`VERBOSE_OUTPUT` options have been removed. Use CMake's `--log-level=VERBOSE`
-(or `CMAKE_MESSAGE_LOG_LEVEL=VERBOSE`) for verbose configuration output.
+- [CLI reference](skill/memix-cli/references/cli.md)
+- [Profiles and rollback](skill/memix-cli/references/profiles-and-recovery.md)
+- [Development and contributing](CONTRIBUTING.md)
+- [BSD 3-Clause license](LICENSE)
