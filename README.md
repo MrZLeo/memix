@@ -397,12 +397,36 @@ find /tmp/memix-store/latest -type f
 grep -R -i "search terms" /tmp/memix-store/latest
 ```
 
-An ingest with `--dest` refreshes the affected type after committing its new
-generation, and `rm` refreshes it the same way after a removal. Blob-only
-ingests have no logical path and do not appear. The
-projection contains no source-of-truth state and can be deleted or repaired
-with `memix store --store-root /tmp/memix-store expose`; a refresh failure
-warns without rolling back the committed ingest. Searching this surface is
+An ingest with `--dest` and `rm` refresh the projection after committing their
+new generation. Blob-only ingests have no logical path and do not appear.
+Refresh and `expose` serialize projection writers, validate the current trees
+and blobs, and build a complete read-only hardlink tree beside `latest/`.
+
+On Linux and macOS, publication replaces the **entire `latest/` tree** with one
+atomic directory exchange (or a rename for the first publication). A failed
+build or exchange leaves the prior projection intact; unsupported filesystems
+report an error rather than falling back to a non-atomic exchange. macOS
+briefly needs writable directory roots for the rename; descendants remain
+frozen and root permissions are restored afterwards. This is a publication
+boundary, not a transaction across the independently committed type refs,
+power-loss durability, or snapshot isolation across multiple independent
+lookups of `latest/`.
+
+Windows also builds the complete tree first, but uses a recoverable two-rename
+handoff: concurrent readers can still observe a brief missing `latest/` path.
+If installation fails, memix restores the old tree; if restoration also fails,
+the error identifies the retained tree's recovery path.
+
+Retired complete projections are retained in hidden `.tmp-latest-*` directories
+at the Store root so in-flight readers can finish traversing an old tree. These
+are **not automatically reclaimed temporary directories**. Each refresh
+revalidates/relinks all current files and retains another set of directories
+and hardlinks, but does not copy blob bytes. There is no automatic projection
+GC; removing retired trees requires quiescing readers and writers first.
+
+The projection contains no source-of-truth state. Repair it with
+`memix store --store-root /tmp/memix-store expose`; a refresh failure warns
+without rolling back a committed ingest or removal. Searching this surface is
 untracked exploration. Turn useful paths into quests with `find --covers`,
 `define`, or `build` so selection and subsequent consumption remain tracked.
 

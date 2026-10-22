@@ -105,6 +105,10 @@ FsResult<path> read_symlink(const path &entry_path);
 FsResult<path> relative(const path &target, const path &base);
 FsResult<path> weakly_canonical(const path &entry_path);
 FsVoid rename(const path &source, const path &destination);
+// Atomically exchanges two existing paths, including nonempty directories.
+// Unsupported platforms/filesystems return an error; there is no two-rename
+// fallback and neither path is removed on failure.
+FsVoid exchange_paths(const path &left, const path &right);
 // Atomically installs `source` at `destination`, replacing an existing file.
 // Windows retries transient sharing violations caused by concurrent readers.
 FsVoid replace_file(const path &source, const path &destination);

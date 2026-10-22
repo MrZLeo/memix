@@ -1,17 +1,28 @@
 #include "memix/store.hpp"
 
+#include "detail/scope_exit.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <latch>
 #include <optional>
 #include <random>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace fs = memix::fs;
 
@@ -181,6 +192,32 @@ void make_directory_tree_writable(const fs::path &root) {
   }
   REQUIRE_FALSE(iterator_error);
 }
+
+std::size_t projection_snapshot_count(const fs::path &root) {
+  std::size_t count = 0;
+  for (const auto &entry : fs::directory_iterator(root)) {
+    if (entry.path().filename().string().starts_with(".tmp-latest-")) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+#ifndef _WIN32
+std::string read_pinned_file(int directory, const char *path) {
+  // POSIX openat declares an optional creation mode, even for read-only opens.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+  const int file = ::openat(directory, path, O_RDONLY | O_CLOEXEC);
+  REQUIRE(file >= 0);
+  const memix::scope_exit close_file(
+      [file] { static_cast<void>(::close(file)); });
+  constexpr std::size_t buffer_size = 64;
+  std::array<char, buffer_size> buffer{};
+  const auto count = ::read(file, buffer.data(), buffer.size());
+  REQUIRE(count >= 0);
+  return {buffer.data(), static_cast<std::size_t>(count)};
+}
+#endif
 
 std::string shell_quote(std::string_view value) {
 #ifdef _WIN32
@@ -1507,6 +1544,273 @@ TEST_CASE("expose rebuilds every type and is idempotent",
   REQUIRE(empty_status);
   REQUIRE((empty_status->permissions() & fs::perms::owner_write)
           == fs::perms::none);
+}
+
+#ifndef _WIN32
+TEST_CASE("projection publication never hides surviving files from readers",
+          "[store][expose][publication]") {
+  TemporaryDirectory directory("projection-readers");
+  const fs::path source = directory.path() / "source.md";
+  const memix::Store store(directory.path() / "store");
+  write_file(source, "old\n");
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "repo/keep.md",
+      .message = {},
+  }));
+  const fs::path projected = store.root() / "latest/rules/repo/keep.md";
+  std::atomic<unsigned int> failures{0};
+  std::atomic<unsigned int> reads{0};
+  std::latch started(1);
+  std::jthread reader([&](const std::stop_token &stop) {
+    while (!stop.stop_requested()) {
+      const auto contents = fs::read_text_file(projected);
+      if (!contents || (*contents != "old\n" && *contents != "new\n")) {
+        ++failures;
+      }
+      if (reads.fetch_add(1) == 0) {
+        started.count_down();
+      }
+    }
+  });
+  started.wait();
+  constexpr int iterations = 40;
+  for (int index = 0; index < iterations; ++index) {
+    write_file(source, index % 2 == 0 ? "new\n" : "old\n");
+    const auto changed = store.ingest_file({
+        .type = memix::MemoryObjectType::Rules,
+        .source_path = source,
+        .context_path = "repo/keep.md",
+        .message = {},
+    });
+    REQUIRE(changed);
+    REQUIRE_FALSE(changed->projection_warning);
+    const auto added = store.ingest_file({
+        .type = memix::MemoryObjectType::Rules,
+        .source_path = source,
+        .context_path = "repo/subtree/remove.md",
+        .message = {},
+    });
+    REQUIRE(added);
+    REQUIRE_FALSE(added->projection_warning);
+    const auto removed = store.remove_file({
+        .type = memix::MemoryObjectType::Rules,
+        .context_path = "repo/subtree",
+        .message = {},
+    });
+    REQUIRE(removed);
+    REQUIRE_FALSE(removed->projection_warning);
+    REQUIRE(store.expose());
+  }
+  reader.request_stop();
+  reader.join();
+  REQUIRE(reads.load() > 0);
+  REQUIRE(failures.load() == 0);
+}
+
+TEST_CASE("retired projections remain complete for readers with pinned roots",
+          "[store][expose][publication]") {
+  TemporaryDirectory directory("projection-pinned-reader");
+  const fs::path source = directory.path() / "source.md";
+  const memix::Store store(directory.path() / "store");
+  write_file(source, "old\n");
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "repo/remove/a.md",
+      .message = {},
+  }));
+  REQUIRE(store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "repo/remove/b.md",
+      .message = {},
+  }));
+  const fs::path latest = store.root() / "latest";
+  // POSIX open declares an optional creation mode, even for read-only opens.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+  const int pinned = ::open(latest.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  REQUIRE(pinned >= 0);
+  const memix::scope_exit close_root(
+      [pinned] { static_cast<void>(::close(pinned)); });
+  const auto removed = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "repo/remove",
+      .message = {},
+  });
+  REQUIRE(removed);
+  REQUIRE_FALSE(removed->projection_warning);
+  REQUIRE_FALSE(path_exists(latest / "rules/repo"));
+  write_file(source, "new\n");
+  const auto added = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "repo/remove/a.md",
+      .message = {},
+  });
+  REQUIRE(added);
+  REQUIRE_FALSE(added->projection_warning);
+  REQUIRE(store.expose());
+  // These reads use a deliberately pinned directory, not two independent
+  // lookups of latest/ that would be allowed to see different publications.
+  REQUIRE(read_pinned_file(pinned, "rules/repo/remove/a.md") == "old\n");
+  REQUIRE(read_pinned_file(pinned, "rules/repo/remove/b.md") == "old\n");
+  REQUIRE(read_file(latest / "rules/repo/remove/a.md") == "new\n");
+  REQUIRE_FALSE(path_exists(latest / "rules/repo/remove/b.md"));
+}
+
+TEST_CASE("failed directory exchange preserves both trees and can be retried",
+          "[store][expose][publication]") {
+  TemporaryDirectory directory("projection-exchange-failure");
+  const fs::path latest = directory.path() / "latest";
+  const fs::path staged = latest / "staged";
+  REQUIRE(fs::create_directories(staged));
+  write_file(latest / "old.md", "old\n");
+  write_file(staged / "new.md", "new\n");
+  // An ancestor cannot be exchanged with its own descendant. The syscall
+  // must fail without moving either tree aside or deleting any children.
+  const auto failed = fs::exchange_paths(staged, latest);
+  REQUIRE_FALSE(failed);
+  REQUIRE(read_file(latest / "old.md") == "old\n");
+  REQUIRE(read_file(staged / "new.md") == "new\n");
+  const fs::path sibling = directory.path() / "staged";
+  REQUIRE(fs::rename(staged, sibling));
+  REQUIRE(fs::exchange_paths(sibling, latest));
+  REQUIRE(read_file(latest / "new.md") == "new\n");
+  REQUIRE(read_file(sibling / "old.md") == "old\n");
+}
+#endif
+
+TEST_CASE("failed expose preserves the complete previous projection",
+          "[store][expose][publication]") {
+  TemporaryDirectory directory("projection-build-failure");
+  const fs::path source = directory.path() / "source.md";
+  const memix::Store store(directory.path() / "store");
+  write_file(source, "content\n");
+  for (const auto type : memix::memory_object_type_values()) {
+    REQUIRE(store.ingest_file({
+        .type = type,
+        .source_path = source,
+        .context_path = "repo/keep.md",
+        .message = {},
+    }));
+  }
+  const auto blob =
+      store.read_file(memix::MemoryObjectType::Documents, "repo/keep.md");
+  REQUIRE(blob);
+  const auto metadata = read_file(blob->metadata_path);
+  const auto snapshots = projection_snapshot_count(store.root());
+  REQUIRE(fs::permissions(blob->metadata_path, fs::perms::owner_all));
+  write_file(blob->metadata_path, "{broken");
+  const auto failed = store.expose();
+  REQUIRE_FALSE(failed);
+  REQUIRE(projection_snapshot_count(store.root()) == snapshots);
+  for (const auto type : memix::memory_object_type_values()) {
+    REQUIRE(
+        read_file(
+            store.root() / "latest" / memix::to_string(type) / "repo/keep.md")
+        == "content\n");
+  }
+  write_file(blob->metadata_path, metadata);
+  REQUIRE(fs::apply_read_only_file_permissions(blob->metadata_path));
+  REQUIRE(store.expose());
+}
+
+TEST_CASE("projection failures preserve committed ingest and remove results",
+          "[store][expose][publication]") {
+  TemporaryDirectory directory("projection-commit-warning");
+  const fs::path source = directory.path() / "source.md";
+  const memix::Store store(directory.path() / "store");
+  write_file(source, "old\n");
+  const auto initial = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "keep.md",
+      .message = {},
+  });
+  REQUIRE(initial);
+  REQUIRE_FALSE(initial->projection_warning);
+  const auto snapshots = projection_snapshot_count(store.root());
+  const auto lock = store.root() / ".locks/latest-projection";
+  REQUIRE(fs::remove(lock));
+  REQUIRE(fs::create_directory(lock));
+  write_file(source, "new\n");
+  const auto ingested = store.ingest_file({
+      .type = memix::MemoryObjectType::Rules,
+      .source_path = source,
+      .context_path = "keep.md",
+      .message = {},
+  });
+  REQUIRE(ingested);
+  REQUIRE(ingested->projection_warning);
+  REQUIRE(ingested->projection_warning->contains("memix store expose"));
+  REQUIRE(store.read_ref("rules/latest").value() == ingested->generation.id);
+  REQUIRE(read_file(store.root() / "latest/rules/keep.md") == "old\n");
+  const auto removed = store.remove_file({
+      .type = memix::MemoryObjectType::Rules,
+      .context_path = "keep.md",
+      .message = {},
+  });
+  REQUIRE(removed);
+  REQUIRE(removed->projection_warning);
+  REQUIRE(store.read_ref("rules/latest").value() == removed->generation.id);
+  REQUIRE(store.list_files(memix::MemoryObjectType::Rules).value().empty());
+  REQUIRE(read_file(store.root() / "latest/rules/keep.md") == "old\n");
+  REQUIRE_FALSE(store.expose());
+  REQUIRE(projection_snapshot_count(store.root()) == snapshots);
+  REQUIRE(fs::remove(lock));
+  REQUIRE(store.expose());
+  REQUIRE_FALSE(path_exists(store.root() / "latest/rules/keep.md"));
+  REQUIRE(store.read_file(memix::MemoryObjectType::Rules, "keep.md",
+                          initial->generation.id));
+}
+
+TEST_CASE("different types serialize complete projection publications",
+          "[store][expose][publication]") {
+  TemporaryDirectory directory("projection-concurrent-types");
+  const fs::path source = directory.path() / "source.md";
+  const memix::Store store(directory.path() / "store");
+  write_file(source, "content\n");
+  constexpr auto types = memix::memory_object_type_values();
+  // Initialize shared directories before starting concurrent writers.
+  REQUIRE(store.expose());
+  constexpr int iterations = 8;
+  for (int iteration = 0; iteration < iterations; ++iteration) {
+    std::latch start(types.size());
+    std::array<std::optional<memix::StoreResult<memix::FileIngestResult>>,
+               types.size()>
+        results;
+    std::vector<std::jthread> writers;
+    writers.reserve(types.size());
+    for (std::size_t index = 0; index < types.size(); ++index) {
+      writers.emplace_back([&, index] {
+        start.arrive_and_wait();
+        results[index] = store.ingest_file({
+            .type = types[index],
+            .source_path = source,
+            .context_path = std::format("repo/{}.md", iteration),
+            .message = {},
+        });
+      });
+    }
+    writers.clear(); // Join before inspecting results or advancing iteration.
+    for (std::size_t index = 0; index < types.size(); ++index) {
+      REQUIRE(results[index].has_value());
+      const auto &result = *results[index];
+      REQUIRE(result);
+      INFO(result->projection_warning.value_or(""));
+      REQUIRE_FALSE(result->projection_warning);
+      for (int file = 0; file <= iteration; ++file) {
+        REQUIRE(read_file(store.root()
+                          / "latest"
+                          / memix::to_string(types[index])
+                          / "repo"
+                          / std::format("{}.md", file))
+                == "content\n");
+      }
+    }
+  }
 }
 
 TEST_CASE("memix store expose reports plain and JSON counts",

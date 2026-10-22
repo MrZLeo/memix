@@ -1,5 +1,6 @@
 #include "memix/fs.hpp"
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <expected>
@@ -12,6 +13,13 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#ifdef __linux__
+#include <fcntl.h>
+#endif
+#if defined(__linux__) || defined(__APPLE__)
+// POSIX rename extensions are declared by the C header, not ISO <cstdio>.
+#include <stdio.h> // NOLINT(modernize-deprecated-headers)
+#endif
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -161,6 +169,27 @@ FsVoid rename(const path &source, const path &destination) {
   std::error_code error;
   std_fs::rename(source, destination, error);
   return fs_void(error, "failed to rename", source, destination);
+}
+
+FsVoid exchange_paths(const path &left, const path &right) {
+#ifdef __linux__
+  const int result = ::renameat2(AT_FDCWD, left.c_str(), AT_FDCWD,
+                                 right.c_str(), RENAME_EXCHANGE);
+#elifdef __APPLE__
+  const int result = ::renamex_np(left.c_str(), right.c_str(), RENAME_SWAP);
+#else
+  return fs_error("atomic path exchange is not supported",
+                  std::make_error_code(std::errc::operation_not_supported),
+                  left, right);
+#endif
+#if defined(__linux__) || defined(__APPLE__)
+  if (result != 0) {
+    return fs_error("failed to exchange paths",
+                    std::error_code(errno, std::generic_category()), left,
+                    right);
+  }
+  return {};
+#endif
 }
 
 FsVoid replace_file(const path &source, const path &destination) {
