@@ -1,3 +1,4 @@
+#include "cli/tui_model.hpp"
 #include "detail/scope_exit.hpp"
 #include "memix/fs.hpp"
 #include "memix/store.hpp"
@@ -527,6 +528,67 @@ TEST_CASE(
 }
 #endif
 
+TEST_CASE("environment lists show compact bindings and preserve JSON",
+          "[cli][view-list]") {
+  const std::string header =
+      std::format("{:<66}{:>10}{:>8}{:>12}\n", "ENVIRONMENT", "BINDINGS",
+                  "FILES", "SIZE_BYTES");
+  for (const auto binding_count : {1U, 2U, 12U}) {
+    CAPTURE(binding_count);
+    TemporaryDirectory directory;
+    const auto root = directory.path();
+    const auto empty = run_command(root, "view", {"list"});
+    REQUIRE(empty.status == 0);
+    CHECK(empty.error.empty());
+    CHECK(empty.output == header);
+    CHECK(run_command(root, "view", {"list", "--json"}).output == "[]\n");
+
+    const auto source = root / "shared.md";
+    constexpr std::string_view contents = "shared context\n";
+    write_file(source, contents);
+    const memix::Store store(root / "store with spaces");
+    REQUIRE(store.ingest_file({
+        .type = memix::MemoryObjectType::Rules,
+        .source_path = source,
+        .context_path = "AGENTS.md",
+        .message = {},
+    }));
+    const memix::ViewService views(store);
+    const auto expression = views.expression_from_sources({"rules/AGENTS.md"});
+    REQUIRE(expression);
+    const auto derivation = views.select(*expression);
+    REQUIRE(derivation);
+    std::vector<memix::ViewEnvironmentBinding> bindings;
+    for (auto index = 0U; index < binding_count; ++index) {
+      bindings.push_back({
+          .mount = std::format("mount-{}", index),
+          .derivation_id = derivation->id,
+      });
+    }
+    const auto environment = views.compose(bindings);
+    REQUIRE(environment);
+    REQUIRE(environment->derivations.size() == 1);
+    const auto size_bytes = binding_count * contents.size();
+
+    const auto plain = run_command(root, "view", {"list"});
+    REQUIRE(plain.status == 0);
+    CHECK(plain.error.empty());
+    CHECK(plain.output
+          == header
+                 + std::format("{:<66}{:>10}{:>8}{:>12}\n", environment->id,
+                               binding_count, binding_count, size_bytes));
+
+    const auto json = run_command(root, "view", {"list", "--json"});
+    REQUIRE(json.status == 0);
+    CHECK(json.error.empty());
+    CHECK(json.output
+          == std::format(
+              "[{{\"id\":\"{}\",\"binding_count\":{},\"file_count\":{},"
+              "\"size_bytes\":{},\"upstream_environment_count\":0}}]\n",
+              environment->id, binding_count, binding_count, size_bytes));
+  }
+}
+
 TEST_CASE("view CLI exposes typed selection composition and independent "
           "derivation reads",
           "[cli][d2]") {
@@ -609,4 +671,128 @@ TEST_CASE("view CLI exposes typed selection composition and independent "
   CHECK(failed.status != 0);
   CHECK(failed.output.empty());
   CHECK(invoke({"stats", dq, "--json"}).contains("\"read_count\":3"));
+}
+
+TEST_CASE("TUI recognizes Derivation locators without environment fallback",
+          "[cli][tui-navigation]") {
+  TemporaryDirectory directory;
+  const auto root = directory.path();
+  const auto help = run_command(root, "tui", {"--help"});
+  REQUIRE(help.status == 0);
+  CHECK(help.output.contains("derivations/ID"));
+
+  const auto missing = run_command(root, "tui", {"derivations/abc123"});
+  CHECK(missing.status != 0);
+  CHECK(missing.output.empty());
+  CHECK(missing.error.contains("derivation"));
+  CHECK_FALSE(missing.error.contains("unsupported type"));
+  CHECK_FALSE(missing.error.contains("locator"));
+
+  const auto invalid = run_command(root, "tui", {"derivations/XYZ"});
+  CHECK(invalid.status != 0);
+  CHECK(invalid.error.contains("lowercase hexadecimal"));
+}
+
+TEST_CASE("selection CLI describes Store sources and selection targets",
+          "[cli][tui-navigation]") {
+  TemporaryDirectory directory;
+  const auto root = directory.path();
+  for (const auto *command : {"select", "define"}) {
+    CAPTURE(command);
+    const auto help = run_command(root, "view", {command, "--help"});
+    REQUIRE(help.status == 0);
+    CHECK(help.output.contains("Store source locator"));
+  }
+  for (const auto *target : {"context_pack", "unknown"}) {
+    CAPTURE(target);
+    const auto rejected = run_command(
+        root, "view",
+        {"select", "--source", "rules/AGENTS.md", "--target", target});
+    CHECK(rejected.status != 0);
+    CHECK(rejected.output.empty());
+    CHECK(rejected.error.contains("unsupported selection target"));
+    CHECK_FALSE(rejected.error.contains("build target"));
+  }
+}
+
+TEST_CASE("TUI snapshots preserve typed frozen views without usage receipts",
+          "[cli][tui-navigation]") {
+  TemporaryDirectory directory;
+  const auto root = directory.path();
+  const auto source = root / "input.md";
+  constexpr std::string_view contents = "frozen context\n";
+  write_file(source, contents);
+  const memix::Store store(root / "store with spaces");
+  const auto ingest = [&] {
+    return store.ingest_file({
+        .type = memix::MemoryObjectType::Rules,
+        .source_path = source,
+        .context_path = "AGENTS.md",
+        .message = {},
+    });
+  };
+  REQUIRE(ingest());
+  const memix::ViewService views(store);
+  const auto expression = views.expression_from_sources({"rules/AGENTS.md"});
+  REQUIRE(expression);
+  const auto derivation = views.select(*expression);
+  REQUIRE(derivation);
+  const auto selected = memix::tui::resolve_view_snapshot(
+      views, {
+                 .kind = memix::ViewObjectKind::Derivation,
+                 .id = derivation->id.substr(0, memix::tui::kShortIdLength),
+             });
+  REQUIRE(selected);
+  CHECK(selected->reference.kind == memix::ViewObjectKind::Derivation);
+  CHECK(selected->reference.id == derivation->id);
+  REQUIRE(selected->files.size() == 1);
+  CHECK(selected->files.front().output_path == fs::path("rules/AGENTS.md"));
+  CHECK_FALSE(memix::tui::resolve_view_snapshot(
+      views,
+      {.kind = memix::ViewObjectKind::Environment, .id = derivation->id}));
+  const auto before_composition = views.list_environments();
+  REQUIRE(before_composition);
+  CHECK(before_composition->empty());
+
+  const auto environment = views.compose({
+      {.mount = "left", .derivation_id = derivation->id},
+      {.mount = "right", .derivation_id = derivation->id},
+  });
+  REQUIRE(environment);
+  const auto composed = memix::tui::resolve_view_snapshot(
+      views, {
+                 .kind = memix::ViewObjectKind::Environment,
+                 .id = environment->id.substr(0, memix::tui::kShortIdLength),
+             });
+  REQUIRE(composed);
+  CHECK(composed->reference.kind == memix::ViewObjectKind::Environment);
+  CHECK(composed->reference.id == environment->id);
+  CHECK(composed->files.size() == 2);
+  CHECK_FALSE(memix::tui::resolve_view_snapshot(
+      views,
+      {.kind = memix::ViewObjectKind::Derivation, .id = environment->id}));
+  const auto tree =
+      memix::tui::view_tree_snapshot(composed->files, "left/rules");
+  REQUIRE(tree.path_exists);
+  REQUIRE(tree.rows.size() == 1);
+  CHECK(tree.rows.front().title == "AGENTS.md");
+
+  write_file(source, "new source content\n");
+  REQUIRE(ingest());
+  const auto selected_file =
+      views.read_output(selected->reference, "rules/AGENTS.md", false);
+  REQUIRE(selected_file);
+  CHECK(selected_file->contents == contents);
+  const auto composed_file =
+      views.read_output(composed->reference, "left/rules/AGENTS.md", false);
+  REQUIRE(composed_file);
+  CHECK(composed_file->contents == contents);
+  const auto selected_stats = views.quest_stats(derivation->ir_hash);
+  const auto composed_stats = views.quest_stats(environment->ir_hash);
+  REQUIRE(selected_stats);
+  REQUIRE(composed_stats);
+  CHECK(selected_stats->read_count == 0);
+  CHECK(composed_stats->read_count == 0);
+  CHECK(selected_stats->activation_count == 0);
+  CHECK(composed_stats->activation_count == 0);
 }

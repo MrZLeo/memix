@@ -129,8 +129,7 @@ private:
 };
 
 template <typename Value>
-CommonResult<Value>
-json_value_as(simdjson::dom::element value) {
+CommonResult<Value> json_value_as(simdjson::dom::element value) {
   Value parsed{};
   const simdjson::error_code error = value.get(parsed);
   if (error != simdjson::SUCCESS) {

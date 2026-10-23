@@ -458,8 +458,9 @@ run_ingest(const StoreCliOptions &options,
   return {};
 }
 
-memix::cli_detail::VoidResult run_rm(const StoreCliOptions &options,
-                                     const std::shared_ptr<spdlog::logger> &logger) {
+memix::cli_detail::VoidResult
+run_rm(const StoreCliOptions &options,
+       const std::shared_ptr<spdlog::logger> &logger) {
   const memix::cli_detail::Result<memix::MemoryObjectType> type =
       require_command_type(CommandTypeRequest{
           .command_name = "rm",

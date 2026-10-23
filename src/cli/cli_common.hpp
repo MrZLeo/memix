@@ -177,9 +177,9 @@ concept entry_text_formatter =
 template <typename Entry, typename PathText, typename IdText>
   requires entry_text_formatter<PathText, Entry>
         && entry_text_formatter<IdText, Entry>
-void print_path_id_table(const std::vector<Entry> &entries,
-                         PathIdTableLayout layout, PathText path_text,
-                         IdText id_text) {
+void
+print_path_id_table(const std::vector<Entry> &entries, PathIdTableLayout layout,
+                    PathText path_text, IdText id_text) {
   std::size_t path_width = layout.minimum_path_width;
   for (const Entry &entry : entries) {
     const auto path = path_text(entry);

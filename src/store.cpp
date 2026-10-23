@@ -393,8 +393,8 @@ fs::path latest_dir_for(const fs::path &root) {
   return root / std::string(kLatestDir);
 }
 
-fs::path projection_dir_for(const fs::path &root,
-                            memix::MemoryObjectType type) {
+fs::path
+projection_dir_for(const fs::path &root, memix::MemoryObjectType type) {
   return latest_dir_for(root) / std::string(memix::to_string(type));
 }
 
@@ -1637,7 +1637,8 @@ attach_blob_to_context_tree(const fs::path &root, memix::MemoryObjectType type,
 }
 
 StoreResult<std::string>
-detach_path_from_context_tree(const fs::path &root, memix::MemoryObjectType type,
+detach_path_from_context_tree(const fs::path &root,
+                              memix::MemoryObjectType type,
                               std::string_view root_tree_id,
                               std::span<const std::string> path_components,
                               const fs::path &context_path) {
@@ -2119,8 +2120,7 @@ projection_directories(const fs::path &root) {
   if (!*exists) {
     return std::vector<fs::path>{};
   }
-  const memix::FsResult<fs::file_status> root_status =
-      fs::symlink_status(root);
+  const memix::FsResult<fs::file_status> root_status = fs::symlink_status(root);
   if (!root_status) {
     return store_error(root_status.error());
   }
@@ -2153,8 +2153,7 @@ projection_directories(const fs::path &root) {
 
 StoreVoid set_projection_directory_permissions(const fs::path &root,
                                                fs::perms permissions) {
-  StoreResult<std::vector<fs::path>> directories =
-      projection_directories(root);
+  StoreResult<std::vector<fs::path>> directories = projection_directories(root);
   if (!directories) {
     return std::unexpected(directories.error());
   }
@@ -2637,8 +2636,7 @@ Store::ingest_file(const FileIngestRequest &request) const {
     projection_warning = std::format(
         "failed to refresh latest/{} projection: {}; run `memix store expose` "
         "to rebuild it",
-        memix::to_string(request.type),
-        projection_refreshed.error().message);
+        memix::to_string(request.type), projection_refreshed.error().message);
   }
 
   std::optional<std::string> previous_generation_result = *previous_generation;
@@ -2741,8 +2739,7 @@ Store::remove_file(const FileRemoveRequest &request) const {
     projection_warning = std::format(
         "failed to refresh latest/{} projection: {}; run `memix store expose` "
         "to rebuild it",
-        memix::to_string(request.type),
-        projection_refreshed.error().message);
+        memix::to_string(request.type), projection_refreshed.error().message);
   }
 
   std::optional<std::string> previous_generation_result = *previous_generation;
@@ -2845,8 +2842,7 @@ StoreResult<ExposeReport> Store::expose() const {
     }
   });
   for (const MemoryObjectType type : memory_object_type_values()) {
-    const fs::path lock_path =
-        locks_dir_for(root_) / update_lock_name(type);
+    const fs::path lock_path = locks_dir_for(root_) / update_lock_name(type);
     const StoreVoid locked = acquire_directory_lock(
         lock_path, std::format("{} update", to_string(type)));
     if (!locked) {

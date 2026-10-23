@@ -255,8 +255,7 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
   const fs::path output_path = directory / "store-cli-stdout.txt";
   const fs::path error_path = directory / "store-cli-stderr.txt";
   std::string_view binary = MEMIX_TEST_BINARY;
-  if (const char *override_binary =
-          std::getenv("MEMIX_TEST_BINARY_OVERRIDE");
+  if (const char *override_binary = std::getenv("MEMIX_TEST_BINARY_OVERRIDE");
       override_binary != nullptr && override_binary[0] != '\0') {
     binary = override_binary;
   }
@@ -820,8 +819,8 @@ TEST_CASE("removing a file keeps the projection in sync", "[store][expose]") {
   REQUIRE_FALSE(removed->projection_warning.has_value());
 
   REQUIRE_FALSE(path_exists(projected_nested));
-  REQUIRE_FALSE(path_exists(store.root() / "latest" / "rules" / "repo"
-                            / "nested"));
+  REQUIRE_FALSE(
+      path_exists(store.root() / "latest" / "rules" / "repo" / "nested"));
   REQUIRE(read_file(store.root() / "latest" / "rules" / "repo" / "carried.md")
           == "carried memory\n");
 
@@ -1467,12 +1466,11 @@ TEST_CASE("context ingests maintain a read-only hardlink projection",
   const auto blob_only =
       store.ingest(memix::MemoryObjectType::Documents, blob_only_source);
   REQUIRE(blob_only);
-  REQUIRE_FALSE(path_exists(store.root() / "latest" / "documents"
-                            / "untracked.md"));
+  REQUIRE_FALSE(
+      path_exists(store.root() / "latest" / "documents" / "untracked.md"));
 }
 
-TEST_CASE("expose rebuilds every type and is idempotent",
-          "[store][expose]") {
+TEST_CASE("expose rebuilds every type and is idempotent", "[store][expose]") {
   TemporaryDirectory directory("expose-rebuild");
   const fs::path rule = directory.path() / "AGENTS.md";
   const fs::path chat = directory.path() / "session.txt";
@@ -1513,8 +1511,7 @@ TEST_CASE("expose rebuilds every type and is idempotent",
   REQUIRE(rebuilt->files_by_type[0].file_count == 1);
   REQUIRE(rebuilt->files_by_type[1].type == memix::MemoryObjectType::Chat);
   REQUIRE(rebuilt->files_by_type[1].file_count == 1);
-  REQUIRE(rebuilt->files_by_type[2].type
-          == memix::MemoryObjectType::Documents);
+  REQUIRE(rebuilt->files_by_type[2].type == memix::MemoryObjectType::Documents);
   REQUIRE(rebuilt->files_by_type[2].file_count == 1);
   REQUIRE(read_file(latest / "rules" / "repo" / "AGENTS.md")
           == "rule projection\n");
@@ -1837,12 +1834,10 @@ TEST_CASE("memix store expose reports plain and JSON counts",
 
   make_directory_tree_writable(store_root / "latest");
   REQUIRE(fs::remove_all(store_root / "latest"));
-  const CliResult plain =
-      run_cli(directory.path(), store_root, {"expose"});
+  const CliResult plain = run_cli(directory.path(), store_root, {"expose"});
   INFO(plain.error);
   REQUIRE(plain.status == 0);
-  REQUIRE(plain.output
-          == "rules: 1 file\nchat: 0 files\ndocuments: 1 file\n");
+  REQUIRE(plain.output == "rules: 1 file\nchat: 0 files\ndocuments: 1 file\n");
 
   make_directory_tree_writable(store_root / "latest");
   REQUIRE(fs::remove_all(store_root / "latest"));
@@ -1850,9 +1845,10 @@ TEST_CASE("memix store expose reports plain and JSON counts",
       run_cli(directory.path(), store_root, {"expose", "--json"});
   INFO(json.error);
   REQUIRE(json.status == 0);
-  REQUIRE(json.output
-          == R"([{"type":"rules","files":1},{"type":"chat","files":0},{"type":"documents","files":1}])"
-             "\n");
+  REQUIRE(
+      json.output
+      == R"([{"type":"rules","files":1},{"type":"chat","files":0},{"type":"documents","files":1}])"
+         "\n");
 }
 
 TEST_CASE("projection refresh failures warn without failing ingest",

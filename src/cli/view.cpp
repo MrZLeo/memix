@@ -405,7 +405,7 @@ require_selection_target(std::string_view target_name) {
       memix::parse_view_target_kind(target_name);
   if (!target.has_value() || *target != memix::ViewTargetKind::FileTree) {
     return memix::cli_detail::unexpected_error(std::format(
-        "unsupported build target `{}`; expected file_tree", target_name));
+        "unsupported selection target `{}`; expected file_tree", target_name));
   }
   return *target;
 }
@@ -588,13 +588,12 @@ memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
         | std::ranges::to<std::vector>();
     return print_json(json);
   }
-  std::println("{:<66}{:<66}{:>8}{:>12}{:>10}", "ENVIRONMENT", "BINDINGS",
-               "FILES", "SIZE_BYTES", "UPSTREAMS");
+  std::println("{:<66}{:>10}{:>8}{:>12}", "ENVIRONMENT", "BINDINGS", "FILES",
+               "SIZE_BYTES");
   for (const memix::ViewEnvironmentInfo &environment : *environments) {
-    std::println("{:<66}{:<66}{:>8}{:>12}{:>10}", environment.id,
+    std::println("{:<66}{:>10}{:>8}{:>12}", environment.id,
                  environment.binding_count, environment.file_count,
-                 environment.total_size_bytes,
-                 environment.upstream_environment_count);
+                 environment.total_size_bytes);
   }
   return {};
 }
@@ -1342,13 +1341,14 @@ void add_cat_command(Argum::Parser &parser, ViewCliOptions &options) {
 }
 
 void add_view_inputs(Argum::Parser &parser, ViewCliOptions &options) {
-  parser.add(Argum::Option("--source")
-                 .argName("TEXT")
-                 .help("View locator, for example rules/repo/AGENTS.md or "
-                       "chat/task/2026-05-20/@latest.")
-                 .handler([&options](std::string_view value) {
-                   options.sources.emplace_back(value);
-                 }));
+  parser.add(
+      Argum::Option("--source")
+          .argName("TEXT")
+          .help("Store source locator, for example rules/repo/AGENTS.md or "
+                "chat/task/2026-05-20/@latest.")
+          .handler([&options](std::string_view value) {
+            options.sources.emplace_back(value);
+          }));
 }
 
 void add_mount_inputs(Argum::Parser &parser, ViewCliOptions &options) {

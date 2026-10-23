@@ -175,6 +175,51 @@ pluralize(std::size_t count, std::string_view singular,
   return pluralize(count, "file", "files");
 }
 
+[[nodiscard]] inline std::string
+derivation_summary(const ViewDerivation &derivation) {
+  std::uintmax_t size_bytes = 0;
+  for (const ResolvedViewFile &file : derivation.resolved_files) {
+    size_bytes += file.blob.size_bytes;
+  }
+  return std::format("{} · {}",
+                     pluralized_files(derivation.resolved_files.size()),
+                     format_size(size_bytes));
+}
+
+[[nodiscard]] constexpr std::string_view
+view_creation_hint(ViewObjectKind kind) noexcept {
+  return kind == ViewObjectKind::Derivation
+           ? "Run memix view select to create an immutable Derivation."
+           : "Run memix view compose to bind Derivations into an Environment.";
+}
+
+struct QuestResultLink {
+  ViewReference reference;
+  std::string label;
+};
+
+[[nodiscard]] inline std::optional<QuestResultLink>
+quest_result_link(const QuestInfo &quest) {
+  if (!quest.latest_result) {
+    return std::nullopt;
+  }
+  return QuestResultLink{
+      .reference = *quest.latest_result,
+      .label =
+          std::format("Open latest {} {}", to_string(quest.latest_result->kind),
+                      short_id(quest.latest_result->id)),
+  };
+}
+
+[[nodiscard]] inline std::string
+environment_summary(const ViewEnvironmentInfo &environment) {
+  return std::format(
+      "{} · {} · {}",
+      pluralize(environment.binding_count, "binding", "bindings"),
+      pluralized_files(environment.file_count),
+      format_size(environment.total_size_bytes));
+}
+
 [[nodiscard]] constexpr unsigned char ascii_lower(unsigned char value) {
   if (value >= static_cast<unsigned char>('A')
       && value <= static_cast<unsigned char>('Z')) {
@@ -610,15 +655,40 @@ catalog_directory_file_count(const std::vector<StoreCatalogEntry> &entries,
   return base->file_count;
 }
 
-struct EnvironmentTreeSnapshot {
+struct ViewSnapshot {
+  ViewReference reference;
+  std::vector<ResolvedViewFile> files;
+};
+
+// Resolve the specified kind without creating an Environment or recording a
+// consumption receipt. The inspector must not count its own browsing as usage.
+[[nodiscard]] inline ViewResult<ViewSnapshot>
+resolve_view_snapshot(const ViewService &views,
+                      const ViewReference &reference) {
+  const auto snapshot =
+      [kind = reference.kind](auto result) -> ViewResult<ViewSnapshot> {
+    if (!result) {
+      return std::unexpected(std::move(result.error()));
+    }
+    return ViewSnapshot{
+        .reference = {.kind = kind, .id = std::move(result->id)},
+        .files = std::move(result->resolved_files),
+    };
+  };
+  return reference.kind == ViewObjectKind::Derivation
+           ? snapshot(views.resolve_derivation(reference.id))
+           : snapshot(views.resolve_environment(reference.id));
+}
+
+struct ViewTreeSnapshot {
   std::vector<ListRow> rows;
   std::size_t file_count = 0;
   bool path_exists = false;
 };
 
-[[nodiscard]] inline EnvironmentTreeSnapshot
-environment_tree_snapshot(const std::vector<ResolvedViewFile> &files,
-                          const fs::path &scope = {}) {
+[[nodiscard]] inline ViewTreeSnapshot
+view_tree_snapshot(const std::vector<ResolvedViewFile> &files,
+                   const fs::path &scope = {}) {
   const std::vector<fs::path> scope_components =
       scope | std::ranges::to<std::vector<fs::path>>();
   const auto is_under_scope = [&scope_components](const fs::path &path) {
@@ -635,7 +705,7 @@ environment_tree_snapshot(const std::vector<ResolvedViewFile> &files,
     std::uintmax_t total_size_bytes = 0;
   };
   std::map<fs::path, DirectoryAggregate> directories;
-  EnvironmentTreeSnapshot snapshot;
+  ViewTreeSnapshot snapshot;
   snapshot.path_exists = scope.empty();
   for (const ResolvedViewFile &file : files) {
     if (!is_under_scope(file.output_path)) {
@@ -759,6 +829,7 @@ enum class LocatorKind : std::uint8_t {
   ContextFile,
   ContextDirectory,
   Object,
+  Derivation,
   Environment,
   Quest,
 };
@@ -792,6 +863,7 @@ using OptionalLocatorResult =
 parse_special_locator(const std::string &source) {
   constexpr std::array special_prefixes{
       std::pair{std::string_view("objects/"), LocatorKind::Object},
+      std::pair{std::string_view("derivations/"), LocatorKind::Derivation},
       std::pair{std::string_view("environments/"), LocatorKind::Environment},
       std::pair{std::string_view("quests/"), LocatorKind::Quest},
   };

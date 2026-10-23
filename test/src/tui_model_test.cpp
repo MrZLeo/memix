@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstddef>
+#include <format>
 #include <limits>
 #include <optional>
 #include <string>
@@ -60,8 +61,7 @@ TEST_CASE("column windows trim farthest ancestors first", "[tui-model]") {
   REQUIRE(window.widths == std::vector<std::size_t>{30, 30, 30});
 }
 
-TEST_CASE("column windows reserve the minimum content width",
-          "[tui-model]") {
+TEST_CASE("column windows reserve the minimum content width", "[tui-model]") {
   constexpr std::array stack{
       tui::ColumnKind::List,
       tui::ColumnKind::List,
@@ -163,8 +163,7 @@ TEST_CASE(
   REQUIRE(rows[3].summary == "blob aaaaaaaaaaaa · 2 KB · 2026-08-17T10:00:00Z");
 }
 
-TEST_CASE("catalog directory validation rejects file locators",
-          "[tui-model]") {
+TEST_CASE("catalog directory validation rejects file locators", "[tui-model]") {
   const std::vector<memix::StoreCatalogEntry> entries{
       {.type = memix::MemoryObjectType::Rules,
        .context_path = "repo/file.txt",
@@ -196,7 +195,7 @@ TEST_CASE("catalog directory validation rejects file locators",
   REQUIRE(tui::catalog_directory_file_count({}, {}).value() == 0);
 }
 
-TEST_CASE("environment trees derive from resolved files without view reads",
+TEST_CASE("view trees derive from resolved files without view reads",
           "[tui-model]") {
   const auto resolved_file = [](fs::path path, std::string id,
                                 std::uintmax_t size_bytes) {
@@ -213,8 +212,7 @@ TEST_CASE("environment trees derive from resolved files without view reads",
       resolved_file("chat/session.md", "dddddddddddd4444", 20),
   };
 
-  const tui::EnvironmentTreeSnapshot root =
-      tui::environment_tree_snapshot(files);
+  const tui::ViewTreeSnapshot root = tui::view_tree_snapshot(files);
   REQUIRE(root.path_exists);
   REQUIRE(root.file_count == 4);
   REQUIRE(root.rows.size() == 2);
@@ -223,8 +221,7 @@ TEST_CASE("environment trees derive from resolved files without view reads",
   REQUIRE(root.rows[1].title == "rules/");
   REQUIRE(root.rows[1].summary == "3 files · 2 KB");
 
-  const tui::EnvironmentTreeSnapshot rules =
-      tui::environment_tree_snapshot(files, "rules");
+  const tui::ViewTreeSnapshot rules = tui::view_tree_snapshot(files, "rules");
   REQUIRE(rules.path_exists);
   REQUIRE(rules.file_count == 3);
   REQUIRE(rules.rows.size() == 2);
@@ -233,8 +230,8 @@ TEST_CASE("environment trees derive from resolved files without view reads",
   REQUIRE(rules.rows[1].title == "root file.md");
   REQUIRE(rules.rows[1].blob_id == "cccccccccccc3333");
 
-  const tui::EnvironmentTreeSnapshot missing =
-      tui::environment_tree_snapshot(files, "documents");
+  const tui::ViewTreeSnapshot missing =
+      tui::view_tree_snapshot(files, "documents");
   REQUIRE_FALSE(missing.path_exists);
   REQUIRE(missing.file_count == 0);
   REQUIRE(missing.rows.empty());
@@ -299,12 +296,16 @@ TEST_CASE("tui locators classify context and inspector targets",
   REQUIRE(object->kind == tui::LocatorKind::Object);
   REQUIRE(object->value == "abc123");
 
+  const auto derivation = tui::parse_locator("derivations/abc123");
+  REQUIRE(derivation);
+  REQUIRE(derivation->kind == tui::LocatorKind::Derivation);
+  REQUIRE(derivation->value == "abc123");
+
   const auto environment = tui::parse_locator("environments/def456");
   REQUIRE(environment);
   REQUIRE(environment->kind == tui::LocatorKind::Environment);
 
-  const auto quest =
-      tui::parse_locator("quests/rules/repo/AGENTS.md@latest");
+  const auto quest = tui::parse_locator("quests/rules/repo/AGENTS.md@latest");
   REQUIRE(quest);
   REQUIRE(quest->kind == tui::LocatorKind::Quest);
   REQUIRE(quest->value == "rules/repo/AGENTS.md@latest");
@@ -321,6 +322,10 @@ TEST_CASE("tui locators reject malformed targets", "[tui-model]") {
   REQUIRE_FALSE(tui::parse_locator("rules/a@branch"));
   REQUIRE_FALSE(tui::parse_locator("rules/a@generation/"));
   REQUIRE_FALSE(tui::parse_locator("objects/XYZ"));
+  REQUIRE_FALSE(tui::parse_locator("derivations/"));
+  REQUIRE_FALSE(tui::parse_locator("derivations/XYZ"));
+  REQUIRE_FALSE(tui::parse_locator("derivations/abc/def"));
+  REQUIRE_FALSE(tui::parse_locator("derivations/abc@latest"));
   REQUIRE_FALSE(tui::parse_locator("environments/"));
   REQUIRE_FALSE(tui::parse_locator("quests/"));
 }
@@ -343,17 +348,16 @@ TEST_CASE("generation hub and provenance formatting remain stable",
   REQUIRE(tui::generation_hub_text(generation, true)
           == "gen 0123456789ab · pinned");
 
-  const std::vector<std::string> lines =
-      tui::provenance_lines(tui::Provenance{
-          .blob_id = "blob-id",
-          .sha256 = "hash-value",
-          .size_bytes = 1536,
-          .created_at = "2026-08-17T12:00:00Z",
-          .generation = "generation-id",
-          .parent_generation = "parent-id",
-          .locator = "rules/repo/AGENTS.md@latest",
-          .source_generation = "source-id",
-      });
+  const std::vector<std::string> lines = tui::provenance_lines(tui::Provenance{
+      .blob_id = "blob-id",
+      .sha256 = "hash-value",
+      .size_bytes = 1536,
+      .created_at = "2026-08-17T12:00:00Z",
+      .generation = "generation-id",
+      .parent_generation = "parent-id",
+      .locator = "rules/repo/AGENTS.md@latest",
+      .source_generation = "source-id",
+  });
   REQUIRE(lines
           == std::vector<std::string>{
               "blob: blob-id",
@@ -479,10 +483,47 @@ TEST_CASE("row filtering searches title and summary without case",
 TEST_CASE("pluralize picks singular and plural forms", "[tui-model]") {
   REQUIRE(tui::pluralize(0, "file", "files") == "0 files");
   REQUIRE(tui::pluralize(1, "file", "files") == "1 file");
-  REQUIRE(tui::pluralize(2, "environment", "environments")
-          == "2 environments");
+  REQUIRE(tui::pluralize(2, "environment", "environments") == "2 environments");
   REQUIRE(tui::pluralized_files(1) == "1 file");
   REQUIRE(tui::pluralized_files(3) == "3 files");
+}
+
+TEST_CASE("environment summaries show binding counts", "[tui-model]") {
+  const memix::ViewEnvironmentInfo single{
+      .id = {},
+      .file_count = 1,
+      .total_size_bytes = 7,
+      .binding_count = 1,
+  };
+  CHECK(tui::environment_summary(single) == "1 binding · 1 file · 7 B");
+
+  const memix::ViewEnvironmentInfo multiple{
+      .id = {},
+      .file_count = 3,
+      .total_size_bytes = 1536,
+      .binding_count = 2,
+  };
+  CHECK(tui::environment_summary(multiple) == "2 bindings · 3 files · 1.5 KB");
+  CHECK(tui::environment_summary({}) == "0 bindings · 0 files · 0 B");
+}
+
+TEST_CASE("environment counts remain visible in default list columns",
+          "[tui-model][tui-navigation]") {
+  // render_entry reserves two selection cells and one scroll-indicator cell.
+  constexpr std::size_t decorations = 3;
+  for (const auto count : {1U, 2U, 12U}) {
+    CAPTURE(count);
+    const memix::ViewEnvironmentInfo environment{
+        .id = {},
+        .file_count = count,
+        .total_size_bytes = 1536,
+        .binding_count = count,
+    };
+    const auto visible = tui::ellipsize(tui::environment_summary(environment),
+                                        tui::kListColumnWidth - decorations);
+    CHECK(visible.starts_with(tui::pluralize(count, "binding", "bindings")));
+    CHECK(visible.contains(tui::pluralized_files(count)));
+  }
 }
 
 TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
@@ -508,8 +549,7 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
 
   std::string split_codepoint(tui::kContentLimitBytes - 1, 'x');
   split_codepoint += "€tail";
-  const tui::DecodedContent boundary =
-      tui::decode_content(split_codepoint);
+  const tui::DecodedContent boundary = tui::decode_content(split_codepoint);
   REQUIRE(boundary.truncated);
   REQUIRE(boundary.lines.front().size() == tui::kContentLimitBytes - 1);
   REQUIRE(boundary.lines.back() == std::string(tui::kTruncatedMarker));
@@ -518,8 +558,8 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
   REQUIRE(tui::bounded_content_read_size(tui::kContentLimitBytes + 100)
           == tui::kContentLimitBytes);
   const std::string bounded_prefix(tui::kContentLimitBytes, 'x');
-  const tui::DecodedContent bounded = tui::decode_content(
-      bounded_prefix, tui::kContentLimitBytes + 100);
+  const tui::DecodedContent bounded =
+      tui::decode_content(bounded_prefix, tui::kContentLimitBytes + 100);
   REQUIRE(bounded.byte_count == tui::kContentLimitBytes + 100);
   REQUIRE(bounded.truncated);
   REQUIRE(bounded.lines.front().size() == tui::kContentLimitBytes);
@@ -531,31 +571,29 @@ TEST_CASE("content decoding distinguishes UTF-8 and caps text previews",
       tui::decode_content(split_prefix, tui::kContentLimitBytes + 2);
   REQUIRE_FALSE(bounded_boundary.binary);
   REQUIRE(bounded_boundary.truncated);
-  REQUIRE(bounded_boundary.lines.front().size()
-          == tui::kContentLimitBytes - 1);
+  REQUIRE(bounded_boundary.lines.front().size() == tui::kContentLimitBytes - 1);
   REQUIRE(bounded_boundary.lines.back() == std::string(tui::kTruncatedMarker));
 }
 
 TEST_CASE("default edit messages identify the operation and logical path",
           "[tui-model]") {
   REQUIRE(tui::default_edit_message(tui::EditOperation::Edit,
-                                        memix::MemoryObjectType::Rules,
-                                        "repo/AGENTS.md")
+                                    memix::MemoryObjectType::Rules,
+                                    "repo/AGENTS.md")
           == "edit rules/repo/AGENTS.md");
   REQUIRE(tui::default_edit_message(tui::EditOperation::Add,
-                                        memix::MemoryObjectType::Chat,
-                                        "sessions/new.md")
+                                    memix::MemoryObjectType::Chat,
+                                    "sessions/new.md")
           == "add chat/sessions/new.md");
   REQUIRE(tui::default_edit_message(tui::EditOperation::Remove,
-                                        memix::MemoryObjectType::Documents,
-                                        "notes/old.md")
+                                    memix::MemoryObjectType::Documents,
+                                    "notes/old.md")
           == "remove documents/notes/old.md");
 }
 
 TEST_CASE("new file names are relative non-empty logical paths",
           "[tui-model]") {
-  const tui::NewFileNameResult simple =
-      tui::validate_new_file_name("new.md");
+  const tui::NewFileNameResult simple = tui::validate_new_file_name("new.md");
   REQUIRE(simple);
   REQUIRE(*simple == fs::path("new.md"));
 
@@ -574,8 +612,7 @@ TEST_CASE("new file names are relative non-empty logical paths",
   REQUIRE_FALSE(tui::validate_new_file_name("./new.md"));
 }
 
-TEST_CASE("unchanged content detection compares exact bytes",
-          "[tui-model]") {
+TEST_CASE("unchanged content detection compares exact bytes", "[tui-model]") {
   REQUIRE(tui::content_unchanged("same\n", "same\n"));
   REQUIRE(tui::content_unchanged({}, {}));
   REQUIRE_FALSE(tui::content_unchanged("same", "same\n"));
@@ -584,4 +621,48 @@ TEST_CASE("unchanged content detection compares exact bytes",
   const std::string original{"a\0b", 3};
   const std::string edited{"a\0c", 3};
   REQUIRE_FALSE(tui::content_unchanged(original, edited));
+}
+
+TEST_CASE("derivation summaries describe outputs without environment bindings",
+          "[tui-model][tui-navigation]") {
+  memix::ViewDerivation derivation;
+  CHECK(tui::derivation_summary(derivation) == "0 files · 0 B");
+  derivation.resolved_files.resize(1);
+  derivation.resolved_files.front().blob.size_bytes = 7;
+  CHECK(tui::derivation_summary(derivation) == "1 file · 7 B");
+  derivation.resolved_files.resize(3);
+  for (auto &file : derivation.resolved_files) {
+    file.blob.size_bytes = 512;
+  }
+  CHECK(tui::derivation_summary(derivation) == "3 files · 1.5 KB");
+}
+
+TEST_CASE("quest result links retain the full typed result",
+          "[tui-model][tui-navigation]") {
+  memix::QuestInfo quest;
+  CHECK_FALSE(tui::quest_result_link(quest));
+  for (const auto kind : {memix::ViewObjectKind::Derivation,
+                          memix::ViewObjectKind::Environment}) {
+    quest.result_kind = kind;
+    quest.latest_result = memix::ViewReference{
+        .kind = kind,
+        .id = std::string(64, 'a'),
+    };
+    const auto link = tui::quest_result_link(quest);
+    REQUIRE(link);
+    CHECK(link->reference == *quest.latest_result);
+    CHECK(
+        link->label
+        == std::format("Open latest {} aaaaaaaaaaaa", memix::to_string(kind)));
+  }
+  quest.latest_result.reset();
+  CHECK_FALSE(tui::quest_result_link(quest));
+}
+
+TEST_CASE("empty view guidance distinguishes selection from composition",
+          "[tui-model][tui-navigation]") {
+  CHECK(tui::view_creation_hint(memix::ViewObjectKind::Derivation)
+        == "Run memix view select to create an immutable Derivation.");
+  CHECK(tui::view_creation_hint(memix::ViewObjectKind::Environment)
+        == "Run memix view compose to bind Derivations into an Environment.");
 }

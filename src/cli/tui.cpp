@@ -87,7 +87,8 @@ CliParseResult parse_cli_args(const std::vector<std::string> &arguments,
   parser.add(
       Argum::Positional("locator")
           .occurs(Argum::neverOrOnce)
-          .help("Optional context, object, environment, or quest locator")
+          .help("Optional context, object, derivation, environment, or quest "
+                "locator. Views use derivations/ID or environments/ID.")
           .handler([&result](std::string_view value) {
             result.options.locator = value;
           }));
@@ -274,24 +275,24 @@ enum class ListKind : std::uint8_t {
   TypeTree,
   Generations,
   Objects,
-  EnvironmentList,
-  EnvironmentTree,
+  ViewList,
+  ViewTree,
   QuestList,
 };
 
 enum class EntryAction : std::uint8_t {
   OpenType,
   OpenObjects,
-  OpenEnvironmentList,
+  OpenViewList,
   OpenQuestList,
   OpenGenerationList,
   OpenTypeDirectory,
   OpenTypeFile,
   SelectGeneration,
   OpenObject,
-  OpenEnvironment,
-  OpenEnvironmentDirectory,
-  OpenEnvironmentFile,
+  OpenView,
+  OpenViewDirectory,
+  OpenViewFile,
   OpenQuest,
 };
 
@@ -314,6 +315,7 @@ struct Entry {
   memix::MemoryObjectType type = memix::MemoryObjectType::Rules;
   fs::path path;
   std::string id;
+  memix::ViewObjectKind view_kind = memix::ViewObjectKind::Environment;
   std::optional<memix::QuestInfo> quest;
 };
 
@@ -373,13 +375,16 @@ struct ListScreen {
   fs::path path;
   std::optional<std::string> generation;
   bool pinned_to_non_latest = false;
-  std::string environment_id;
+  memix::ViewReference view{
+      .kind = memix::ViewObjectKind::Environment,
+      .id = {},
+  };
 };
 
 enum class ContentKind : std::uint8_t {
   StoreFile,
   Object,
-  EnvironmentFile,
+  ViewFile,
   Quest,
 };
 
@@ -409,9 +414,12 @@ struct ContentScreen {
   bool pinned_to_non_latest = false;
   std::string blob_id;
   std::string object_id;
-  std::string environment_id;
+  memix::ViewReference view{
+      .kind = memix::ViewObjectKind::Environment,
+      .id = {},
+  };
   std::optional<memix::QuestInfo> quest;
-  std::optional<std::size_t> environment_line;
+  std::optional<std::size_t> result_line;
 };
 
 using TuiScreen = std::variant<ListScreen, ContentScreen>;
@@ -550,6 +558,7 @@ bool load_store_screen(TuiState &state, ListScreen &screen) {
     std::size_t rules = 0;
     std::size_t chat = 0;
     std::size_t documents = 0;
+    std::size_t derivations = 0;
     std::size_t environments = 0;
     std::size_t quests = 0;
     std::size_t objects = 0;
@@ -575,6 +584,14 @@ bool load_store_screen(TuiState &state, ListScreen &screen) {
     return false;
   }
 
+  const memix::ViewResult<std::vector<memix::ViewDerivation>> derivations =
+      state.views.list_derivations();
+  if (derivations) {
+    counts.derivations = derivations->size();
+  } else {
+    record_error(state, derivations.error().message);
+    return false;
+  }
   const memix::ViewResult<std::vector<memix::ViewEnvironmentInfo>>
       environments = state.views.list_environments();
   if (environments) {
@@ -600,6 +617,10 @@ bool load_store_screen(TuiState &state, ListScreen &screen) {
     return false;
   }
 
+  Entry derivation_entry(
+      EntryAction::OpenViewList, "Derivations",
+      pluralize(counts.derivations, "derivation", "derivations"));
+  derivation_entry.view_kind = memix::ViewObjectKind::Derivation;
   screen.entries = {
       Entry(EntryAction::OpenType, "Rules",
             pluralize(counts.rules, "file", "files"),
@@ -610,7 +631,8 @@ bool load_store_screen(TuiState &state, ListScreen &screen) {
       Entry(EntryAction::OpenType, "Documents",
             pluralize(counts.documents, "file", "files"),
             memix::MemoryObjectType::Documents),
-      Entry(EntryAction::OpenEnvironmentList, "Environments",
+      std::move(derivation_entry),
+      Entry(EntryAction::OpenViewList, "Environments",
             pluralize(counts.environments, "environment", "environments")),
       Entry(EntryAction::OpenQuestList, "Quests",
             pluralize(counts.quests, "quest", "quests")),
@@ -619,7 +641,7 @@ bool load_store_screen(TuiState &state, ListScreen &screen) {
   };
   screen.kind = ListKind::Store;
   screen.scope = "store";
-  screen.count = "6 sections";
+  screen.count = pluralize(screen.entries.size(), "section", "sections");
   apply_filter(screen);
   return true;
 }
@@ -792,45 +814,57 @@ bool load_objects(TuiState &state, ListScreen &screen) {
   return true;
 }
 
-bool load_environment_list(TuiState &state, ListScreen &screen) {
-  const memix::ViewResult<std::vector<memix::ViewEnvironmentInfo>> result =
-      state.views.list_environments();
-  if (!result) {
-    record_error(state, result.error().message);
-    return false;
-  }
+bool load_view_list(TuiState &state, ListScreen &screen) {
   std::vector<Entry> entries;
-  entries.reserve(result->size());
-  for (const memix::ViewEnvironmentInfo &environment : *result) {
-    Entry row(
-        EntryAction::OpenEnvironment,
-        std::format("environment {}", memix::tui::short_id(environment.id)),
-        std::format("{} · {} · {} upstream",
-                    pluralize(environment.file_count, "file", "files"),
-                    memix::tui::format_size(environment.total_size_bytes),
-                    environment.upstream_environment_count));
-    row.id = environment.id;
-    entries.push_back(std::move(row));
+  if (screen.view.kind == memix::ViewObjectKind::Derivation) {
+    const auto result = state.views.list_derivations();
+    if (!result) {
+      record_error(state, result.error().message);
+      return false;
+    }
+    entries.reserve(result->size());
+    for (const memix::ViewDerivation &derivation : *result) {
+      Entry row(
+          EntryAction::OpenView,
+          std::format("derivation {}", memix::tui::short_id(derivation.id)),
+          memix::tui::derivation_summary(derivation));
+      row.id = derivation.id;
+      row.view_kind = memix::ViewObjectKind::Derivation;
+      entries.push_back(std::move(row));
+    }
+  } else {
+    const auto result = state.views.list_environments();
+    if (!result) {
+      record_error(state, result.error().message);
+      return false;
+    }
+    entries.reserve(result->size());
+    for (const memix::ViewEnvironmentInfo &environment : *result) {
+      Entry row(
+          EntryAction::OpenView,
+          std::format("environment {}", memix::tui::short_id(environment.id)),
+          memix::tui::environment_summary(environment));
+      row.id = environment.id;
+      entries.push_back(std::move(row));
+    }
   }
   screen.entries = std::move(entries);
-  screen.kind = ListKind::EnvironmentList;
-  screen.scope = "environments";
-  screen.count =
-      pluralize(screen.entries.size(), "environment", "environments");
+  screen.kind = ListKind::ViewList;
+  screen.scope = std::format("{}s", memix::to_string(screen.view.kind));
+  screen.count = pluralize(screen.entries.size(),
+                           memix::to_string(screen.view.kind), screen.scope);
   apply_filter(screen);
   return true;
 }
 
-bool load_environment_tree(TuiState &state, ListScreen &screen) {
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      state.views.resolve_environment(screen.environment_id);
-  if (!environment) {
-    record_error(state, environment.error().message);
+bool load_view_tree(TuiState &state, ListScreen &screen) {
+  auto view = memix::tui::resolve_view_snapshot(state.views, screen.view);
+  if (!view) {
+    record_error(state, view.error().message);
     return false;
   }
-  const memix::tui::EnvironmentTreeSnapshot snapshot =
-      memix::tui::environment_tree_snapshot(environment->resolved_files,
-                                            screen.path);
+  const memix::tui::ViewTreeSnapshot snapshot =
+      memix::tui::view_tree_snapshot(view->files, screen.path);
   if (!snapshot.path_exists) {
     record_error(state, std::format("view path does not exist `{}`",
                                     screen.path.generic_string()));
@@ -840,18 +874,19 @@ bool load_environment_tree(TuiState &state, ListScreen &screen) {
   entries.reserve(snapshot.rows.size());
   for (const memix::tui::ListRow &row : snapshot.rows) {
     Entry child(row.kind == memix::tui::RowKind::Directory
-                    ? EntryAction::OpenEnvironmentDirectory
-                    : EntryAction::OpenEnvironmentFile,
+                    ? EntryAction::OpenViewDirectory
+                    : EntryAction::OpenViewFile,
                 row.title, row.summary);
     child.path = row.path;
     child.id = row.blob_id;
     entries.push_back(std::move(child));
   }
   screen.entries = std::move(entries);
-  screen.environment_id = environment->id;
-  screen.kind = ListKind::EnvironmentTree;
+  screen.view = std::move(view->reference);
+  screen.kind = ListKind::ViewTree;
   screen.scope =
-      std::format("env {} locked", memix::tui::short_id(screen.environment_id));
+      std::format("{} {} immutable", memix::to_string(screen.view.kind),
+                  memix::tui::short_id(screen.view.id));
   screen.count = pluralize(snapshot.file_count, "file", "files");
   apply_filter(screen);
   return true;
@@ -1004,57 +1039,42 @@ bool load_object_content(TuiState &state, ContentScreen &screen) {
                                memix::tui::Provenance{});
 }
 
-bool load_environment_file_content(TuiState &state, ContentScreen &screen) {
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      state.views.resolve_environment(screen.environment_id);
-  if (!environment) {
-    record_error(state, environment.error().message);
+bool load_view_file_content(TuiState &state, ContentScreen &screen) {
+  auto verified = state.views.read_output(screen.view, screen.path, false);
+  if (!verified) {
+    record_error(state, verified.error().message);
     return false;
   }
-  const auto file = std::ranges::find(environment->resolved_files, screen.path,
-                                      &memix::ResolvedViewFile::output_path);
-  if (file == environment->resolved_files.end()) {
-    record_error(state, std::format("view file does not exist `{}`",
-                                    screen.path.generic_string()));
-    return false;
-  }
+  const memix::ResolvedViewFile &file = verified->file;
   std::optional<std::string> parent;
-  if (!file->source_generation.empty()) {
+  if (!file.source_generation.empty()) {
     const memix::StoreResult<memix::ContextGeneration> generation =
-        state.store.read_generation(file->type, file->source_generation);
+        state.store.read_generation(file.type, file.source_generation);
     if (generation) {
       parent = generation->parent;
     } else {
       record_error(state, generation.error().message);
     }
   }
-  screen.kind = ContentKind::EnvironmentFile;
+  screen.kind = ContentKind::ViewFile;
   screen.title = screen.path.generic_string();
-  screen.environment_id = environment->id;
   screen.scope =
-      std::format("env {} locked", memix::tui::short_id(screen.environment_id));
+      std::format("{} {} immutable", memix::to_string(screen.view.kind),
+                  memix::tui::short_id(screen.view.id));
   memix::tui::Provenance provenance;
   provenance.generation =
-      file->source_generation.empty()
+      file.source_generation.empty()
           ? std::nullopt
-          : std::optional<std::string>(file->source_generation);
+          : std::optional<std::string>(file.source_generation);
   provenance.parent_generation = std::move(parent);
-  provenance.locator = file->locator.empty()
+  provenance.locator = file.locator.empty()
                          ? std::nullopt
-                         : std::optional<std::string>(file->locator);
+                         : std::optional<std::string>(file.locator);
   provenance.source_generation =
-      file->source_generation.empty()
+      file.source_generation.empty()
           ? std::nullopt
-          : std::optional<std::string>(file->source_generation);
-  auto verified = state.views.read_output(
-      {.kind = memix::ViewObjectKind::Environment, .id = environment->id},
-      screen.path, false);
-  if (!verified) {
-    record_error(state, verified.error().message);
-    return false;
-  }
-  return finish_object_content(state, screen, verified->file.blob,
-                               std::move(provenance),
+          : std::optional<std::string>(file.source_generation);
+  return finish_object_content(state, screen, file.blob, std::move(provenance),
                                std::move(verified->contents));
 }
 
@@ -1161,20 +1181,19 @@ bool load_quest_content(TuiState &state, ContentScreen &screen) {
                                 reads.read_count));
   }
 
-  std::optional<std::size_t> environment_line;
-  if (quest.latest_result
-      && quest.latest_result->kind == memix::ViewObjectKind::Environment) {
+  std::optional<std::size_t> result_line;
+  const auto result_link = memix::tui::quest_result_link(quest);
+  if (result_link) {
     lines.emplace_back();
-    environment_line = lines.size();
-    lines.push_back(std::format("Open latest environment {}",
-                                memix::tui::short_id(quest.latest_result->id)));
+    result_line = lines.size();
+    lines.push_back(result_link->label);
   }
   screen.quest = quest;
   screen.kind = ContentKind::Quest;
   screen.title = quest.name.empty() ? quest.ir_hash : quest.name;
   screen.scope = "quests";
   screen.lines = std::move(lines);
-  screen.environment_line = environment_line;
+  screen.result_line = result_line;
   screen.count = pluralize(screen.lines.size(), "line", "lines");
   refresh_content_matches(screen, screen.search.query);
   return true;
@@ -1191,10 +1210,10 @@ bool refresh_screen(TuiState &state, TuiScreen &screen) {
       return load_generations(state, *list);
     case ListKind::Objects:
       return load_objects(state, *list);
-    case ListKind::EnvironmentList:
-      return load_environment_list(state, *list);
-    case ListKind::EnvironmentTree:
-      return load_environment_tree(state, *list);
+    case ListKind::ViewList:
+      return load_view_list(state, *list);
+    case ListKind::ViewTree:
+      return load_view_tree(state, *list);
     case ListKind::QuestList:
       return load_quest_list(state, *list);
     }
@@ -1205,8 +1224,8 @@ bool refresh_screen(TuiState &state, TuiScreen &screen) {
     return load_store_file_content(state, content);
   case ContentKind::Object:
     return load_object_content(state, content);
-  case ContentKind::EnvironmentFile:
-    return load_environment_file_content(state, content);
+  case ContentKind::ViewFile:
+    return load_view_file_content(state, content);
   case ContentKind::Quest:
     return load_quest_content(state, content);
   }
@@ -1249,23 +1268,24 @@ bool push_objects(TuiState &state) {
   return true;
 }
 
-bool push_environment_list(TuiState &state) {
-  ListScreen screen(ListKind::EnvironmentList);
+bool push_view_list(TuiState &state, memix::ViewObjectKind kind) {
+  ListScreen screen(ListKind::ViewList);
+  screen.view.kind = kind;
   state.stack.emplace_back(std::move(screen));
-  if (!load_environment_list(state, std::get<ListScreen>(state.stack.back()))) {
+  if (!load_view_list(state, std::get<ListScreen>(state.stack.back()))) {
     state.stack.pop_back();
     return false;
   }
   return true;
 }
 
-bool push_environment_tree(TuiState &state, std::string environment_id,
-                           fs::path path = {}) {
-  ListScreen screen(ListKind::EnvironmentTree);
+bool push_view_tree(TuiState &state, memix::ViewReference reference,
+                    fs::path path = {}) {
+  ListScreen screen(ListKind::ViewTree);
   screen.path = std::move(path);
-  screen.environment_id = std::move(environment_id);
+  screen.view = std::move(reference);
   state.stack.emplace_back(std::move(screen));
-  if (!load_environment_tree(state, std::get<ListScreen>(state.stack.back()))) {
+  if (!load_view_tree(state, std::get<ListScreen>(state.stack.back()))) {
     state.stack.pop_back();
     return false;
   }
@@ -1312,14 +1332,14 @@ push_object(TuiState &state, memix::MemoryObjectType type, std::string id) {
   return true;
 }
 
-bool push_environment_file(TuiState &state, std::string environment_id,
-                           fs::path path) {
-  ContentScreen screen(ContentKind::EnvironmentFile);
+bool
+push_view_file(TuiState &state, memix::ViewReference reference, fs::path path) {
+  ContentScreen screen(ContentKind::ViewFile);
   screen.path = std::move(path);
-  screen.environment_id = std::move(environment_id);
+  screen.view = std::move(reference);
   state.stack.emplace_back(std::move(screen));
-  if (!load_environment_file_content(
-          state, std::get<ContentScreen>(state.stack.back()))) {
+  if (!load_view_file_content(state,
+                              std::get<ContentScreen>(state.stack.back()))) {
     state.stack.pop_back();
     return false;
   }
@@ -1402,8 +1422,8 @@ bool open_selected(TuiState &state) {
     return push_type_tree(state, entry.type, {});
   case EntryAction::OpenObjects:
     return push_objects(state);
-  case EntryAction::OpenEnvironmentList:
-    return push_environment_list(state);
+  case EntryAction::OpenViewList:
+    return push_view_list(state, entry.view_kind);
   case EntryAction::OpenQuestList:
     return push_quest_list(state);
   case EntryAction::OpenGenerationList:
@@ -1416,12 +1436,12 @@ bool open_selected(TuiState &state) {
     return select_generation(state, entry);
   case EntryAction::OpenObject:
     return push_object(state, entry.type, entry.id);
-  case EntryAction::OpenEnvironment:
-    return push_environment_tree(state, entry.id);
-  case EntryAction::OpenEnvironmentDirectory:
-    return push_environment_tree(state, screen->environment_id, entry.path);
-  case EntryAction::OpenEnvironmentFile:
-    return push_environment_file(state, screen->environment_id, entry.path);
+  case EntryAction::OpenView:
+    return push_view_tree(state, {.kind = entry.view_kind, .id = entry.id});
+  case EntryAction::OpenViewDirectory:
+    return push_view_tree(state, screen->view, entry.path);
+  case EntryAction::OpenViewFile:
+    return push_view_file(state, screen->view, entry.path);
   case EntryAction::OpenQuest:
     if (entry.quest.has_value()) {
       return push_quest(state, *entry.quest);
@@ -1433,20 +1453,15 @@ bool open_selected(TuiState &state) {
 }
 
 std::expected<void, std::string>
-open_quest_environment(TuiState &state, ContentScreen &screen) {
-  if (!screen.quest
-      || !screen.quest->latest_result
-      || screen.quest->latest_result->kind
-             != memix::ViewObjectKind::Environment) {
-    return std::unexpected("quest has no resolved environment");
+open_quest_result(TuiState &state, const ContentScreen &screen) {
+  if (!screen.quest) {
+    return std::unexpected("quest has no resolved result");
   }
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      state.views.resolve_environment(screen.quest->latest_result->id);
-  if (!environment) {
-    record_error(state, environment.error().message);
-    return std::unexpected(environment.error().message);
+  const auto link = memix::tui::quest_result_link(*screen.quest);
+  if (!link) {
+    return std::unexpected("quest has no resolved result");
   }
-  if (!push_environment_tree(state, environment->id)) {
+  if (!push_view_tree(state, link->reference)) {
     return std::unexpected(last_error(state));
   }
   return {};
@@ -1564,21 +1579,22 @@ open_object_locator(TuiState &state, std::string_view prefix) {
 }
 
 std::expected<void, std::string>
-open_environment_locator(TuiState &state, std::string_view prefix) {
-  const memix::ViewResult<memix::ViewEnvironment> environment =
-      state.views.resolve_environment(prefix);
-  if (!environment) {
-    return std::unexpected(environment.error().message);
+open_view_locator(TuiState &state, const memix::ViewReference &reference) {
+  auto view = memix::tui::resolve_view_snapshot(state.views, reference);
+  if (!view) {
+    return std::unexpected(view.error().message);
   }
-  select_visible_entry(
-      std::get<ListScreen>(state.stack.front()), [](const Entry &entry) {
-        return entry.action == EntryAction::OpenEnvironmentList;
-      });
-  if (!push_environment_list(state)) {
+  select_visible_entry(std::get<ListScreen>(state.stack.front()),
+                       [kind = reference.kind](const Entry &entry) {
+                         return entry.action == EntryAction::OpenViewList
+                             && entry.view_kind == kind;
+                       });
+  if (!push_view_list(state, reference.kind)) {
     return std::unexpected(last_error(state));
   }
-  select_visible_id(std::get<ListScreen>(state.stack.back()), environment->id);
-  if (!push_environment_tree(state, environment->id)) {
+  select_visible_id(std::get<ListScreen>(state.stack.back()),
+                    view->reference.id);
+  if (!push_view_tree(state, std::move(view->reference))) {
     return std::unexpected(last_error(state));
   }
   return {};
@@ -1623,8 +1639,18 @@ open_locator(TuiState &state, const memix::tui::Locator &locator) {
     return open_context_locator(state, locator);
   case memix::tui::LocatorKind::Object:
     return open_object_locator(state, locator.value);
+  case memix::tui::LocatorKind::Derivation:
+    return open_view_locator(state,
+                             {
+                                 .kind = memix::ViewObjectKind::Derivation,
+                                 .id = locator.value,
+                             });
   case memix::tui::LocatorKind::Environment:
-    return open_environment_locator(state, locator.value);
+    return open_view_locator(state,
+                             {
+                                 .kind = memix::ViewObjectKind::Environment,
+                                 .id = locator.value,
+                             });
   case memix::tui::LocatorKind::Quest:
     return open_quest_locator(state, locator.value);
   }
@@ -2161,8 +2187,8 @@ bool is_mutation_event(const ftxui::Event &event) {
 bool handle_mutation_event(TuiState &state, const ftxui::Event &event,
                            const ftxui::Closure &open_editor) {
   if (const auto *list = std::get_if<ListScreen>(&state.stack.back())) {
-    if (list->kind == ListKind::EnvironmentTree) {
-      state.status = "environments are locked artifacts";
+    if (list->kind == ListKind::ViewTree) {
+      state.status = "views are immutable; update the source instead";
       return true;
     }
     if (list->kind != ListKind::TypeTree) {
@@ -2209,8 +2235,8 @@ bool handle_mutation_event(TuiState &state, const ftxui::Event &event,
   }
 
   const auto &content = std::get<ContentScreen>(state.stack.back());
-  if (content.kind == ContentKind::EnvironmentFile) {
-    state.status = "environments are locked artifacts";
+  if (content.kind == ContentKind::ViewFile) {
+    state.status = "views are immutable; update the source instead";
     return true;
   }
   if (content.kind != ContentKind::StoreFile) {
@@ -2574,9 +2600,9 @@ bool handle_content_event(TuiState &state, ContentScreen &screen,
   }
   if (event == ftxui::Event::Return
       && screen.kind == ContentKind::Quest
-      && screen.environment_line.has_value()) {
+      && screen.result_line.has_value()) {
     const std::expected<void, std::string> opened =
-        open_quest_environment(state, screen);
+        open_quest_result(state, screen);
     if (!opened) {
       record_error(state, opened.error());
     }
@@ -2694,7 +2720,7 @@ ftxui::Color entry_title_color(const Entry &entry, bool selected) {
   }
   switch (entry.action) {
   case EntryAction::OpenTypeDirectory:
-  case EntryAction::OpenEnvironmentDirectory:
+  case EntryAction::OpenViewDirectory:
     return ftxui::Color::CyanLight;
   case EntryAction::OpenGenerationList:
     return ftxui::Color::YellowLight;
@@ -2771,13 +2797,14 @@ ftxui::Element render_list_empty(const ListScreen &screen) {
     title = "No objects";
     explanation = "Run memix store ingest to add blobs to this store.";
     break;
-  case ListKind::EnvironmentList:
-    title = "No environments";
-    explanation = "Build a view to create a locked environment.";
+  case ListKind::ViewList:
+    title = std::format("No {}s", memix::to_string(screen.view.kind));
+    explanation = memix::tui::view_creation_hint(screen.view.kind);
     break;
-  case ListKind::EnvironmentTree:
-    title = "Empty environment";
-    explanation = "This locked environment contains no files.";
+  case ListKind::ViewTree:
+    title = std::format("Empty {}", memix::to_string(screen.view.kind));
+    explanation = std::format("This immutable {} contains no files.",
+                              memix::to_string(screen.view.kind));
     break;
   case ListKind::QuestList:
     title = "No quests";
@@ -3046,9 +3073,8 @@ content_footer(const TuiState &state, const ContentScreen &screen) {
   } else {
     std::string value =
         "h/l columns  j/k scroll  PgUp/Dn  g/G top/bottom  / search  n/N";
-    if (screen.kind == ContentKind::Quest
-        && screen.environment_line.has_value()) {
-      value += "  enter open env";
+    if (screen.kind == ContentKind::Quest && screen.result_line.has_value()) {
+      value += "  enter open result";
     }
     if (screen.kind == ContentKind::StoreFile && !screen.pinned_to_non_latest) {
       value += "  e edit  d delete";
@@ -3106,7 +3132,7 @@ ftxui::Element render_content_body(ContentScreen &screen) {
   for (std::size_t index = first; index < last; ++index) {
     Element line =
         render_content_line(screen.lines[index], query, index == current_match);
-    if (screen.environment_line == index) {
+    if (screen.result_line == index) {
       line = hbox({
           text("▌") | color(Color::MagentaLight),
           text(" "),
@@ -3159,12 +3185,14 @@ std::string list_column_title(const ListScreen &screen) {
     return std::format("{} generations", memix::to_string(screen.type));
   case ListKind::Objects:
     return "Objects";
-  case ListKind::EnvironmentList:
-    return "Environments";
-  case ListKind::EnvironmentTree:
+  case ListKind::ViewList:
+    return screen.view.kind == memix::ViewObjectKind::Derivation
+             ? "Derivations"
+             : "Environments";
+  case ListKind::ViewTree:
     if (screen.path.empty()) {
-      return std::format("env {}/",
-                         memix::tui::short_id(screen.environment_id));
+      return std::format("{} {}/", memix::to_string(screen.view.kind),
+                         memix::tui::short_id(screen.view.id));
     }
     return memix::tui::normalize_line_breaks(
                screen.path.filename().generic_string())

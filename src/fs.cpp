@@ -121,8 +121,8 @@ FsResult<bool> create_directory(const path &entry_path) {
   return fs_result(value, error, "failed to create directory", entry_path);
 }
 
-FsResult<bool> copy_file(const path &source, const path &destination,
-                         copy_options options) {
+FsResult<bool>
+copy_file(const path &source, const path &destination, copy_options options) {
   std::error_code error;
   const bool value = std_fs::copy_file(source, destination, options, error);
   return fs_result(value, error, "failed to copy file", source, destination);

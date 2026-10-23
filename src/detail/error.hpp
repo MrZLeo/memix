@@ -56,15 +56,15 @@ inline std::unexpected<CommonError> common_error(std::string message) {
   return std::unexpected(CommonError{.message = std::move(message)});
 }
 
-inline std::unexpected<CommonError> common_error(ErrorKind kind,
-                                                 std::string message) {
+inline std::unexpected<CommonError>
+common_error(ErrorKind kind, std::string message) {
   return std::unexpected(
       CommonError{.message = std::move(message), .kind = kind});
 }
 
-inline CommonError with_error_context(CommonError error,
-                                      std::string_view context,
-                                      ErrorKind kind = ErrorKind::Unknown) {
+inline CommonError
+with_error_context(CommonError error, std::string_view context,
+                   ErrorKind kind = ErrorKind::Unknown) {
   error.message = std::format("{}: {}", context, error.message);
   if (kind != ErrorKind::Unknown)
     error.kind = kind;
