@@ -2,9 +2,48 @@
 
 **Reproducible, versioned memory for AI agents.**
 
-Inspired by Nix, Memix turns rules, documents, and past conversations into
-reusable context with stable identities. Select the sources once, compose them
-for a project, and let agents read the result as ordinary files under `.memory/`.
+Inspired by Nix, Memix turns rules, documents, and past conversations into reusable context with stable identities. Select the sources once, compose them for a project, and let agents read the result as ordinary files under .memory/.
+
+## Get started with your agent
+
+You can use an agent with terminal and download access, such as **pi, Claude Code, Codex, or DeepSeek Harness**, and give it the prompts below.
+
+### Ask your agent to install Memix
+
+Copy this into your agent:
+
+```text
+Install Memix by following this guide:
+https://raw.githubusercontent.com/MrZLeo/memix/refs/heads/master/AGENT_INSTALL.md
+```
+
+The guide handles platform detection, installation, and verification. Prebuilt
+installation targets Linux x86_64, macOS arm64, and Windows x86_64.
+
+It also tells the agent to read the skill immediately, so you can continue
+in the same session. In later session, agent can decide whether to read the skill by itself.
+
+### Everyday use: just ask
+
+Once the skill is installed, use normal language rather than CLI commands:
+
+| Goal | Example prompt |
+| --- | --- |
+| Save a decision | "Remember that we chose SQLite for this project's local cache because it needs to work offline." |
+| Recall context | "What did we decide about caching in this project? Check Memix and show me the source." |
+| Update a rule | "Update this project's saved test command to `pnpm test`." |
+| Reuse memory in another project | "Attach my saved coding preferences alongside this project's rules at `.memory/`." |
+| Refresh attached context | "Refresh this project's `.memory/` from its latest saved rules and decisions." |
+| Roll back an attachment | "Restore the previous memory snapshot for this workspace." |
+
+A few things to keep in mind:
+
+- **Saved memory and attached context are separate.** Saving an update does not
+  change an existing snapshot. Ask to refresh it when you want the new version.
+- **Treat `.memory/` as read-only context.** Ask the agent to update the saved
+  source and refresh the attachment instead of editing files through it.
+- **Rollback restores the attachment, not the saved sources.** Earlier versions
+  remain available without undoing newer source updates.
 
 ## Architecture
 
@@ -62,7 +101,10 @@ activation. Generated summaries/embeddings, semantic conflict resolution, and
 proactive invalidation are not implemented. Composition rejects path collisions
 instead of silently overriding files.
 
-## Build
+## Build from source (optional)
+
+Agent-assisted installation uses prebuilt releases. For development or a manual
+source build, follow the steps below.
 
 Requires **C++23, CMake 4.4+, and Ninja**. Run `nix develop` first for the pinned
 Linux/macOS toolchain. These commands build the current source tree:
@@ -74,35 +116,12 @@ ctest --test-dir build --output-on-failure
 ```
 
 The CLI is `build/bin/Release/memix`. Prebuilt binaries are available under
-[Releases](https://github.com/MrZLeo/memix/releases); for agent setup, see
-[the installation guide](AGENT_INSTALL.md).
-
-## Try it
-
-After building, run this Bash example from the repository root (`jq` required).
-It uses a temporary Store and workspace without changing your existing memory.
-
-```bash
-demo="$(mktemp -d)"
-(
-  set -euo pipefail
-  export PATH="$PWD/build/bin/Release:$PATH"
-  export MEMIX_STORE_HOME="$demo/store"
-
-  memix store ingest --type rules --dest project/AGENTS.md AGENTS.md
-  d=$(memix view select --source rules/project/ --intent "Project rules" \
-    --json | jq -er '.result.id')
-  e=$(memix view compose --mount "$d" --intent "Project context" \
-    --json | jq -er '.result.id')
-  memix view activate "$e" --into "$demo/.memory"
-)
-```
-
-Read `$demo/.memory/README.md` for the context guide. The selected file is at
-`$demo/.memory/rules/project/AGENTS.md`.
+[Releases](https://github.com/MrZLeo/memix/releases).
 
 ## Documentation
 
+- [Agent installation guide](AGENT_INSTALL.md)
+- [Agent skill and workflows](skill/memix-cli/SKILL.md)
 - [CLI reference](skill/memix-cli/references/cli.md)
 - [Profiles and rollback](skill/memix-cli/references/profiles-and-recovery.md)
 - [Development and contributing](CONTRIBUTING.md)
