@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.4)
-project(memix VERSION 0.6.0 LANGUAGES CXX)
+project(memix VERSION 0.7.0 LANGUAGES CXX)
 
 if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
   message(FATAL_ERROR "In-source builds are not supported. Use cmake -S . -B build -G Ninja.")
