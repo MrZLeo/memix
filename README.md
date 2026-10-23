@@ -17,11 +17,7 @@ Install Memix by following this guide:
 https://raw.githubusercontent.com/MrZLeo/memix/refs/heads/master/AGENT_INSTALL.md
 ```
 
-The guide handles platform detection, installation, and verification. Prebuilt
-installation targets Linux x86_64, macOS arm64, and Windows x86_64.
-
-It also tells the agent to read the skill immediately, so you can continue
-in the same session. In later session, agent can decide whether to read the skill by itself.
+The guide handles platform detection, installation, and verification. It also tells the agent to read the skill immediately, so you can continue in the same session. In later session, agent can decide whether to read the skill by itself.
 
 ### Everyday use: just ask
 
