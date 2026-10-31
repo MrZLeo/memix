@@ -16,6 +16,8 @@ inline std::vector<std::string> arguments_from_main(int argc, char **argv) {
 }
 
 int run(const std::vector<std::string> &arguments);
+int run_agent(const std::vector<std::string> &arguments);
+int run_skill(const std::vector<std::string> &arguments);
 int run_store(const std::vector<std::string> &arguments);
 int run_view(const std::vector<std::string> &arguments);
 int run_tui(const std::vector<std::string> &arguments);

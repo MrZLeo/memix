@@ -282,30 +282,29 @@ jobs:
           mkdir -p "$RUNNER_TEMP/memix-bin"
           install -m 0755 dist/memix-macos-arm64 "$RUNNER_TEMP/memix-bin/memix"
 
-          for binary in "$RUNNER_TEMP/memix-bin/memix"; do
-            test "$(lipo -archs "$binary")" = "arm64"
-            build_info="$(xcrun vtool -show-build "$binary")"
-            printf '%s\n' "$build_info"
-            if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
-              $1 == "platform" && $2 == "MACOS" { macos = 1 }
-              $1 == "minos" { seen = 1; if ($2 != expected) bad = 1 }
-              END { exit !(macos && seen && !bad) }
-            ' <<<"$build_info"; then
-              echo "error: $binary is not a macOS $MACOS_DEPLOYMENT_TARGET+ binary" >&2
-              exit 1
-            fi
+          binary="$RUNNER_TEMP/memix-bin/memix"
+          test "$(lipo -archs "$binary")" = "arm64"
+          build_info="$(xcrun vtool -show-build "$binary")"
+          printf '%s\n' "$build_info"
+          if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
+            $1 == "platform" && $2 == "MACOS" { macos = 1 }
+            $1 == "minos" { seen = 1; if ($2 != expected) bad = 1 }
+            END { exit !(macos && seen && !bad) }
+          ' <<<"$build_info"; then
+            echo "error: $binary is not a macOS $MACOS_DEPLOYMENT_TARGET+ binary" >&2
+            exit 1
+          fi
 
-            unexpected="$(otool -L "$binary" | awk '
-              NR > 1 && $1 !~ "^/usr/lib/" && $1 !~ "^/System/Library/" {
-                print $1
-              }
-            ')"
-            if [[ -n "$unexpected" ]]; then
-              echo "error: $binary has non-system dynamic dependencies:" >&2
-              echo "$unexpected" >&2
-              exit 1
-            fi
-          done
+          unexpected="$(otool -L "$binary" | awk '
+            NR > 1 && $1 !~ "^/usr/lib/" && $1 !~ "^/System/Library/" {
+              print $1
+            }
+          ')"
+          if [[ -n "$unexpected" ]]; then
+            echo "error: $binary has non-system dynamic dependencies:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
 
       - name: run release CLI smoke tests
         shell: bash
@@ -341,7 +340,7 @@ jobs:
       - name: create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "Release $GITHUB_REF_NAME" --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" --title "Release $GITHUB_REF_NAME" --verify-tag --draft
 
       - name: download executables
         uses: actions/download-artifact@v8
@@ -351,7 +350,18 @@ jobs:
       - name: package Codex skill
         run: tar -czf memix-cli-skill.tar.gz -C skill memix-cli
 
+      - name: checksum release assets
+        run: |
+          for asset in artifacts/*/* memix-cli-skill.tar.gz install.sh install.ps1; do
+            (cd "$(dirname "$asset")" && sha256sum "$(basename "$asset")")
+          done > SHA256SUMS
+
       - name: upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz
+        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz install.sh install.ps1 SHA256SUMS
+
+      - name: publish complete release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

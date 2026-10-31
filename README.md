@@ -6,9 +6,38 @@ Inspired by Nix, Memix turns rules, documents, and past conversations into reusa
 
 ## Get started with your agent
 
-You can use an agent with terminal and download access, such as **pi, Claude Code, Codex, or DeepSeek Harness**, and give it the prompts below.
+Install Memix and its discovery skill once, then use **Pi, Claude Code, Codex,
+OpenCode, or DeepSeek Harness** with ordinary requests.
 
-### Ask your agent to install Memix
+### Install interactively
+
+**Linux / macOS**
+
+```sh
+curl -fsSL https://github.com/MrZLeo/memix/releases/latest/download/install.sh | bash
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://github.com/MrZLeo/memix/releases/latest/download/install.ps1 | iex
+```
+
+The installer detects your OS/architecture and asks **two separate `[Y/n]`
+questions**: install the binary, then run skill setup. Press Enter for yes or
+`n` to skip. EOF or an unattended shell never counts as consent.
+
+Supported releases: Linux x86_64, macOS 14+ arm64, and Windows x86_64. Downloads
+are checked against the same release's `SHA256SUMS` before replacing an existing
+binary. The default destination is `~/.local/bin` (`memix.exe` on Windows).
+Follow the PATH notice if needed; no sudo, PATH edits, or forced skill
+replacement are performed.
+
+You can inspect/download [install.sh](install.sh) or [install.ps1](install.ps1)
+first. Their help covers custom directories, pinned releases, agent selection,
+and project scope. Skill setup otherwise uses detected agents and user scope.
+
+### Or ask your agent to help
 
 Copy this into your agent:
 
@@ -17,7 +46,9 @@ Install Memix by following this guide:
 https://raw.githubusercontent.com/MrZLeo/memix/refs/heads/master/AGENT_INSTALL.md
 ```
 
-The guide handles platform detection, installation, and verification. It also tells the agent to read the skill immediately, so you can continue in the same session. In later session, agent can decide whether to read the skill by itself.
+The short guide hands installation to the same interactive script, then tells
+the agent to verify the result and read `memix skill show` in the current session.
+You still answer the two installation prompts yourself.
 
 ### Everyday use: just ask
 
@@ -40,6 +71,32 @@ A few things to keep in mind:
   source and refresh the attachment instead of editing files through it.
 - **Rollback restores the attachment, not the saved sources.** Earlier versions
   remain available without undoing newer source updates.
+
+### Manage the agent skill
+
+The CLI bundles a lightweight skill and its version-matched guides:
+
+```sh
+memix skill setup --dry-run       # preview setup for detected agents
+memix skill setup --agent pi      # install/update for a selected agent
+memix skill status --json         # inspect all known locations
+memix skill show                  # read the entry guide, not every topic
+memix skill remove --agent pi     # remove managed skill files, not memory
+```
+
+Supported agents: `claude`, `codex`, `opencode`, `pi`, and `dsh`. Repeat `--agent`
+for multiple agents; omit it from setup to detect config directories or programs
+on `PATH`. Add `--project` to use the nearest Git/Jujutsu repository instead of
+your account. Setup/remove support `--dry-run`; setup/status/remove support
+`--json`.
+
+Codex, OpenCode, and Pi normally share `.agents/skills/memix-cli`; changing that
+path affects all its readers. Agent-home overrides and existing native copies
+are respected. Setup updates managed files but reports foreign conflicts;
+`--force` is an explicit setup-only override for regular files. Remove preserves
+foreign bundles and extra user files. No hooks, settings, or memory Stores are
+changed. See `memix skill --help` for options and the
+[agent installation guide](AGENT_INSTALL.md) for the handoff and verification.
 
 ## Architecture
 
@@ -103,7 +160,9 @@ Agent-assisted installation uses prebuilt releases. For development or a manual
 source build, follow the steps below.
 
 Requires **C++23, CMake 4.4+, and Ninja**. Run `nix develop` first for the pinned
-Linux/macOS toolchain. These commands build the current source tree:
+Linux/macOS toolchain. CMake embeds agent Markdown as standard C++ string data
+and tracks document edits for incremental builds; no compiler extensions or
+runtime documentation files are needed. These commands build the current source tree:
 
 ```bash
 cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -117,8 +176,12 @@ The CLI is `build/bin/Release/memix`. Prebuilt binaries are available under
 ## Documentation
 
 - [Agent installation guide](AGENT_INSTALL.md)
-- [Agent skill and workflows](skill/memix-cli/SKILL.md)
-- [CLI reference](skill/memix-cli/references/cli.md)
-- [Profiles and rollback](skill/memix-cli/references/profiles-and-recovery.md)
+- [Agent skill bootstrap](skill/memix-cli/SKILL.md)
+- [Agent workflow guide](docs/agent/guide.md): run `memix agent guide`, then
+  load only the required topic with `memix agent recall`, `save`, `compose`,
+  `attach`, or `recovery`. Instructions are bundled with the installed CLI;
+  these commands do not open or initialize a Store.
+- [Attachment and Profiles](docs/agent/attach.md)
+- [Recovery and rollback](docs/agent/recovery.md)
 - [Development and contributing](CONTRIBUTING.md)
 - [BSD 3-Clause license](LICENSE)

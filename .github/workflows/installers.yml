@@ -1,0 +1,36 @@
+name: Installers
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: Unix installer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: lint shell installer
+        if: runner.os == 'Linux'
+        run: shellcheck install.sh
+      - name: test installer with the system Bash (including macOS Bash 3.2)
+        run: python3 -m unittest discover -s test/scripts -p 'test_*.py' -v
+
+  windows:
+    name: Windows installer
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - name: test PowerShell 7
+        shell: pwsh
+        run: ./test/scripts/install_ps1_test.ps1
+      - name: test Windows PowerShell 5.1
+        shell: powershell
+        run: ./test/scripts/install_ps1_test.ps1

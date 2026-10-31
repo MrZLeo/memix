@@ -1,117 +1,53 @@
-# Install memix (agent instructions)
+# Install Memix with an agent
 
-Follow these instructions when the user asks you to install memix.
+Use the interactive installer instead of reproducing its platform detection,
+download, and skill-installation logic. Do not build from source.
 
-## 1. Select release assets
+## 1. Run the installer
 
-Install the prebuilt release binaries. Do not build memix from source.
+Use a terminal where the **user** can answer both `[Y/n]` prompts:
 
-Detect the operating system and CPU architecture, then select the matching
-asset suffix:
+**Linux / macOS**
 
-| Platform | Accepted architecture names | Asset suffix | Executable suffix |
-| --- | --- | --- | --- |
-| Linux | `x86_64`, `amd64` | `linux-x86_64` | none |
-| macOS | `arm64`, `aarch64` | `macos-arm64` | none |
-| Windows | `x86_64`, `amd64` | `windows-x86_64` | `.exe` |
-
-If the platform does not match this table, stop and report that no prebuilt
-binary is available. Do not silently fall back to a source build.
-
-Resolve the latest published release tag for `MrZLeo/memix`. Prefer an
-authenticated GitHub client when one is available; it also works when the
-repository or release is not public. Keep the resolved tag for the skill step
-below. If no published release can be resolved, stop and report that memix is
-not available for prebuilt installation yet.
-
-Check that the release includes the `memix` platform asset. If it is missing,
-stop and report that the release does not provide the required CLI. Do not
-fall back to legacy executables or rename one to `memix`.
-
-Download the platform asset and the platform-independent agent skill archive
-from that exact release:
-
-```text
-https://github.com/MrZLeo/memix/releases/download/<tag>/memix-<asset-suffix><executable-suffix>
-https://github.com/MrZLeo/memix/releases/download/<tag>/memix-cli-skill.tar.gz
+```sh
+curl -fsSL https://github.com/MrZLeo/memix/releases/latest/download/install.sh | bash
 ```
 
-## 2. Install and verify the command
+**Windows (PowerShell)**
 
-Install the binary in a user-owned directory on `PATH`. Do not use
-administrator or root privileges unless the user explicitly requests a
-system-wide installation.
-
-Rename the installed file to its canonical command name:
-
-- Linux and macOS: `memix`
-- Windows: `memix.exe`
-
-On Linux and macOS, make the file executable. Run `memix --version`,
-`memix store --help`, `memix view --help`, and `memix tui --help`; treat any
-non-zero exit status as an installation failure. This single binary includes
-all three namespaces. It is the only supported CLI executable; no legacy
-entrypoints or compatibility aliases are provided.
-
-## 3. Install the matching CLI skill
-
-Extract `memix-cli-skill.tar.gz` into a temporary directory first. Verify that
-the archive contains this complete layout:
-
-```text
-memix-cli/
-├── SKILL.md
-├── agents/
-│   └── openai.yaml
-└── references/
-    ├── cli.md
-    └── profiles-and-recovery.md
+```powershell
+irm https://github.com/MrZLeo/memix/releases/latest/download/install.ps1 | iex
 ```
 
-The `agents/openai.yaml` file is Codex-specific interface metadata. Other
-harnesses ignore it; keep it in place so the installed directory stays
-identical across agents.
+If your tools cannot provide an interactive terminal, ask the user to run the
+command. Never pipe answers or approve the prompts on their behalf.
 
-Install the complete `memix-cli` directory under the skill root that matches
-the current agent:
+The installer selects a supported release binary, verifies its SHA-256 checksum
+and `skill` support, then previews and separately confirms `memix skill setup`.
+Default: latest release, `~/.local/bin`, detected agents, user scope. Declining
+binary installation can still use an existing Memix for skill setup. Follow any
+PATH notice; the installer does not edit shell profiles or environment settings.
 
-- Codex: use `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise
-  `$HOME/.codex/skills`.
-- pi: use `$HOME/.pi/agent/skills` for a user-wide installation. When the
-  user asked for a project-local installation, use `.pi/skills` at the
-  project root instead. The shared `$HOME/.agents/skills` directory also
-  works when the user wants one installation served to multiple harnesses.
-- Claude Code: use `$HOME/.claude/skills` for a user-wide installation.
-  When the user asked for a project-local installation, use
-  `.claude/skills` at the project root instead.
-- DeepSeek Harness (DSH): use `$DSH_HOME/skills` when `DSH_HOME` is set,
-  otherwise `$HOME/.dsh/skills`, for a user-wide installation. When the user
-  asked for a project-local installation, use `.dsh/skills` at the project
-  root instead.
+For a specific harness, download the script first and pass `--agent pi` (Bash)
+or `-Agent pi` (PowerShell). Supported IDs: `claude`, `codex`, `opencode`, `pi`,
+`dsh`. Use `--project` / `-Project` only when project scope was requested.
+See the scripts' `--help` / `-Help` for a pinned release or custom binary directory.
+Private releases require an authenticated `gh` client to download the installer
+and its assets. Releases without `SHA256SUMS` are not supported; do not bypass
+verification or silently substitute an older binary.
 
-Keep every file in the layout above, including both `references/` documents,
-under `<skill-root>/memix-cli/`. The main skill links to those documents for
-on-demand CLI and Profile guidance. Do not flatten the directory or create
-an extra nested `memix-cli/memix-cli` directory. If a destination named
-`memix-cli` already exists but is not a previous installation of this skill,
-stop instead of overwriting it.
+## 2. Verify and load instructions
 
-If the current agent is neither Codex, pi, Claude Code, nor DeepSeek Harness,
-keep the extracted skill in a temporary location rather than guessing an
-installation directory.
+After installation, run `memix --version` and `memix skill status --json`.
+Confirm the intended paths are `current`; status exit code zero alone does not
+prove a skill was installed. Report any skipped steps or partial failures.
+Foreign skills require separate review and explicit approval before `--force`;
+never retry with it automatically.
 
-Read the entire extracted `SKILL.md` in the current session before running
-memix for the user; a newly installed skill might only be discovered
-automatically by a later agent session. Follow the file as the operating
-instructions for `memix store` and `memix view`, loading its relative reference
-files when the task needs them. If the exact-tag skill archive
-cannot be downloaded or does not have the expected layout, stop instead of
-substituting instructions from a different version.
+Run `memix skill show` in this session, then read only the relevant
+`memix agent <topic>` guide. Reload the harness if necessary (Pi: `/reload`).
+Report the binary version/path, skill paths, and verification results.
 
-Finally, report the installed release tag, the command path, the skill
-path when installed, and the results of the version and help checks. When running as
-pi, also mention that later sessions can load the skill explicitly with
-`/skill:memix-cli`. When running as Claude Code, mention that later sessions
-can invoke it with `/memix-cli`, and that Claude Code only discovers new
-skills at session start — which is why the current session must follow the
-extracted `SKILL.md` directly.
+To uninstall skill files later, use `memix skill remove` with matching agent and
+scope options. No hooks, agent settings, memory Stores, or Profile history are
+installed or removed by skill setup/removal.

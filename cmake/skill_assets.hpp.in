@@ -1,0 +1,9 @@
+// Generated from skill/memix-cli. Edit the source assets, not this file.
+#pragma once
+
+#include <string_view>
+
+namespace memix::cli_detail {
+inline constexpr std::string_view skill_markdown = @memix_skill_markdown@;
+inline constexpr std::string_view skill_openai = @memix_skill_openai@;
+} // namespace memix::cli_detail
