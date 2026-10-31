@@ -38,7 +38,7 @@ with open(os.environ['CALL_LOG'], 'a') as log:
 if name == 'uname':
     print(os.environ.get('FAKE_OS', 'Linux') if args == ['-s'] else os.environ.get('FAKE_ARCH', 'x86_64'))
 elif name == 'sw_vers':
-    print(os.environ.get('FAKE_MACOS', '14.0'))
+    print(os.environ.get('FAKE_MACOS', '26.0'))
 elif name == 'sysctl':
     print(os.environ.get('FAKE_ROSETTA', '0'))
 elif name in ('curl', 'gh'):
@@ -291,11 +291,13 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.destination.is_dir())
 
     def test_supported_macos_and_rosetta(self):
-        self.env.update(FAKE_OS="Darwin", FAKE_ARCH="arm64")
-        code, output = self.run_installer(["y", "n"])
-        self.assertEqual(code, 0, output)
-        self.assertTrue(any('memix-macos-arm64' in part for call in self.calls() for part in call))
-        self.env.update(FAKE_ARCH="x86_64", FAKE_ROSETTA="1")
+        for version in ("26.0", "26.1", "27.0"):
+            with self.subTest(version=version):
+                self.env.update(FAKE_OS="Darwin", FAKE_ARCH="arm64", FAKE_MACOS=version)
+                code, output = self.run_installer(["y", "n"])
+                self.assertEqual(code, 0, output)
+                self.assertTrue(any('memix-macos-arm64' in part for call in self.calls() for part in call))
+        self.env.update(FAKE_ARCH="x86_64", FAKE_ROSETTA="1", FAKE_MACOS="26.0")
         code, output = self.run_installer(["y", "n"])
         self.assertEqual(code, 0, output)
 
@@ -307,10 +309,20 @@ class InstallerTests(unittest.TestCase):
                 self.assertNotEqual(code, 0, output)
                 self.assertFalse(self.bin_dir.exists())
                 self.assertFalse(any(call[0] in ('curl', 'gh') for call in self.calls()))
-        self.env.update(FAKE_OS="Darwin", FAKE_ARCH="arm64", FAKE_MACOS="13.7")
-        code, output = self.run_installer()
-        self.assertNotEqual(code, 0, output)
-        self.assertIn("macOS 14", output)
+
+    def test_macos_minimum_rejects_older_or_invalid_versions_before_confirmation(self):
+        old = self.existing_binary()
+        for version in ("13.7", "14.0", "14.7", "15.0", "15.7", "25.9", "", "unknown"):
+            with self.subTest(version=version):
+                self.env.update(FAKE_OS="Darwin", FAKE_ARCH="arm64", FAKE_MACOS=version)
+                code, output = self.run_installer()
+                self.assertNotEqual(code, 0, output)
+                self.assertIn("macOS 26 or newer is required", output)
+                self.assertNotIn("[Y/n]", output)
+                self.assertFalse(any(call[0] in ('curl', 'gh') for call in self.calls()))
+                self.assertEqual(self.destination.read_bytes(), old)
+                self.assertFalse(self.marker.exists())
+                self.assert_clean_stage()
 
     def test_authenticated_gh_and_pinned_release(self):
         self.env["FAKE_GH"] = "1"
@@ -353,6 +365,7 @@ class InstallerTests(unittest.TestCase):
     def test_help_and_invalid_arguments_need_no_terminal(self):
         code, output = self.run_installer(extra=["--help"], tty=False)
         self.assertEqual(code, 0, output)
+        self.assertIn("macOS 26+ arm64", output)
         for extra in (["--yes"], ["--agent", "unknown"], ["--version"], ["--bin-dir", "relative"]):
             with self.subTest(extra=extra):
                 code, output = self.run_installer(extra=extra, tty=False)

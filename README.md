@@ -27,7 +27,7 @@ The installer detects your OS/architecture and asks **two separate `[Y/n]`
 questions**: install the binary, then run skill setup. Press Enter for yes or
 `n` to skip. EOF or an unattended shell never counts as consent.
 
-Supported releases: Linux x86_64, macOS 14+ arm64, and Windows x86_64. Downloads
+Supported releases: Linux x86_64, macOS 26+ arm64, and Windows x86_64. Downloads
 are checked against the same release's `SHA256SUMS` before replacing an existing
 binary. The default destination is `~/.local/bin` (`memix.exe` on Windows).
 Follow the PATH notice if needed; no sudo, PATH edits, or forced skill
@@ -159,8 +159,9 @@ instead of silently overriding files.
 Agent-assisted installation uses prebuilt releases. For development or a manual
 source build, follow the steps below.
 
-Requires **C++23, CMake 4.4+, and Ninja**. Run `nix develop` first for the pinned
-Linux/macOS toolchain. CMake embeds agent Markdown as standard C++ string data
+Requires **C++23, CMake 4.4+, and Ninja**. macOS builds target **26 or newer**;
+set `-DCMAKE_OSX_DEPLOYMENT_TARGET=26.0` when configuring on macOS. Run
+`nix develop` first for the pinned Linux/macOS toolchain. CMake embeds agent Markdown as standard C++ string data
 and tracks document edits for incremental builds; no compiler extensions or
 runtime documentation files are needed. These commands build the current source tree:
 

@@ -16,7 +16,7 @@ main() {
       'Install a release binary, then optionally set up the bundled agent skill.' \
       'Both steps require an interactive [Y/n] confirmation. There is no --yes option.' \
       'Default: latest release, ~/.local/bin, detected agents, user scope.' \
-      'Supported: Linux x86_64 and macOS 14+ arm64. Use install.ps1 on Windows.' \
+      'Supported: Linux x86_64 and macOS 26+ arm64. Use install.ps1 on Windows.' \
       'Private releases require an authenticated GitHub CLI (gh).' \
       'The installer never uses sudo, edits PATH, or forces skill replacement.'
   }
@@ -62,7 +62,7 @@ main() {
       [[ $arch == arm64 || $arch == aarch64 ]] || die "No release binary for $system/$arch"
       macos=$(sw_vers -productVersion)
       major=${macos%%.*}
-      if [[ ! $major =~ ^[0-9]+$ ]] || ((major < 14)); then die 'macOS 14 or newer is required'; fi
+      if [[ ! $major =~ ^[0-9]+$ ]] || ((major < 26)); then die 'macOS 26 or newer is required'; fi
       asset=memix-macos-arm64 ;;
     MINGW*|MSYS*|CYGWIN*) die 'Use install.ps1 from a Windows PowerShell terminal' ;;
     *) die "No release binary for $system/$arch; no source build will be attempted" ;;

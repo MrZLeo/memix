@@ -8,7 +8,7 @@ on:
 env:
   BUILD_TYPE: Release
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
-  MACOS_DEPLOYMENT_TARGET: '14.0'
+  MACOS_DEPLOYMENT_TARGET: '26.0'
 
 jobs:
   build:
@@ -89,7 +89,7 @@ jobs:
           & "$env:CXX" --version
           cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -Dmemix_STATIC_LINK=ON -Dmemix_ENABLE_LTO=ON -DCMAKE_LINKER_TYPE=LLD
 
-      - name: configure macOS 14-compatible binaries
+      - name: configure macOS 26 binaries
         if: runner.os == 'macOS'
         env:
           CC: ${{ matrix.config.cc }}
@@ -176,6 +176,26 @@ jobs:
           strip "dist/memix-${{ matrix.config.asset }}"
           ls -lh dist
 
+      - name: smoke-test the packaged macOS CLI
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          memix="$PWD/dist/memix-macos-arm64"
+
+          memix_version="$("$memix" --version)"
+          grep -Fq 'Usage: memix' <<<"$("$memix" --help)"
+          for command in store view tui agent skill; do
+            grep -Fq "Usage: memix $command" <<<"$("$memix" "$command" --help)"
+            test "$("$memix" "$command" --version)" = "$memix_version"
+          done
+
+          smoke_root="$(mktemp -d "$RUNNER_TEMP/memix-readonly-smoke.XXXXXX")"
+          rmdir "$smoke_root"
+          test "$("$memix" store --store-root "$smoke_root/store" list --json)" = '[]'
+          test "$("$memix" view --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
+          test ! -e "$smoke_root"
+
       - name: stage Windows executables
         if: runner.os == 'Windows'
         shell: pwsh
@@ -241,7 +261,17 @@ jobs:
           set -euo pipefail
           app="build/macos/MemixInspector/memix-inspector.app"
           test -d "$app"
-          xcrun vtool -show-build "$app/Contents/MacOS/memix-inspector"
+          test "$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$app/Contents/Info.plist")" = "$MACOS_DEPLOYMENT_TARGET"
+          build_info="$(xcrun vtool -show-build "$app/Contents/MacOS/memix-inspector")"
+          printf '%s\n' "$build_info"
+          if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
+            $1 == "platform" && $2 == "MACOS" { macos = 1 }
+            $1 == "minos" { seen = 1; if ($2 != expected) bad = 1 }
+            END { exit !(macos && seen && !bad) }
+          ' <<<"$build_info"; then
+            echo "error: Inspector does not target macOS $MACOS_DEPLOYMENT_TARGET+" >&2
+            exit 1
+          fi
           # Ad-hoc signature: no Developer ID identity, but a signature
           # keeps Gatekeeper diagnostics and zip metadata sane.
           codesign --force --sign - "$app"
@@ -257,78 +287,10 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  macos14:
-    name: Verify release binaries on macOS 14
-    runs-on: macos-14
-    needs: build
-    permissions:
-      actions: read
-      contents: read
-
-    steps:
-      - name: download macOS arm64 executables
-        uses: actions/download-artifact@v8
-        with:
-          name: macos-arm64
-          path: dist
-
-      - name: verify runner and release binaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "arm64"
-          test "$(sw_vers -productVersion | cut -d. -f1)" = "14"
-
-          mkdir -p "$RUNNER_TEMP/memix-bin"
-          install -m 0755 dist/memix-macos-arm64 "$RUNNER_TEMP/memix-bin/memix"
-
-          binary="$RUNNER_TEMP/memix-bin/memix"
-          test "$(lipo -archs "$binary")" = "arm64"
-          build_info="$(xcrun vtool -show-build "$binary")"
-          printf '%s\n' "$build_info"
-          if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
-            $1 == "platform" && $2 == "MACOS" { macos = 1 }
-            $1 == "minos" { seen = 1; if ($2 != expected) bad = 1 }
-            END { exit !(macos && seen && !bad) }
-          ' <<<"$build_info"; then
-            echo "error: $binary is not a macOS $MACOS_DEPLOYMENT_TARGET+ binary" >&2
-            exit 1
-          fi
-
-          unexpected="$(otool -L "$binary" | awk '
-            NR > 1 && $1 !~ "^/usr/lib/" && $1 !~ "^/System/Library/" {
-              print $1
-            }
-          ')"
-          if [[ -n "$unexpected" ]]; then
-            echo "error: $binary has non-system dynamic dependencies:" >&2
-            echo "$unexpected" >&2
-            exit 1
-          fi
-
-      - name: run release CLI smoke tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          memix="$RUNNER_TEMP/memix-bin/memix"
-
-          memix_version="$("$memix" --version)"
-          grep -Fq 'Usage: memix' <<<"$("$memix" --help)"
-          for command in store view tui; do
-            grep -Fq "Usage: memix $command" <<<"$("$memix" "$command" --help)"
-            test "$("$memix" "$command" --version)" = "$memix_version"
-          done
-
-          smoke_root="$(mktemp -d "$RUNNER_TEMP/memix-readonly-smoke.XXXXXX")"
-          rmdir "$smoke_root"
-          test "$("$memix" store --store-root "$smoke_root/store" list --json)" = '[]'
-          test "$("$memix" view --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
-          test ! -e "$smoke_root"
-
   release:
     name: Publish GitHub release
     runs-on: ubuntu-24.04
-    needs: [build, macos14, inspector]
+    needs: [build, inspector]
     permissions:
       actions: read
       contents: write

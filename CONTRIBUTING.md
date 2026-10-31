@@ -11,7 +11,9 @@ Thanks for helping improve `memix`.
 ## Development
 
 Builds require CMake 4.4+, Ninja, and a compiler with C++23 support. Older
-C++ standards and compiler extensions are not supported.
+C++ standards and compiler extensions are not supported. The supported macOS
+minimum is **26.0** for both the CLI and Inspector; macOS builds should set
+`-DCMAKE_OSX_DEPLOYMENT_TARGET=26.0`.
 
 For the pinned toolchain, run `nix develop` first. The flake supports
 `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`, using GCC on Linux
