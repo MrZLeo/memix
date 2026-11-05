@@ -123,7 +123,7 @@ public:
     return full(full_arguments);
   }
 
-  fs::path shared() const { return home / ".agents/skills/memix-cli"; }
+  fs::path shared() const { return home / ".agents/skills" / "memix-cli"; }
 
   fs::path root;
   fs::path home;
@@ -209,7 +209,7 @@ TEST_CASE("skill status matches Rex groups and abbreviates only home paths",
   succeeds(outside);
   REQUIRE(normalized_newlines(outside.output)
           == "Pi (not found)\n  skill  missing      "
-                 + (external / "skills/memix-cli").string()
+                 + (external / "skills" / "memix-cli").string()
                  + "\n\n");
 }
 
