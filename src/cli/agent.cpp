@@ -29,8 +29,10 @@ int memix::cli::run_agent(const std::vector<std::string> &arguments) {
     logger->error("{}", parsed.error()->message());
     return 1;
   }
-  const auto *guide = std::ranges::find(cli_detail::agent_guides, topic,
-                                        &cli_detail::AgentGuide::topic);
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto guide = std::ranges::find(cli_detail::agent_guides, topic,
+                                       &cli_detail::AgentGuide::topic);
   if (!topic.empty() && guide == cli_detail::agent_guides.end()) {
     logger->error("unknown agent topic `{}`; expected "
                   "guide|recall|save|compose|attach|recovery",

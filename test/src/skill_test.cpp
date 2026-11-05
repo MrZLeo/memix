@@ -168,6 +168,24 @@ TEST_CASE("skill help and show need neither a home nor a store",
   REQUIRE_FALSE(path_exists(sandbox.root / "absent-store"));
 }
 
+TEST_CASE("skill status labels every supported agent", "[skill][cli]") {
+  Sandbox sandbox;
+  for (const auto &[id, label] :
+       std::to_array<std::pair<const char *, const char *>>({
+           {"claude", "Claude Code"},
+           {"codex", "Codex"},
+           {"opencode", "OpenCode"},
+           {"pi", "Pi"},
+           {"dsh", "DSH"},
+       })) {
+    CAPTURE(id);
+    const auto status = sandbox.run({"status", "--agent", id});
+    succeeds(status);
+    REQUIRE(normalized_newlines(status.output)
+                .starts_with(std::string(label) + " (not found)\n"));
+  }
+}
+
 TEST_CASE("skill status matches Rex groups and abbreviates only home paths",
           "[skill][cli]") {
   Sandbox sandbox;

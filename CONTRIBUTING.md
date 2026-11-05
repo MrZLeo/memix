@@ -93,6 +93,12 @@ separate from Linux's.
 * Match the surrounding C++ style.
 * Prefer small, reviewable commits.
 * Run `clang-format` before submitting changes when formatting is affected.
+* Treat STL/ranges search results as iterators: use `auto`, not `auto*`, even
+  for `std::array`. MSVC STL uses iterator classes where other libraries may
+  use pointers. Keep a documented, local
+  `NOLINTNEXTLINE(readability-qualified-auto)` when that check suggests the
+  non-portable pointer spelling; do not apply that fix blindly or disable
+  the check globally. Validate iterator changes with the Windows build.
 
 ## Pull requests
 

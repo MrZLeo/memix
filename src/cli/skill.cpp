@@ -738,7 +738,9 @@ std::string_view agent_label(std::string_view id) {
           {"pi", "Pi"},
           {"dsh", "DSH"},
       });
-  const auto *found = std::ranges::find_if(
+  // MSVC array iterators are not pointers.
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto found = std::ranges::find_if(
       names, [id](const auto &name) { return name.first == id; });
   return found == names.end() ? id : found->second;
 }
