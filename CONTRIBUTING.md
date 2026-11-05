@@ -11,7 +11,9 @@ Thanks for helping improve `memix`.
 ## Development
 
 Builds require CMake 4.4+, Ninja, and a compiler with C++23 support. Older
-C++ standards and compiler extensions are not supported.
+C++ standards and compiler extensions are not supported. The supported macOS
+minimum is **26.0** for both the CLI and Inspector; macOS builds should set
+`-DCMAKE_OSX_DEPLOYMENT_TARGET=26.0`.
 
 For the pinned toolchain, run `nix develop` first. The flake supports
 `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`, using GCC on Linux
@@ -91,6 +93,12 @@ separate from Linux's.
 * Match the surrounding C++ style.
 * Prefer small, reviewable commits.
 * Run `clang-format` before submitting changes when formatting is affected.
+* Treat STL/ranges search results as iterators: use `auto`, not `auto*`, even
+  for `std::array`. MSVC STL uses iterator classes where other libraries may
+  use pointers. Keep a documented, local
+  `NOLINTNEXTLINE(readability-qualified-auto)` when that check suggests the
+  non-portable pointer spelling; do not apply that fix blindly or disable
+  the check globally. Validate iterator changes with the Windows build.
 
 ## Pull requests
 

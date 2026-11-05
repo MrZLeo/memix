@@ -1,3 +1,4 @@
+# Managed by memix skill setup.
 interface:
   display_name: "Memix CLI"
   short_description: "Recall, compose, and manage durable memory"

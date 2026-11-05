@@ -107,7 +107,15 @@ if(memix_BUILD_EXECUTABLE)
 
   # Keep command implementations modular behind the single memix entrypoint.
   add_library(memix_cli STATIC ${cli_sources} ${cli_headers})
-  target_include_directories(memix_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  include(cmake/AgentGuides.cmake)
+  memix_generate_agent_guides("${CMAKE_CURRENT_SOURCE_DIR}/docs/agent"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/agent_guides.hpp")
+  memix_generate_skill_assets("${CMAKE_CURRENT_SOURCE_DIR}/skill/memix-cli"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/skill_assets.hpp")
+  target_include_directories(memix_cli PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  )
   target_compile_definitions(memix_cli PRIVATE ARGUM_USE_EXPECTED=1 SPDLOG_NO_EXCEPTIONS=1)
   target_link_libraries(memix_cli PRIVATE
     memix::memix memix_simdjson_headers argum::argum spdlog::spdlog ftxui::component

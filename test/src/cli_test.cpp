@@ -13,8 +13,10 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <ios>
 #include <iterator>
 #include <random>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -63,8 +65,9 @@ void write_file(const fs::path &path, std::string_view contents) {
   REQUIRE(file);
 }
 
-std::string read_text(const fs::path &path) {
-  std::ifstream file(path);
+std::string
+read_text(const fs::path &path, std::ios::openmode mode = std::ios::in) {
+  std::ifstream file(path, mode);
   REQUIRE(file);
   return {std::istreambuf_iterator<char>(file),
           std::istreambuf_iterator<char>()};
@@ -166,12 +169,14 @@ TEST_CASE("unified CLI discovers namespaces and reports versions", "[cli]") {
     REQUIRE(result.output.contains("store"));
     REQUIRE(result.output.contains("view"));
     REQUIRE(result.output.contains("tui"));
+    REQUIRE(result.output.contains("agent"));
+    REQUIRE(result.output.contains("skill"));
   }
   const auto version = run(root, {"--version"});
   REQUIRE(version.status == 0);
   REQUIRE(version.error.empty());
   REQUIRE(version.output == std::format("memix {}\n", MEMIX_VERSION));
-  for (const auto *command : {"store", "view", "tui"}) {
+  for (const auto *command : {"store", "view", "tui", "agent", "skill"}) {
     const auto help = run(root, {command, "--help"});
     REQUIRE(help.status == 0);
     REQUIRE(help.error.empty());
@@ -180,6 +185,106 @@ TEST_CASE("unified CLI discovers namespaces and reports versions", "[cli]") {
     REQUIRE(run(root, {command, "--version"}).output == version.output);
     REQUIRE(run(root, {"--version", command}).output == version.output);
   }
+}
+
+TEST_CASE("agent guides are bundled deterministic and store independent",
+          "[cli][agent]") {
+  TemporaryDirectory directory;
+  const auto &root = directory.path();
+  const auto store = (root / "absent store").string();
+  const auto blocker = root / "not a directory";
+  write_file(blocker, "do not modify\n");
+  const auto copied_binary = root / fs::path(unified_binary()).filename();
+  REQUIRE(fs::copy_file(unified_binary(), copied_binary));
+  std::error_code permission_error;
+  std::filesystem::permissions(
+      copied_binary, std::filesystem::perms::owner_exec,
+      std::filesystem::perm_options::add, permission_error);
+  REQUIRE_FALSE(permission_error);
+  for (const auto *topic :
+       {"guide", "recall", "save", "compose", "attach", "recovery"}) {
+    CAPTURE(topic);
+    const auto result = run(root, {"--store-root", store, "agent", topic});
+    REQUIRE(result.status == 0);
+    REQUIRE(result.error.empty());
+    // Embedded bytes have no string-literal escaping or trailing terminator.
+    const auto markdown = read_text(fs::path(MEMIX_TEST_AGENT_GUIDE_DIR)
+                                        / std::format("{}.md", topic),
+                                    std::ios::in | std::ios::binary);
+    REQUIRE(result.output
+            == std::format("<!-- memix {} agent {} -->\n\n{}", MEMIX_VERSION,
+                           topic, markdown));
+    REQUIRE_FALSE(result.output.contains("\x1b"));
+    REQUIRE_FALSE(result.output.contains("references/"));
+    const auto standalone = run_binary(
+        root, copied_binary.string(),
+        {"agent", topic, "--store-root", (blocker / "store").string()});
+    REQUIRE(standalone.status == 0);
+    REQUIRE(standalone.error.empty());
+    REQUIRE(standalone.output == result.output);
+    const auto help = run(root, {"agent", topic, "--help"});
+    REQUIRE(help.status == 0);
+    REQUIRE(help.output.contains("Usage: memix agent"));
+  }
+  const auto guide = run(root, {"agent", "guide"});
+  for (const auto *topic :
+       {"recall", "save", "compose", "attach", "recovery"}) {
+    REQUIRE(guide.output.contains(std::format("memix agent {}", topic)));
+  }
+  REQUIRE(run(root, {"agent"}).output.contains("Usage: memix agent"));
+  const auto exists = fs::exists(store);
+  REQUIRE(exists);
+  REQUIRE_FALSE(*exists);
+  REQUIRE(read_text(blocker) == "do not modify\n");
+}
+
+TEST_CASE("agent guides keep common workflows within reading budgets",
+          "[cli][agent]") {
+  TemporaryDirectory directory;
+  const auto load = [&directory](const char *topic) {
+    const auto result = run(directory.path(), {"agent", topic});
+    REQUIRE(result.status == 0);
+    REQUIRE(result.error.empty());
+    return result.output;
+  };
+  // Whitespace-delimited word counts, including the CLI banner, not tokens.
+  // Keep common workflows small without encouraging extra mandatory topics.
+  const auto word_count = [](const std::string &text) {
+    std::istringstream stream(text);
+    return std::distance(std::istream_iterator<std::string>(stream),
+                         std::istream_iterator<std::string>());
+  };
+  const auto guide_words = word_count(load("guide"));
+  REQUIRE(guide_words <= 220);
+  REQUIRE(guide_words + word_count(load("recall")) <= 650);
+  REQUIRE(guide_words + word_count(load("save")) <= 550);
+  for (const auto *topic : {"compose", "attach", "recovery"}) {
+    CAPTURE(topic);
+    REQUIRE(word_count(load(topic)) <= 450);
+  }
+}
+
+TEST_CASE("agent rejects unknown topics and malformed arguments",
+          "[cli][agent]") {
+  TemporaryDirectory directory;
+  const auto store = (directory.path() / "absent store").string();
+  for (const std::vector<std::string> &arguments :
+       {std::vector<std::string>{"unknown"},
+        {"guide", "save"},
+        {"guide", "--json"},
+        {"--store-root"},
+        {"--unknown"},
+        {"unknown", "--help"}}) {
+    auto full = std::vector<std::string>{"--store-root", store, "agent"};
+    full.append_range(arguments);
+    const auto result = run(directory.path(), full);
+    REQUIRE(result.status != 0);
+    REQUIRE(result.output.empty());
+    REQUIRE_FALSE(result.error.empty());
+  }
+  const auto exists = fs::exists(store);
+  REQUIRE(exists);
+  REQUIRE_FALSE(*exists);
 }
 
 TEST_CASE("unified CLI provides nested help", "[cli]") {

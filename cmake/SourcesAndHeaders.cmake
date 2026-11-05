@@ -19,6 +19,8 @@ file(GLOB bin_sources CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bin/*.cpp
 )
 set(cli_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/agent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/skill.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/view.cpp
@@ -39,6 +41,7 @@ set(headers
 
 set(test_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/cli_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/src/skill_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/activation_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/hash_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test/src/json_test.cpp

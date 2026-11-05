@@ -1,0 +1,14 @@
+// Generated from docs/agent/*.md. Edit the Markdown sources, not this file.
+#pragma once
+
+#include <array>
+#include <string_view>
+
+namespace memix::cli_detail {
+struct AgentGuide {
+  std::string_view topic;
+  std::string_view text;
+};
+inline constexpr auto agent_guides = std::to_array<AgentGuide>({
+@memix_agent_entries@});
+} // namespace memix::cli_detail
