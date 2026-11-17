@@ -40,7 +40,7 @@ constexpr std::string_view kSkillMarker =
     "remove\". -->";
 constexpr std::string_view kOpenaiMarker = "# Managed by memix skill setup.";
 constexpr auto kAgents = std::to_array<std::string_view>(
-    {"claude", "codex", "opencode", "pi", "dsh"});
+    {"claude", "codex", "opencode", "pi", "dsh", "opendesk"});
 
 struct Options {
   cli::CommonOptions common;
@@ -198,12 +198,12 @@ Result<fs::path> project_root() {
 }
 
 std::vector<fs::path>
-skill_paths(const fs::path &primary, const fs::path &native) {
+skill_paths(const fs::path &primary, const fs::path &native_skills) {
   std::vector<fs::path> paths{primary / "memix-cli"};
-  if (primary == native / "skills") {
+  if (primary == native_skills) {
     return paths;
   }
-  const auto legacy = native / "skills/memix-cli";
+  const auto legacy = native_skills / "memix-cli";
   const auto type = entry_type(legacy);
   if (!type || *type != fs::file_type::not_found) {
     // Reconcile existing native copies instead of creating a shadowed shared
@@ -236,7 +236,9 @@ Result<std::vector<Harness>> harnesses(const Options &options) {
     const char *variable;
     fs::path default_home;
     fs::path local;
+    fs::path skill_root = "skills";
     bool shared;
+    bool project = true;
   };
   const auto definitions = std::to_array<Definition>({
       {
@@ -274,6 +276,15 @@ Result<std::vector<Harness>> harnesses(const Options &options) {
           .local = ".dsh",
           .shared = false,
       },
+      {
+          .id = "opendesk",
+          .variable = "OPENDESK_CONFIG_DIRECTORY",
+          .default_home = *home / ".opendesk",
+          .local = ".opendesk",
+          .skill_root = "apps/skills/resources",
+          .shared = false,
+          .project = false,
+      },
   });
   std::vector<Harness> result;
   for (const auto &definition : definitions) {
@@ -283,16 +294,25 @@ Result<std::vector<Harness>> harnesses(const Options &options) {
       return std::unexpected(config.error());
     }
     const auto native = options.project ? *root / definition.local : *config;
+    if (options.project && !definition.project) {
+      result.push_back({
+          .id = std::string(definition.id),
+          .detected = false,
+          .paths = {},
+      });
+      continue;
+    }
     const bool shared =
         definition.shared
         && (options.project || environment(definition.variable).empty());
-    const auto primary = shared ? *root / ".agents/skills" : native / "skills";
+    const auto native_skills = native / definition.skill_root;
+    const auto primary = shared ? *root / ".agents/skills" : native_skills;
     Harness harness{
         .id = std::string(definition.id),
         .detected = (!home->empty() && directory_exists(*config))
                  || (options.project && directory_exists(native))
                  || executable_found(definition.id),
-        .paths = skill_paths(primary, native),
+        .paths = skill_paths(primary, native_skills),
     };
     result.push_back(std::move(harness));
   }
@@ -348,17 +368,20 @@ Inspection inspect(const fs::path &path) {
     std::string_view path;
     std::string_view marker;
     std::string_view expected;
+    std::string_view legacy;
   };
   const auto files = std::to_array<File>({
       {
           .path = "SKILL.md",
           .marker = kSkillMarker,
           .expected = cli::skill_markdown,
+          .legacy = cli::legacy_skill_markdown,
       },
       {
           .path = "agents/openai.yaml",
           .marker = kOpenaiMarker,
           .expected = cli::skill_openai,
+          .legacy = cli::legacy_skill_openai,
       },
   });
   for (const auto &file : files) {
@@ -380,7 +403,7 @@ Inspection inspect(const fs::path &path) {
     if (!text) {
       return {.state = "unreadable", .reason = text.error().message};
     }
-    if (!text->contains(file.marker)) {
+    if (!text->contains(file.marker) && *text != file.legacy) {
       return {
           .state = "foreign",
           .reason = std::format("{} was not installed by memix", file.path),
@@ -622,14 +645,14 @@ add_options(Argum::Parser &parser, Options &options, std::string_view command) {
       parser, options.common,
       "Accepted but unused; skill commands never open a memory Store.");
   if (command != "show") {
-    parser.add(
-        Argum::Option("--agent")
-            .argName("AGENT")
-            .occurs(Argum::zeroOrMoreTimes)
-            .help("Select claude, codex, opencode, pi or dsh (repeatable).")
-            .handler([&](std::string_view value) {
-              options.agents.emplace_back(value);
-            }));
+    parser.add(Argum::Option("--agent")
+                   .argName("AGENT")
+                   .occurs(Argum::zeroOrMoreTimes)
+                   .help("Select claude, codex, opencode, pi, dsh or opendesk "
+                         "(repeatable).")
+                   .handler([&](std::string_view value) {
+                     options.agents.emplace_back(value);
+                   }));
     parser.add(Argum::Option("--project")
                    .help("Use the current repository instead of your account.")
                    .handler([&] { options.project = true; }));
@@ -671,6 +694,7 @@ void help(std::string_view command) {
                  "  show     Print the entry guide for agents\n\n"
                  "Examples:\n"
                  "  memix skill setup --agent pi --dry-run\n"
+                 "  memix skill setup --agent opendesk\n"
                  "  memix skill status --json\n"
                  "  memix skill show\n");
   } else if (command == "show") {
@@ -702,6 +726,8 @@ void help(std::string_view command) {
   }
   std::println("Notes:\n"
                "  Codex, OpenCode and Pi normally share .agents/skills.\n"
+               "  OpenDesk uses its account skill resources; --project is "
+               "unsupported.\n"
                "  Changes to a shared path affect every agent that reads it.\n"
                "  No hooks, agent settings, or memory Stores are changed.");
 }
@@ -709,9 +735,15 @@ void help(std::string_view command) {
 VoidResult validate(const Options &options) {
   for (const auto &agent : options.agents) {
     if (!std::ranges::contains(kAgents, agent)) {
-      return unexpected_error(std::format(
-          "unknown agent `{}`; expected claude|codex|opencode|pi|dsh", agent));
+      return unexpected_error(
+          std::format("unknown agent `{}`; expected "
+                      "claude|codex|opencode|pi|dsh|opendesk",
+                      agent));
     }
+  }
+  if (options.project && std::ranges::contains(options.agents, "opendesk")) {
+    return unexpected_error(
+        "OpenDesk skills are account-scoped; remove --project");
   }
   if (options.force && options.command != "setup") {
     return unexpected_error("--force is only valid for skill setup");
@@ -737,6 +769,7 @@ std::string_view agent_label(std::string_view id) {
           {"opencode", "OpenCode"},
           {"pi", "Pi"},
           {"dsh", "DSH"},
+          {"opendesk", "OpenDesk"},
       });
   // MSVC array iterators are not pointers.
   // NOLINTNEXTLINE(readability-qualified-auto)
@@ -1006,7 +1039,7 @@ report_steps(const std::vector<Step> &steps, const Options &options) {
   builder.end_object();
   if (!options.json) {
     if (steps.empty()) {
-      std::println("No agents detected. Select one explicitly, for example:\n"
+      std::println("No agents detected. The skill was not installed. Select one explicitly, for example:\n"
                    "  memix skill setup --agent pi\n");
     }
     print_summary(changes, options.dry_run);

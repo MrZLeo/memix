@@ -6,4 +6,6 @@
 namespace memix::cli_detail {
 inline constexpr std::string_view skill_markdown = @memix_skill_markdown@;
 inline constexpr std::string_view skill_openai = @memix_skill_openai@;
+inline constexpr std::string_view legacy_skill_markdown = @memix_legacy_skill_markdown@;
+inline constexpr std::string_view legacy_skill_openai = @memix_legacy_skill_openai@;
 } // namespace memix::cli_detail

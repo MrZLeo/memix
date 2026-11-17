@@ -79,7 +79,8 @@ public:
     binary = std::filesystem::absolute(binary).string();
     for (const auto *name :
          {"HOME", "USERPROFILE", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
-          "PI_CODING_AGENT_DIR", "DSH_HOME", "XDG_CONFIG_HOME"}) {
+          "PI_CODING_AGENT_DIR", "DSH_HOME", "OPENDESK_CONFIG_DIRECTORY",
+          "XDG_CONFIG_HOME"}) {
       const char *value = std::getenv(name);
       environment_.emplace_back(name, value == nullptr
                                           ? std::nullopt
@@ -177,6 +178,7 @@ TEST_CASE("skill status labels every supported agent", "[skill][cli]") {
            {"opencode", "OpenCode"},
            {"pi", "Pi"},
            {"dsh", "DSH"},
+           {"opendesk", "OpenDesk"},
        })) {
     CAPTURE(id);
     const auto status = sandbox.run({"status", "--agent", id});
@@ -358,7 +360,7 @@ TEST_CASE("skill empty reports and help provide grouped next steps",
   Sandbox sandbox;
   const auto empty = sandbox.run({"setup", "--dry-run"});
   succeeds(empty);
-  REQUIRE(empty.output.contains("No agents detected."));
+  REQUIRE(empty.output.contains("No agents detected. The skill was not installed."));
   REQUIRE(empty.output.contains("  memix skill setup --agent pi"));
   REQUIRE(empty.output.contains("Summary: no changes"));
   REQUIRE_FALSE(empty.output.contains("ACTION"));
@@ -376,6 +378,25 @@ TEST_CASE("skill empty reports and help provide grouped next steps",
   const auto status_help = sandbox.run({"status", "--help"});
   succeeds(status_help);
   REQUIRE(status_help.output.contains("States:"));
+}
+
+TEST_CASE("skill migrates unchanged previous official installation", "[skill][cli]") {
+  Sandbox sandbox;
+  const auto legacy = fs::path(MEMIX_TEST_SKILL_SOURCE_DIR).parent_path()
+                    / "legacy/memix-cli";
+  const auto destination = sandbox.shared();
+  write(destination / "SKILL.md", read(legacy / "SKILL.md"));
+  write(destination / "agents/openai.yaml", read(legacy / "agents/openai.yaml"));
+  write(destination / "references/cli.md", "user retained reference\n");
+  succeeds(sandbox.run({"setup", "--agent", "pi"}));
+  REQUIRE(read(destination / "SKILL.md")
+          == read(fs::path(MEMIX_TEST_SKILL_SOURCE_DIR) / "SKILL.md"));
+  REQUIRE(read(destination / "references/cli.md") == "user retained reference\n");
+
+  write(destination / "SKILL.md", read(legacy / "SKILL.md") + "modified\n");
+  const auto conflict = sandbox.run({"setup", "--agent", "pi"});
+  REQUIRE(conflict.status != 0);
+  REQUIRE(read(destination / "SKILL.md").ends_with("modified\n"));
 }
 
 TEST_CASE("skill setup is bundled idempotent and shared by agents",
@@ -475,6 +496,32 @@ TEST_CASE("skill honors agent home overrides", "[skill][cli]") {
   REQUIRE(fs::create_directories(xdg / "opencode"));
   succeeds(sandbox.run({"setup"}));
   REQUIRE(path_exists(sandbox.shared() / "SKILL.md"));
+}
+
+TEST_CASE("skill supports OpenDesk account resources and config override",
+          "[skill][cli]") {
+  Sandbox sandbox;
+  const auto expected =
+      sandbox.home / ".opendesk/apps/skills/resources/memix-cli";
+  succeeds(sandbox.run({"setup", "--agent", "opendesk"}));
+  REQUIRE(path_exists(expected / "SKILL.md"));
+  REQUIRE(path_exists(expected / "agents/openai.yaml"));
+  succeeds(sandbox.run({"remove", "--agent", "opendesk"}));
+  REQUIRE_FALSE(path_exists(expected));
+
+  const auto custom = sandbox.root / "OpenDesk custom home";
+  set_env("OPENDESK_CONFIG_DIRECTORY", custom.string());
+  succeeds(sandbox.run({"setup", "--agent", "opendesk"}));
+  REQUIRE(path_exists(custom / "apps/skills/resources/memix-cli/SKILL.md"));
+
+  const auto repo = sandbox.root / "project";
+  write(repo / ".git", "gitdir: elsewhere\n");
+  std::filesystem::current_path(repo);
+  const auto project =
+      sandbox.run({"setup", "--project", "--agent", "opendesk"});
+  REQUIRE(project.status != 0);
+  REQUIRE(project.error.contains("account-scoped"));
+  REQUIRE_FALSE(path_exists(repo / ".opendesk"));
 }
 
 TEST_CASE("skill project scope resolves repository roots including worktrees",
