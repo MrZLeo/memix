@@ -298,6 +298,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: create release
         env:
@@ -334,12 +336,102 @@ jobs:
             (cd "$(dirname "$asset")" && sha256sum "$(basename "$asset")")
           done > SHA256SUMS
 
+      - name: generate Homebrew Formula
+        run: |
+          set -euo pipefail
+          ruby packaging/homebrew/generate-formula.rb "$GITHUB_REF_NAME" SHA256SUMS memix.rb
+          ruby -c memix.rb
+          sha256sum memix.rb >> SHA256SUMS
+          cat SHA256SUMS
+
+      - name: upload Homebrew Formula artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: homebrew-formula-${{ github.ref_name }}
+          path: memix.rb
+          if-no-files-found: error
+          overwrite: true
+
       - name: upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz memix-opendesk-plugin.tgz install.sh install.ps1 SHA256SUMS
+        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz memix-opendesk-plugin.tgz install.sh install.ps1 memix.rb SHA256SUMS
 
       - name: publish complete release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+
+    steps:
+      - name: check publishing configuration
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is required to update MrZLeo/homebrew-tap"
+            exit 1
+          fi
+
+      - name: download Formula artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: homebrew-formula-${{ github.ref_name }}
+          path: formula
+
+      - name: check out Homebrew tap
+        uses: actions/checkout@v7
+        with:
+          repository: MrZLeo/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: homebrew-tap
+
+      - name: publish Formula
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          current_formula=homebrew-tap/Formula/memix.rb
+          current_version=""
+          if [[ -f "$current_formula" ]]; then
+            current_version="$(
+              sed -nE \
+                's#.*releases/download/v([0-9]+\.[0-9]+\.[0-9]+)/.*#\1#p' \
+                "$current_formula" |
+                head -n 1
+            )"
+          fi
+          if [[ -n "$current_version" ]] &&
+             [[ "$(printf '%s\n%s\n' "$current_version" "$version" |
+               sort -V | tail -n 1)" == "$current_version" ]] &&
+             [[ "$current_version" != "$version" ]]; then
+            echo "::notice::Tap already contains newer Memix ${current_version}; skipping ${version}"
+            exit 0
+          fi
+
+          mkdir -p homebrew-tap/Formula
+          install -m 0644 formula/memix.rb homebrew-tap/Formula/memix.rb
+          cd homebrew-tap
+
+          git add Formula/memix.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew Formula is already current"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: update memix to ${version}"
+          git push

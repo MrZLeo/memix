@@ -1,0 +1,74 @@
+name: Homebrew
+
+on:
+  push:
+    branches: [ master, experimental ]
+    paths:
+      - ".github/workflows/homebrew.yml"
+      - ".github/workflows/release.yml"
+      - "LICENSE"
+      - "packaging/homebrew/**"
+  pull_request:
+    branches: [ master ]
+    paths:
+      - ".github/workflows/homebrew.yml"
+      - ".github/workflows/release.yml"
+      - "LICENSE"
+      - "packaging/homebrew/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    name: Formula (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-26
+          - ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+        with:
+          token: ${{ github.token }}
+
+      - name: Test Formula generator
+        run: ruby packaging/homebrew/generate-formula-test.rb
+
+      - name: Generate known release fixture
+        run: |
+          ruby packaging/homebrew/generate-formula.rb \
+            v0.7.0 \
+            packaging/homebrew/testdata/v0.7.0-SHA256SUMS \
+            "$RUNNER_TEMP/memix.rb"
+
+      - name: Create test tap
+        run: |
+          brew tap-new --no-git mrzleo/memix-test
+          if brew trust --help >/dev/null 2>&1; then
+            brew trust mrzleo/memix-test
+          fi
+          install -m 0644 \
+            "$RUNNER_TEMP/memix.rb" \
+            "$(brew --repository mrzleo/memix-test)/Formula/memix.rb"
+
+      - name: Check Formula
+        run: |
+          brew style --formula mrzleo/memix-test/memix
+          brew readall --aliases --os=all --arch=all mrzleo/memix-test
+          brew audit --strict --formula mrzleo/memix-test/memix
+
+      - name: Install and test Formula
+        run: |
+          brew install mrzleo/memix-test/memix
+          brew test mrzleo/memix-test/memix

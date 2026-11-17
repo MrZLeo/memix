@@ -18,6 +18,13 @@ installing the CLI separately:
 opendesk plugins install https://github.com/MrZLeo/memix/releases/latest/download/memix-opendesk-plugin.tgz
 ```
 
+### Homebrew (macOS 26+ arm64 / Linux x86_64)
+
+```sh
+brew install mrzleo/tap/memix
+memix skill setup
+```
+
 ### Install interactively
 
 **Linux / macOS**
