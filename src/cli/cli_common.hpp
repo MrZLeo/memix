@@ -134,7 +134,10 @@ struct CommonOptions {
   bool version_requested = false;
 };
 
-inline void add_common_options(Argum::Parser &parser, CommonOptions &options) {
+inline void add_common_options(Argum::Parser &parser, CommonOptions &options,
+                               std::string_view store_help =
+                                   "Store root. Defaults to MEMIX_STORE_HOME, "
+                                   "XDG_DATA_HOME/memix, or HOME/.memix.") {
   parser.add(Argum::Option("--help", "-h")
                  .help("Print this help message and exit")
                  .handler([&options] { options.help_requested = true; }));
@@ -143,8 +146,7 @@ inline void add_common_options(Argum::Parser &parser, CommonOptions &options) {
                  .handler([&options] { options.version_requested = true; }));
   parser.add(Argum::Option("--store-root")
                  .argName("TEXT")
-                 .help("Store root. Defaults to MEMIX_STORE_HOME, "
-                       "XDG_DATA_HOME/memix, or HOME/.memix.")
+                 .help(store_help)
                  .handler([&options](std::string_view value) {
                    options.store_root = fs::path(value);
                  }));

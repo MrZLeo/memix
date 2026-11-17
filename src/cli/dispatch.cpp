@@ -20,7 +20,8 @@ void print_help() {
   parser.add(Argum::Positional("command")
                  .occurs(Argum::neverOrOnce)
                  .help("Command: store (source memory), view (derived views "
-                       "and activation), or tui (terminal inspector)."));
+                       "and activation), tui (terminal inspector), agent "
+                       "(progressive instructions), or skill (agent setup)."));
   std::print("{}", parser.formatHelp("memix"));
   std::println("\nRun 'memix <command> --help' for command-specific help.\n"
                "Common options may precede or follow the command.");
@@ -50,7 +51,7 @@ int memix::cli::run(const std::vector<std::string> &arguments) {
       print_help();
       return 0;
     }
-    logger->error("a command is required: store|view|tui");
+    logger->error("a command is required: store|view|tui|agent|skill");
     return 1;
   }
 
@@ -61,10 +62,16 @@ int memix::cli::run(const std::vector<std::string> &arguments) {
     entry = run_store;
   } else if (command == "view") {
     entry = run_view;
+  } else if (command == "agent") {
+    entry = run_agent;
+  } else if (command == "skill") {
+    entry = run_skill;
   } else if (command == "tui") {
     entry = run_tui;
   } else {
-    logger->error("unsupported command `{}`; expected store|view|tui", command);
+    logger->error(
+        "unsupported command `{}`; expected store|view|tui|agent|skill",
+        command);
     return 1;
   }
 

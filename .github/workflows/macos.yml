@@ -2,7 +2,7 @@ name: MacOS
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, experimental ]
   pull_request:
     branches: [ master ]
 
@@ -10,13 +10,13 @@ env:
   BUILD_TYPE: Release
   INSTALL_LOCATION: .local
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
-  MACOS_DEPLOYMENT_TARGET: '14.0'
+  MACOS_DEPLOYMENT_TARGET: '26.0'
   CC: /Library/Developer/CommandLineTools/usr/bin/clang
   CXX: /Library/Developer/CommandLineTools/usr/bin/clang++
 
 jobs:
   build:
-    name: Build on macOS 26 for macOS 14+
+    name: Build and test on macOS 26
     runs-on: macos-26
     if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]')"
 
@@ -90,69 +90,11 @@ jobs:
           fi
         done
 
-    - name: stage macOS 14 compatibility tests
-      shell: bash
-      run: |
-        mkdir compatibility
-        cp build/bin/Release/memix compatibility/
-        cp build/test/*_Tests compatibility/
-
-    - name: upload macOS 14 compatibility tests
-      uses: actions/upload-artifact@v7
-      with:
-        name: macos-arm64-compatibility
-        path: compatibility/*
-        if-no-files-found: error
-        compression-level: 0
-        retention-days: 1
-
-  macos14:
-    name: Run compatibility tests on macOS 14
-    runs-on: macos-14
-    needs: build
-
-    steps:
-    - name: download macOS 14 compatibility tests
-      uses: actions/download-artifact@v8
-      with:
-        name: macos-arm64-compatibility
-        path: compatibility
-
-    - name: verify runner and binaries
-      shell: bash
-      run: |
-        set -euo pipefail
-        test "$(uname -m)" = "arm64"
-        test "$(sw_vers -productVersion | cut -d. -f1)" = "14"
-
-        chmod +x compatibility/*
-        for binary in compatibility/*; do
-          test "$(lipo -archs "$binary")" = "arm64"
-          build_info="$(xcrun vtool -show-build "$binary")"
-          if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
-            $1 == "platform" && $2 == "MACOS" { macos = 1 }
-            $1 == "minos" { seen = 1; if ($2 != expected) bad = 1 }
-            END { exit !(macos && seen && !bad) }
-          ' <<<"$build_info"; then
-            echo "error: $binary is not a macOS $MACOS_DEPLOYMENT_TARGET+ binary" >&2
-            exit 1
-          fi
-        done
-
-    - name: run unit tests
-      shell: bash
-      run: |
-        set -euo pipefail
-        export MEMIX_TEST_BINARY_OVERRIDE="$PWD/compatibility/memix"
-        for test_binary in compatibility/*_Tests; do
-          "$test_binary"
-        done
-
     - name: run CLI smoke tests
       shell: bash
       run: |
         set -euo pipefail
-        memix="compatibility/memix"
+        memix="build/bin/Release/memix"
 
         memix_version="$("$memix" --version)"
         case "$memix_version" in
@@ -164,7 +106,7 @@ jobs:
         esac
 
         grep -Fq 'Usage: memix' <<<"$("$memix" --help)"
-        for command in store view tui; do
+        for command in store view tui agent skill; do
           grep -Fq "Usage: memix $command" <<<"$("$memix" "$command" --help)"
           test "$("$memix" "$command" --version)" = "$memix_version"
         done
@@ -174,6 +116,11 @@ jobs:
         test "$("$memix" store --store-root "$smoke_root/store" list --json)" = '[]'
         test "$("$memix" view --store-root "$smoke_root/store" status --into "$smoke_root/workspace/.memory")" = 'active: false'
         test ! -e "$smoke_root"
+
+    - name: test installer with the built CLI
+      env:
+        MEMIX_TEST_BINARY: ${{ github.workspace }}/build/bin/Release/memix
+      run: python3 -m unittest discover -s test/scripts -p 'test_*.py' -v
 
   inspector:
     name: Build the Memix Inspector app
@@ -211,3 +158,20 @@ jobs:
 
     - name: build the app
       run: cmake --build build --target memix-inspector --parallel 4
+
+    - name: verify Inspector minimum macOS version
+      shell: bash
+      run: |
+        set -euo pipefail
+        app="build/macos/MemixInspector/memix-inspector.app"
+        test "$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$app/Contents/Info.plist")" = "$MACOS_DEPLOYMENT_TARGET"
+        build_info="$(xcrun vtool -show-build "$app/Contents/MacOS/memix-inspector")"
+        printf '%s\n' "$build_info"
+        if ! awk -v expected="$MACOS_DEPLOYMENT_TARGET" '
+          $1 == "platform" && $2 == "MACOS" { macos = 1 }
+          $1 == "minos" { seen = 1; if ($2 != expected) bad = 1 }
+          END { exit !(macos && seen && !bad) }
+        ' <<<"$build_info"; then
+          echo "error: Inspector does not target macOS $MACOS_DEPLOYMENT_TARGET+" >&2
+          exit 1
+        fi

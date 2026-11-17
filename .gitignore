@@ -2,6 +2,8 @@
 [Bb]uild-*/*
 .cpm-cache/*
 [Dd]ocs/*
+# Authored agent guides are bundled into the CLI, not generated documentation.
+!/docs/agent/
 CMakeCache.*
 CMakeFiles/*
 [Tt]esting/*

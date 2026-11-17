@@ -10,13 +10,16 @@
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <latch>
 #include <optional>
 #include <random>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #ifndef _WIN32
@@ -283,6 +286,40 @@ CliResult run_cli(const fs::path &directory, const fs::path &store_root,
 }
 
 } // namespace
+
+TEST_CASE("token lookups support non-pointer iterators and distinct sentinels",
+          "[store][portability]") {
+  const auto &tokens = memix::detail::kMemoryObjectTypeTokens;
+  const auto entries = std::ranges::subrange(
+      std::counted_iterator{tokens.begin(), std::ssize(tokens)},
+      std::default_sentinel);
+  // Exercise actual production helpers with iterator classes even when
+  // this platform implements std::array iterators as raw pointers.
+  static_assert(!std::is_pointer_v<decltype(entries.begin())>);
+  static_assert(
+      !std::is_same_v<decltype(entries.begin()), decltype(entries.end())>);
+  for (const auto &entry : tokens) {
+    REQUIRE(std::string(memix::detail::token_for(entries, entry.value))
+            == std::string(entry.token));
+    REQUIRE(memix::detail::value_for_token<memix::MemoryObjectType>(entries,
+                                                                    entry.token)
+            == entry.value);
+  }
+  REQUIRE(memix::detail::token_for(entries,
+                                   static_cast<memix::MemoryObjectType>(255))
+              .empty());
+  REQUIRE_FALSE(memix::detail::value_for_token<memix::MemoryObjectType>(
+                    entries, "unknown")
+                    .has_value());
+
+  const auto empty = std::ranges::subrange(
+      std::counted_iterator{tokens.begin(), 0}, std::default_sentinel);
+  REQUIRE(
+      memix::detail::token_for(empty, memix::MemoryObjectType::Rules).empty());
+  REQUIRE_FALSE(
+      memix::detail::value_for_token<memix::MemoryObjectType>(empty, "rules")
+          .has_value());
+}
 
 TEST_CASE("memory object type helpers accept only supported v1 types",
           "[store]") {
