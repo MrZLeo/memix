@@ -7,7 +7,16 @@ Inspired by Nix, Memix turns rules, documents, and past conversations into reusa
 ## Get started with your agent
 
 Install Memix and its discovery skill once, then use **Pi, Claude Code, Codex,
-OpenCode, or DeepSeek Harness** with ordinary requests.
+OpenCode, DeepSeek Harness, or OpenDesk** with ordinary requests.
+
+### OpenDesk: one plugin install
+
+OpenDesk users can install the release plugin instead of importing a skill and
+installing the CLI separately:
+
+```sh
+opendesk plugins install https://github.com/MrZLeo/memix/releases/latest/download/memix-opendesk-plugin.tgz
+```
 
 ### Install interactively
 
@@ -84,10 +93,11 @@ memix skill show                  # read the entry guide, not every topic
 memix skill remove --agent pi     # remove managed skill files, not memory
 ```
 
-Supported agents: `claude`, `codex`, `opencode`, `pi`, and `dsh`. Repeat `--agent`
-for multiple agents; omit it from setup to detect config directories or programs
-on `PATH`. Add `--project` to use the nearest Git/Jujutsu repository instead of
-your account. Setup/remove support `--dry-run`; setup/status/remove support
+Supported agents: `claude`, `codex`, `opencode`, `pi`, `dsh`, and `opendesk`.
+Repeat `--agent` for multiple agents; omit it from setup to detect config
+directories or programs on `PATH`. Add `--project` to use the nearest
+Git/Jujutsu repository instead of your account; OpenDesk skills are always
+account-scoped. Setup/remove support `--dry-run`; setup/status/remove support
 `--json`.
 
 Codex, OpenCode, and Pi normally share `.agents/skills/memix-cli`; changing that
