@@ -7,24 +7,7 @@ Inspired by Nix, Memix turns rules, documents, and past conversations into reusa
 ## Get started with your agent
 
 Install Memix and its discovery skill once, then use **Pi, Claude Code, Codex,
-OpenCode, DeepSeek Harness, or OpenDesk** with ordinary requests.
-
-### OpenDesk: one plugin install
-
-OpenDesk users can install the release plugin instead of importing a skill and
-installing the CLI separately:
-
-```sh
-opendesk plugins install https://github.com/MrZLeo/memix/releases/latest/download/memix-opendesk-plugin.tgz
-```
-
-The plugin contains the version-matched `memix-cli` skill and bundled CLI
-binaries for macOS arm64, Linux x86_64, and Windows x86_64. Its `shell.env`
-hook exposes the matching binary only to OpenDesk shell executions; it does not
-edit the user's PATH or shell profile. Its tool hooks make Memix authoritative
-for durable-memory saves, reads, updates, and retractions by redirecting
-OpenDesk's native key-fact memory tools to the bundled `memix-cli` skill. The
-user portrait remains managed by OpenDesk. OpenDesk 0.4.1 or newer is required.
+OpenCode, or DeepSeek Harness** with ordinary requests.
 
 ### Install interactively
 
@@ -53,16 +36,19 @@ replacement are performed.
 You can inspect/download [install.sh](install.sh) or [install.ps1](install.ps1)
 first. Their help covers custom directories, pinned releases, agent selection,
 and project scope. Skill setup otherwise uses detected agents and user scope.
-If no agent is detected, the CLI is installed but the skill is not. Run
-`memix skill setup --agent <name>` with one of the supported agent names below.
-An unchanged skill installed by the previous official installer is upgraded
-automatically. Modified existing skill files are reported as conflicts.
 
 ### Or ask your agent to help
 
-Ask your agent to help you run the installer above for your operating system.
-After installation, ask it to check `memix --version` and
-`memix skill status --json`, then read `memix skill show` in the current session.
+Copy this into your agent:
+
+```text
+Install Memix by following this guide:
+https://raw.githubusercontent.com/MrZLeo/memix/refs/heads/master/AGENT_INSTALL.md
+```
+
+The short guide hands installation to the same interactive script, then tells
+the agent to verify the result and read `memix skill show` in the current session.
+You still answer the two installation prompts yourself.
 
 ### Everyday use: just ask
 
@@ -93,27 +79,24 @@ The CLI bundles a lightweight skill and its version-matched guides:
 ```sh
 memix skill setup --dry-run       # preview setup for detected agents
 memix skill setup --agent pi      # install/update for a selected agent
-memix skill setup --agent opendesk # direct setup when CLI is already installed
 memix skill status --json         # inspect all known locations
 memix skill show                  # read the entry guide, not every topic
 memix skill remove --agent pi     # remove managed skill files, not memory
 ```
 
-Supported agents: `claude`, `codex`, `opencode`, `pi`, `dsh`, and `opendesk`.
-Repeat `--agent` for multiple agents; omit it from setup to detect config
-directories or programs on `PATH`. Add `--project` to use the nearest
-Git/Jujutsu repository instead of your account; OpenDesk skills are always
-account-scoped. Setup/remove support `--dry-run`; setup/status/remove support
+Supported agents: `claude`, `codex`, `opencode`, `pi`, and `dsh`. Repeat `--agent`
+for multiple agents; omit it from setup to detect config directories or programs
+on `PATH`. Add `--project` to use the nearest Git/Jujutsu repository instead of
+your account. Setup/remove support `--dry-run`; setup/status/remove support
 `--json`.
 
 Codex, OpenCode, and Pi normally share `.agents/skills/memix-cli`; changing that
 path affects all its readers. Agent-home overrides and existing native copies
 are respected. Setup updates managed files but reports foreign conflicts;
 `--force` is an explicit setup-only override for regular files. Remove preserves
-foreign bundles and extra user files. CLI skill setup changes no hooks,
-settings, or memory Stores. See `memix skill --help` for options and installation status.
-The separate OpenDesk release plugin prepends its bundled CLI directory to
-OpenDesk shell processes and redirects native key-fact memory tools to Memix.
+foreign bundles and extra user files. No hooks, settings, or memory Stores are
+changed. See `memix skill --help` for options and the
+[agent installation guide](AGENT_INSTALL.md) for the handoff and verification.
 
 ## Architecture
 
@@ -193,6 +176,7 @@ The CLI is `build/bin/Release/memix`. Prebuilt binaries are available under
 
 ## Documentation
 
+- [Agent installation guide](AGENT_INSTALL.md)
 - [Agent skill bootstrap](skill/memix-cli/SKILL.md)
 - [Agent workflow guide](docs/agent/guide.md): run `memix agent guide`, then
   load only the required topic with `memix agent recall`, `save`, `compose`,

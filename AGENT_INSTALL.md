@@ -3,21 +3,6 @@
 Use the interactive installer instead of reproducing its platform detection,
 download, and skill-installation logic. Do not build from source.
 
-For OpenDesk 0.4.1+, prefer the single plugin installation below. It installs
-both the skill and its version-matched CLI and does not require the two-step
-installer flow:
-
-```sh
-opendesk plugins install https://github.com/MrZLeo/memix/releases/latest/download/memix-opendesk-plugin.tgz
-```
-
-After installation, reload plugins if OpenDesk has not done so automatically,
-then verify the `memix` plugin is active. The plugin's hook exposes its bundled
-CLI only inside OpenDesk shell executions; it does not modify the account PATH.
-While active, its tool hooks redirect OpenDesk's native key-fact memory saves,
-reads, updates, and removals to the `memix-cli` skill. It does not migrate
-existing `memory.json` entries, and it leaves the OpenDesk user portrait alone.
-
 ## 1. Run the installer
 
 Use a terminal where the **user** can answer both `[Y/n]` prompts:
@@ -45,8 +30,7 @@ PATH notice; the installer does not edit shell profiles or environment settings.
 
 For a specific harness, download the script first and pass `--agent pi` (Bash)
 or `-Agent pi` (PowerShell). Supported IDs: `claude`, `codex`, `opencode`, `pi`,
-`dsh`, `opendesk`. Use `--project` / `-Project` only when project scope was
-requested; OpenDesk does not support project-scoped setup.
+`dsh`. Use `--project` / `-Project` only when project scope was requested.
 See the scripts' `--help` / `-Help` for a pinned release or custom binary directory.
 Private releases require an authenticated `gh` client to download the installer
 and its assets. Releases without `SHA256SUMS` are not supported; do not bypass

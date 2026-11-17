@@ -36,7 +36,7 @@ main() {
           --version) version=$2 ;;
           --bin-dir) install_dir=$2 ;;
           --agent)
-            case $2 in claude|codex|opencode|pi|dsh|opendesk) ;; *) die "Unknown agent: $2" ;; esac
+            case $2 in claude|codex|opencode|pi|dsh) ;; *) die "Unknown agent: $2" ;; esac
             skill_args+=(--agent "$2") ;;
         esac
         shift 2 ;;
@@ -193,7 +193,7 @@ main() {
     if ! "$binary" skill setup ${skill_args[@]+"${skill_args[@]}"}; then
       die 'Skill setup was incomplete; the binary remains installed. Inspect memix skill status before retrying'
     fi
-    printf '\nRead the operating instructions with:\n  memix skill show\n'
+    printf '\nDone. Read the operating instructions with:\n  memix skill show\n'
   else
     printf '\nSkipped skill setup. You can run memix skill setup later.\n'
   fi

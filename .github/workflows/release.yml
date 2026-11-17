@@ -312,32 +312,16 @@ jobs:
       - name: package Codex skill
         run: tar -czf memix-cli-skill.tar.gz -C skill memix-cli
 
-      - name: package OpenDesk plugin
-        run: |
-          scripts/package_opendesk_plugin.sh \
-            memix-opendesk-plugin.tgz \
-            artifacts/linux-x86_64/memix-linux-x86_64 \
-            artifacts/macos-arm64/memix-macos-arm64 \
-            artifacts/windows-x86_64/memix-windows-x86_64.exe
-
-      - name: smoke-test OpenDesk plugin
-        run: |
-          stage="$(mktemp -d)"
-          trap 'rm -rf -- "$stage"' EXIT
-          tar -xzf memix-opendesk-plugin.tgz -C "$stage"
-          test "$("$stage/memix-opendesk/bin/linux-x86_64/memix" --version)" = "memix ${GITHUB_REF_NAME#v}"
-          node --check "$stage/memix-opendesk/index.mjs"
-
       - name: checksum release assets
         run: |
-          for asset in artifacts/*/* memix-cli-skill.tar.gz memix-opendesk-plugin.tgz install.sh install.ps1; do
+          for asset in artifacts/*/* memix-cli-skill.tar.gz install.sh install.ps1; do
             (cd "$(dirname "$asset")" && sha256sum "$(basename "$asset")")
           done > SHA256SUMS
 
       - name: upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz memix-opendesk-plugin.tgz install.sh install.ps1 SHA256SUMS
+        run: gh release upload "$GITHUB_REF_NAME" artifacts/*/* memix-cli-skill.tar.gz install.sh install.ps1 SHA256SUMS
 
       - name: publish complete release
         env:

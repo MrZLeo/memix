@@ -3,7 +3,7 @@
 param(
     [string] $Version = 'latest',
     [string] $InstallDir = (Join-Path $HOME '.local/bin'),
-    [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh', 'opendesk')]
+    [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh')]
     [string[]] $Agent = @(),
     [switch] $Project,
     [switch] $Help
@@ -117,7 +117,7 @@ function Invoke-MemixInstaller {
     param(
         [string] $Version = 'latest',
         [string] $InstallDir = (Join-Path $HOME '.local/bin'),
-        [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh', 'opendesk')]
+        [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh')]
         [string[]] $Agent = @(),
         [switch] $Project,
         [switch] $Help
@@ -213,7 +213,7 @@ The installer never elevates privileges, edits PATH, or forces skill replacement
         if (Confirm-MemixAction 'Run skill setup with these options?') {
             try { Invoke-Memix $binary (@('skill', 'setup') + $skillOptions) }
             catch { throw "Skill setup was incomplete; the binary remains installed. Inspect memix skill status. $($_.Exception.Message)" }
-            Write-Host "`nRead the operating instructions with:`n  memix skill show"
+            Write-Host "`nDone. Read the operating instructions with:`n  memix skill show"
         } else {
             Write-Host "`nSkipped skill setup. You can run memix skill setup later."
         }

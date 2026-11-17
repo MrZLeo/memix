@@ -30,8 +30,6 @@ endfunction()
 function(memix_generate_skill_assets source_dir output_header)
   memix_embed_text("${source_dir}/SKILL.md" memix_skill_markdown)
   memix_embed_text("${source_dir}/agents/openai.yaml" memix_skill_openai)
-  memix_embed_text("${source_dir}/../legacy/memix-cli/SKILL.md" memix_legacy_skill_markdown)
-  memix_embed_text("${source_dir}/../legacy/memix-cli/agents/openai.yaml" memix_legacy_skill_openai)
   configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/skill_assets.hpp.in"
     "${output_header}" @ONLY NEWLINE_STYLE LF)
 endfunction()
