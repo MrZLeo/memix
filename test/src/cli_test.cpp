@@ -290,19 +290,12 @@ TEST_CASE("agent rejects unknown topics and malformed arguments",
 TEST_CASE("unified CLI provides nested help", "[cli]") {
   TemporaryDirectory directory;
   for (const auto *command :
-       {"list", "ingest", "cat", "tree", "expose", "rm", "rules"}) {
+       {"list", "ingest", "cat", "tree", "expose", "rm"}) {
     const auto help = run(directory.path(), {"store", command, "--help"});
     REQUIRE(help.status == 0);
     REQUIRE(
         help.output.contains(std::format("Usage: memix store {}", command)));
     REQUIRE(help.error.empty());
-  }
-  for (const auto *command : {"cat", "tree"}) {
-    const auto help =
-        run(directory.path(), {"store", "rules", command, "--help"});
-    REQUIRE(help.status == 0);
-    REQUIRE(help.output.contains(
-        std::format("Usage: memix store rules {}", command)));
   }
   for (const auto *command :
        {"define", "find", "resolve", "freshness", "quests", "stats", "list",
@@ -331,7 +324,9 @@ TEST_CASE("unified CLI rejects invalid dispatch without touching the store",
       {"tui", "--unknown"},
       {"store", "--unknown"},
       {"view", "--unknown"},
+      {"store", "rules"},
       {"store", "--store-root", store, "ingest"},
+      {"store", "--store-root", store, "ingest", "--type", "rules", "a.md"},
   };
   for (const auto &arguments : invalid) {
     const auto result = run(directory.path(), arguments);
@@ -376,8 +371,6 @@ TEST_CASE("unified CLI preserves global options and option terminators",
       run_command(root, "store", {"cat", "--type", "rules", "--", "view"});
   REQUIRE(content.status == 0);
   REQUIRE(content.output == "literal namespace-like path\n");
-  REQUIRE(run_command(root, "store", {"rules", "cat", "--", "view"}).output
-          == content.output);
   // The parser rejects this positional; it must not turn it into help.
   const auto result =
       run_command(root, "store", {"cat", "--type", "rules", "--", "--help"});
@@ -625,7 +618,7 @@ TEST_CASE(
   CHECK(limited({"cat", environment, "documents/small.md"})
         == "small payload\n");
   CHECK(limited({"show", environment, "--json"})
-            .contains("memix.view.environment.v3"));
+            .contains("memix.view.environment.v1"));
   const auto attachment = root / "attachment";
   CHECK(limited({"activate", environment, "--into", attachment.string()})
             .contains(environment));
@@ -689,7 +682,7 @@ TEST_CASE("environment lists show compact bindings and preserve JSON",
     CHECK(json.output
           == std::format(
               "[{{\"id\":\"{}\",\"binding_count\":{},\"file_count\":{},"
-              "\"size_bytes\":{},\"upstream_environment_count\":0}}]\n",
+              "\"size_bytes\":{}}}]\n",
               environment->id, binding_count, binding_count, size_bytes));
   }
 }
@@ -726,7 +719,7 @@ TEST_CASE("view CLI exposes typed selection composition and independent "
   CHECK(invoke({"list", "--json"}) == "[]\n");
   CHECK(invoke({"list", "--kind", "derivation", "--json"}).contains(d));
   CHECK(invoke({"show", "derivation:" + d, "--json"})
-            .contains("memix.view.derivation.v4"));
+            .contains("memix.view.derivation.v1"));
   CHECK(invoke({"cat", "derivation:" + d, "rules/AGENTS.md"})
         == "independent\n");
   CHECK(invoke({"tree", "derivation:" + d, "--json"})
@@ -752,7 +745,7 @@ TEST_CASE("view CLI exposes typed selection composition and independent "
   CHECK(invoke({"cat", "environment:" + e, "right/rules/AGENTS.md"})
         == "independent\n");
   CHECK(invoke({"cat", e, "left/rules/AGENTS.md"}) == "independent\n");
-  CHECK(invoke({"show", e, "--json"}).contains("memix.view.environment.v3"));
+  CHECK(invoke({"show", e, "--json"}).contains("memix.view.environment.v1"));
   CHECK(
       invoke({"freshness", eq, "--json"}).contains("\"kind\":\"environment\""));
   CHECK(invoke({"quests", "--json"}).contains("\"latest_result\":{"));
@@ -798,7 +791,7 @@ TEST_CASE("TUI recognizes Derivation locators without environment fallback",
   CHECK(invalid.error.contains("lowercase hexadecimal"));
 }
 
-TEST_CASE("selection CLI describes Store sources and selection targets",
+TEST_CASE("selection CLI describes Store sources",
           "[cli][tui-navigation]") {
   TemporaryDirectory directory;
   const auto root = directory.path();
@@ -808,16 +801,11 @@ TEST_CASE("selection CLI describes Store sources and selection targets",
     REQUIRE(help.status == 0);
     CHECK(help.output.contains("Store source locator"));
   }
-  for (const auto *target : {"context_pack", "unknown"}) {
-    CAPTURE(target);
-    const auto rejected = run_command(
-        root, "view",
-        {"select", "--source", "rules/AGENTS.md", "--target", target});
-    CHECK(rejected.status != 0);
-    CHECK(rejected.output.empty());
-    CHECK(rejected.error.contains("unsupported selection target"));
-    CHECK_FALSE(rejected.error.contains("build target"));
-  }
+  const auto rejected = run_command(
+      root, "view",
+      {"select", "--source", "rules/AGENTS.md", "--target", "file_tree"});
+  CHECK(rejected.status != 0);
+  CHECK(rejected.output.empty());
 }
 
 TEST_CASE("TUI snapshots preserve typed frozen views without usage receipts",

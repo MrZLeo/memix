@@ -42,11 +42,11 @@ namespace fs = memix::fs;
 
 namespace {
 
-constexpr std::string_view kExpressionSchema = "memix.view.expr.v2";
+constexpr std::string_view kExpressionSchema = "memix.view.expr.v1";
 constexpr std::string_view kIrSchema = "memix.view.select.v1";
 constexpr std::string_view kComposeSchema = "memix.view.compose.v1";
-constexpr std::string_view kDerivationSchema = "memix.view.derivation.v4";
-constexpr std::string_view kEnvironmentSchema = "memix.view.environment.v3";
+constexpr std::string_view kDerivationSchema = "memix.view.derivation.v1";
+constexpr std::string_view kEnvironmentSchema = "memix.view.environment.v1";
 constexpr std::string_view kViewsDir = "views";
 constexpr std::string_view kDerivationsDir = "derivations";
 constexpr std::string_view kEnvironmentsDir = "environments";
@@ -54,7 +54,7 @@ constexpr std::string_view kQuestsDir = "quests";
 constexpr std::string_view kManifestFilename = "manifest.json";
 constexpr std::string_view kTreeDir = "tree";
 constexpr std::string_view kJsonSuffix = ".json";
-constexpr std::string_view kQuestSchema = "memix.quest.v2";
+constexpr std::string_view kQuestSchema = "memix.quest.v1";
 constexpr std::string_view kQuestIrFilename = "ir.json";
 constexpr std::string_view kQuestManifestFilename = "quest.json";
 constexpr std::string_view kQuestHistoryFilename = "history.jsonl";
@@ -65,8 +65,8 @@ constexpr std::string_view kProfilesDir = "profiles";
 constexpr std::string_view kGenerationsDir = "generations";
 constexpr std::string_view kCurrentLinkName = "current";
 constexpr std::string_view kProfileLockName = "lock";
-constexpr std::string_view kGenerationSchema = "memix.view.activation.v2";
-constexpr std::string_view kMarkerSchema = "memix.view.activation.marker.v2";
+constexpr std::string_view kGenerationSchema = "memix.view.activation.v1";
+constexpr std::string_view kMarkerSchema = "memix.view.activation.marker.v1";
 constexpr std::string_view kActivationMarkerFilename = ".memix-activation.json";
 constexpr std::string_view kActivationReadmeFilename = "README.md";
 constexpr std::string_view kWorkspaceLockPrefix = ".memix-activation-lock-";
@@ -136,8 +136,7 @@ struct BindingJson {
   std::string output;
 };
 
-struct ClosureV2Json {
-  std::reference_wrapper<const std::vector<std::string>> environments;
+struct ClosureJson {
   std::reference_wrapper<const std::vector<std::string>> derivations;
   std::reference_wrapper<const std::vector<std::string>> artifacts;
   std::reference_wrapper<const std::vector<std::string>> raw_objects;
@@ -253,10 +252,8 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
 
 template <typename Builder>
 void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
-                const ClosureV2Json &closure) {
+                const ClosureJson &closure) {
   builder.start_object();
-  builder.template append_key_value<"environments">(closure.environments.get());
-  builder.append_comma();
   builder.template append_key_value<"derivations">(closure.derivations.get());
   builder.append_comma();
   builder.template append_key_value<"artifacts">(closure.artifacts.get());
@@ -325,29 +322,6 @@ std::string trim_copy(std::string_view text) {
     text.remove_suffix(1);
   }
   return std::string(text);
-}
-
-std::vector<std::string> split_source_list(std::string_view text) {
-  std::vector<std::string> sources;
-  std::string current;
-  for (const char character : text) {
-    if (character == '\n'
-        || character == '\r'
-        || character == ','
-        || character == ' '
-        || character == '\t') {
-      if (!current.empty()) {
-        sources.push_back(std::move(current));
-        current.clear();
-      }
-      continue;
-    }
-    current.push_back(character);
-  }
-  if (!current.empty()) {
-    sources.push_back(std::move(current));
-  }
-  return sources;
 }
 
 ViewResult<std::optional<std::string>>
@@ -543,101 +517,6 @@ parse_required_target(std::string_view value) {
 
 ViewResult<std::string>
 read_string_field(const JsonObjectReader &fields, std::string_view key);
-
-ViewVoid check_fields(const JsonObjectReader &fields,
-                      std::initializer_list<std::string_view> allowed);
-
-ViewVoid apply_expression_metadata(const JsonObjectReader &fields,
-                                   memix::AuthoredViewExpression &expression) {
-  ViewResult<std::string> schema = read_string_field(fields, "schema");
-  if (!schema)
-    return std::unexpected(schema.error());
-  if (*schema != kExpressionSchema) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("unsupported view expression schema `{}`", *schema));
-  }
-  expression.schema = std::move(*schema);
-  const ViewVoid valid = check_fields(fields, {"schema", "target", "inputs"});
-  if (!valid)
-    return std::unexpected(valid.error());
-  ViewResult<std::optional<std::string>> target =
-      optional_string(fields, "target");
-  if (!target)
-    return std::unexpected(target.error());
-  if (target->has_value()) {
-    ViewResult<memix::ViewTargetKind> parsed = parse_required_target(**target);
-    if (!parsed)
-      return std::unexpected(parsed.error());
-    expression.target = *parsed;
-  }
-  return {};
-}
-
-ViewResult<memix::AuthoredViewInput>
-parse_authored_input(simdjson::dom::element input_element) {
-  const auto object = memix::detail::json_object_from_element(input_element);
-  if (!object) {
-    return view_error(memix::detail::with_error_context(
-        object.error(), "view expression input",
-        memix::ErrorKind::InvalidData));
-  }
-  const JsonObjectReader fields(*object);
-  const auto kind_name = read_string_field(fields, "kind");
-  if (!kind_name)
-    return std::unexpected(kind_name.error());
-  const auto kind = memix::parse_view_input_kind(*kind_name);
-  if (!kind) {
-    return view_error(
-        memix::ErrorKind::InvalidData,
-        std::format("unsupported selection input kind `{}`", *kind_name));
-  }
-  const ViewVoid valid = check_fields(fields, {"kind", "locator"});
-  if (!valid)
-    return std::unexpected(valid.error());
-  auto locator = read_string_field(fields, "locator");
-  if (!locator)
-    return std::unexpected(locator.error());
-  return memix::AuthoredViewInput{
-      .kind = *kind,
-      .locator = std::move(*locator),
-  };
-}
-
-ViewResult<std::vector<memix::AuthoredViewInput>>
-parse_authored_inputs(simdjson::dom::array input_elements) {
-  std::vector<memix::AuthoredViewInput> inputs;
-  for (const simdjson::dom::element input_element : input_elements) {
-    auto input = parse_authored_input(input_element);
-    if (!input)
-      return std::unexpected(input.error());
-    inputs.push_back(std::move(*input));
-  }
-  return inputs;
-}
-
-ViewResult<memix::AuthoredViewExpression>
-parse_expression_json(std::string_view text) {
-  const auto document = memix::detail::parse_json_object(text);
-  if (!document) {
-    return view_error(memix::detail::with_error_context(
-        document.error(), "invalid view expression JSON",
-        memix::ErrorKind::InvalidData));
-  }
-  const JsonObjectReader fields(document->root_object());
-  memix::AuthoredViewExpression expression;
-  const ViewVoid metadata = apply_expression_metadata(fields, expression);
-  if (!metadata)
-    return std::unexpected(metadata.error());
-  const auto elements = fields.require_array("inputs");
-  if (!elements)
-    return view_error(elements.error(), memix::ErrorKind::InvalidData);
-  auto inputs = parse_authored_inputs(*elements);
-  if (!inputs)
-    return std::unexpected(inputs.error());
-  expression.inputs = std::move(*inputs);
-  return expression;
-}
 
 ViewResult<bool>
 read_bool_field(const JsonObjectReader &fields, std::string_view key) {
@@ -1030,16 +909,14 @@ void append_derivation_materials(simdjson::builder::string_builder &builder,
   builder.append_comma();
   builder.append_key_value<"operator_version">("select-raw-files-v1");
   builder.append_comma();
-  builder.append_key_value<"runtime_quest">(
-      derivation.runtime_quest.value_or(""));
+  builder.append_key_value<"runtime_quest">(derivation.runtime_quest);
   builder.append_comma();
   builder.append_key_value<"resolved_inputs">(
       resolved_input_json(derivation.resolved_files));
   builder.append_comma();
   builder.append_key_value<"input_resolutions">(
-      input_resolution_json(derivation.input_resolutions.value_or(
-          std::vector<memix::ResolvedViewInputResolution>{})));
-  builder.append_raw(R"(,"resolved_view_inputs":[],"files":)");
+      input_resolution_json(derivation.input_resolutions));
+  builder.append_raw(R"(,"files":)");
   append_output_files(builder, derivation.resolved_files);
 }
 
@@ -1047,7 +924,7 @@ ViewResult<std::string>
 derivation_basis_json_for(const memix::ViewDerivation &derivation) {
   simdjson::builder::string_builder builder;
   builder.start_object();
-  builder.append_key_value<"schema">("memix.view.derivation.basis.v4");
+  builder.append_key_value<"schema">("memix.view.derivation.basis.v1");
   append_derivation_materials(builder, derivation);
   builder.end_object();
   return json_from_builder(builder);
@@ -1830,31 +1707,10 @@ write_derivation_directory(const memix::Store &store,
   if (!frozen) {
     return std::unexpected(frozen.error());
   }
-  // macOS 14 requires write permission on the directory being renamed,
-  // even within one parent. Keep its contents frozen and thaw only the root.
-  const memix::FsVoid writable =
-      fs::apply_writable_directory_permissions(temp_path);
-  if (!writable) {
-    return view_error(writable.error());
-  }
   const memix::FsVoid renamed = fs::rename(temp_path, derivation_dir);
   if (!renamed) {
     return handle_derivation_rename_failure(temp_path, derivation,
                                             manifest_json, renamed.error());
-  }
-  const memix::FsVoid root_frozen =
-      fs::apply_read_only_directory_permissions(derivation_dir);
-  if (!root_frozen) {
-    // Withdraw our publication so the temporary-tree guard can clean it up.
-    // Never report success with a writable published root.
-    const memix::FsVoid withdrawn = fs::rename(derivation_dir, temp_path);
-    if (!withdrawn) {
-      return view_error(
-          std::format("{}; additionally failed to withdraw derivation `{}`: {}",
-                      root_frozen.error().message, derivation_dir.string(),
-                      withdrawn.error().message));
-    }
-    return view_error(root_frozen.error());
   }
   cleanup.release();
   return true;
@@ -1864,7 +1720,7 @@ ViewResult<std::string>
 environment_basis_json_for(const memix::ViewEnvironment &environment) {
   simdjson::builder::string_builder builder;
   builder.start_object();
-  builder.append_key_value<"schema">("memix.view.environment.basis.v3");
+  builder.append_key_value<"schema">("memix.view.environment.basis.v1");
   builder.append_comma();
   builder.append_key_value<"ir_hash">(environment.ir_hash);
   builder.append_comma();
@@ -2098,20 +1954,17 @@ resolved_files_from_json(const memix::Store &store,
   return files;
 }
 
-ViewResult<std::optional<std::vector<memix::ResolvedViewInputResolution>>>
+ViewResult<std::vector<memix::ResolvedViewInputResolution>>
 input_resolutions_from_json(const JsonObjectReader &fields) {
-  memix::detail::CommonResult<std::optional<simdjson::dom::array>>
-      resolutions_result = fields.optional_array("input_resolutions");
+  memix::detail::CommonResult<simdjson::dom::array> resolutions_result =
+      fields.require_array("input_resolutions");
   if (!resolutions_result) {
     return view_error(std::move(resolutions_result.error()),
                       memix::ErrorKind::InvalidData);
   }
-  if (!resolutions_result->has_value()) {
-    return std::optional<std::vector<memix::ResolvedViewInputResolution>>{};
-  }
 
   std::vector<memix::ResolvedViewInputResolution> resolutions;
-  for (const simdjson::dom::element resolution_element : **resolutions_result) {
+  for (const simdjson::dom::element resolution_element : *resolutions_result) {
     memix::detail::CommonResult<simdjson::dom::object> fields_result =
         memix::detail::json_object_from_element(resolution_element);
     if (!fields_result) {
@@ -2145,8 +1998,7 @@ input_resolutions_from_json(const JsonObjectReader &fields) {
         .version = std::move(*version),
     });
   }
-  return std::optional<std::vector<memix::ResolvedViewInputResolution>>{
-      std::move(resolutions)};
+  return resolutions;
 }
 
 ViewVoid validate_file_paths(const std::vector<memix::ResolvedViewFile> &files,
@@ -2295,7 +2147,6 @@ derivation_from_json(const memix::Store &store, std::string_view text,
                                         "operator_version",
                                         "resolved_inputs",
                                         "input_resolutions",
-                                        "resolved_view_inputs",
                                         "files",
                                         "outputs",
                                     });
@@ -2309,23 +2160,23 @@ derivation_from_json(const memix::Store &store, std::string_view text,
   auto target = fields.require_string("target");
   auto recipe_object = fields.require_object("recipe");
   if (!schema)
-    return view_error(schema.error());
+    return view_error(schema.error(), memix::ErrorKind::InvalidData);
   if (*schema != kDerivationSchema) {
     return view_error(memix::ErrorKind::InvalidData,
                       "unsupported derivation schema; rebuild with select");
   }
   if (!id)
-    return view_error(id.error());
+    return view_error(id.error(), memix::ErrorKind::InvalidData);
   if (!ir_hash)
-    return view_error(ir_hash.error());
+    return view_error(ir_hash.error(), memix::ErrorKind::InvalidData);
   if (!instructions)
-    return view_error(instructions.error());
+    return view_error(instructions.error(), memix::ErrorKind::InvalidData);
   if (!op)
-    return view_error(op.error());
+    return view_error(op.error(), memix::ErrorKind::InvalidData);
   if (!target)
-    return view_error(target.error());
+    return view_error(target.error(), memix::ErrorKind::InvalidData);
   if (!recipe_object)
-    return view_error(recipe_object.error());
+    return view_error(recipe_object.error(), memix::ErrorKind::InvalidData);
   if (!memix::detail::is_lower_hex_sha256(*id)
       || manifest_path.parent_path().filename() != *id
       || *op != "select-raw-files-v1"
@@ -2348,18 +2199,13 @@ derivation_from_json(const memix::Store &store, std::string_view text,
   auto files = resolved_files_from_json(store, fields);
   auto resolutions = input_resolutions_from_json(fields);
   auto outputs = derivation_outputs_from_json(fields);
-  auto view_inputs = fields.require_array("resolved_view_inputs");
   if (!files)
     return std::unexpected(files.error());
   if (!resolutions)
     return std::unexpected(resolutions.error());
   if (!outputs)
     return std::unexpected(outputs.error());
-  if (!view_inputs)
-    return view_error(view_inputs.error());
-  if (!resolutions->has_value()
-      || (**resolutions).size() != recipe->inputs.size()
-      || view_inputs->size() != 0) {
+  if (resolutions->size() != recipe->inputs.size()) {
     return view_error(memix::ErrorKind::InvalidData,
                       "invalid selection input resolutions");
   }
@@ -2428,21 +2274,21 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
   auto projection = fields.require_string("projection_version");
   auto recipe = fields.require_object("recipe");
   if (!schema)
-    return view_error(schema.error());
+    return view_error(schema.error(), memix::ErrorKind::InvalidData);
   if (*schema != kEnvironmentSchema) {
     return view_error(memix::ErrorKind::InvalidData,
                       "unsupported environment schema; rebuild with compose");
   }
   if (!id)
-    return view_error(id.error());
+    return view_error(id.error(), memix::ErrorKind::InvalidData);
   if (!ir_hash)
-    return view_error(ir_hash.error());
+    return view_error(ir_hash.error(), memix::ErrorKind::InvalidData);
   if (!runtime)
-    return view_error(runtime.error());
+    return view_error(runtime.error(), memix::ErrorKind::InvalidData);
   if (!projection)
-    return view_error(projection.error());
+    return view_error(projection.error(), memix::ErrorKind::InvalidData);
   if (!recipe)
-    return view_error(recipe.error());
+    return view_error(recipe.error(), memix::ErrorKind::InvalidData);
   if (!memix::detail::is_lower_hex_sha256(*id)
       || manifest_path.filename() != *id + ".json"
       || *projection != "mount-file-trees-v1") {
@@ -2472,24 +2318,20 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
   }
   auto closure_object = fields.require_object("closure");
   if (!closure_object)
-    return view_error(closure_object.error());
+    return view_error(closure_object.error(), memix::ErrorKind::InvalidData);
   const JsonObjectReader closure(*closure_object);
-  valid = check_fields(
-      closure, {"environments", "derivations", "artifacts", "raw_objects"});
+  valid = check_fields(closure, {"derivations", "artifacts", "raw_objects"});
   if (!valid)
     return std::unexpected(valid.error());
-  auto environments = closure.string_array("environments");
   auto derivations = closure.string_array("derivations");
   auto artifacts = closure.string_array("artifacts");
   auto raw = closure.string_array("raw_objects");
-  if (!environments)
-    return view_error(environments.error());
   if (!derivations)
-    return view_error(derivations.error());
+    return view_error(derivations.error(), memix::ErrorKind::InvalidData);
   if (!artifacts)
-    return view_error(artifacts.error());
+    return view_error(artifacts.error(), memix::ErrorKind::InvalidData);
   if (!raw)
-    return view_error(raw.error());
+    return view_error(raw.error(), memix::ErrorKind::InvalidData);
   memix::ViewEnvironment environment{
       .id = *id,
       .manifest_path = manifest_path,
@@ -2499,7 +2341,6 @@ environment_from_json(std::string_view text, const fs::path &manifest_path) {
               .derivations = std::move(*derivations),
               .artifacts = std::move(*artifacts),
               .raw_objects = std::move(*raw),
-              .environments = std::move(*environments),
           },
       .derivations = {},
       .resolved_files = {},
@@ -2531,8 +2372,7 @@ bool same_closure(const memix::ViewEnvironmentClosure &left,
                   const memix::ViewEnvironmentClosure &right) {
   return left.derivations == right.derivations
       && left.artifacts == right.artifacts
-      && left.raw_objects == right.raw_objects
-      && left.environments == right.environments;
+      && left.raw_objects == right.raw_objects;
 }
 
 ViewVoid populate_environment(const memix::Store &store,
@@ -3209,7 +3049,7 @@ read_reference(const JsonObjectReader &fields) {
 ViewResult<std::string> quest_history_json_for(const QuestHistoryEntry &entry) {
   simdjson::builder::string_builder builder;
   builder.start_object();
-  builder.append_key_value<"schema">("memix.quest.resolution.v2");
+  builder.append_key_value<"schema">("memix.quest.resolution.v1");
   builder.append_comma();
   builder.append_key_value<"resolved_at">(entry.resolved_at);
   append_reference(builder, entry.result);
@@ -3235,7 +3075,7 @@ quest_history_entry_from_json(std::string_view text, const fs::path &path) {
     return view_error(at.error());
   if (!result)
     return std::unexpected(result.error());
-  if (*schema != "memix.quest.resolution.v2") {
+  if (*schema != "memix.quest.resolution.v1") {
     return view_error(
         memix::ErrorKind::InvalidData,
         std::format("unsupported history format in `{}`", path.string()));
@@ -3384,7 +3224,7 @@ ViewVoid record_resolution(const fs::path &root, std::string_view ir_hash,
 ViewResult<std::string> quest_receipt_json_for(const QuestReceipt &receipt) {
   simdjson::builder::string_builder builder;
   builder.start_object();
-  builder.append_key_value<"schema">("memix.quest.receipt.v2");
+  builder.append_key_value<"schema">("memix.quest.receipt.v1");
   builder.append_comma();
   builder.append_key_value<"at">(receipt.at);
   builder.append_comma();
@@ -3492,7 +3332,7 @@ quest_receipt_from_json(std::string_view text, const fs::path &path) {
     return view_error(operation.error(), memix::ErrorKind::InvalidData);
   if (!result)
     return std::unexpected(result.error());
-  if (*schema != "memix.quest.receipt.v2" || at->empty()) {
+  if (*schema != "memix.quest.receipt.v1" || at->empty()) {
     return view_error(
         memix::ErrorKind::InvalidData,
         std::format("unsupported receipt format in `{}`", path.string()));
@@ -3803,7 +3643,7 @@ std::string activation_readme(const memix::ViewEnvironment &environment) {
         std::ranges::find(environment.derivations, binding.derivation_id,
                           &memix::ViewDerivation::id);
     if (derivation != environment.derivations.end()) {
-      text += derivation->runtime_quest.value_or("") + "\n";
+      text += derivation->runtime_quest + "\n";
     }
   }
   return text;
@@ -3818,25 +3658,21 @@ RecordedInputGeneration
 recorded_input_generation(const memix::ViewIrInput &input,
                           const memix::ViewDerivation &derivation,
                           std::vector<bool> &used_input_resolutions) {
-  if (derivation.input_resolutions.has_value()) {
-    for (std::size_t index = 0; index < derivation.input_resolutions->size();
-         ++index) {
-      const memix::ResolvedViewInputResolution &candidate =
-          derivation.input_resolutions->at(index);
-      if (!used_input_resolutions.at(index)
-          && candidate.locator == input.locator
-          && candidate.version.kind == input.version.kind
-          && candidate.version.value == input.version.value) {
-        used_input_resolutions.at(index) = true;
-        return RecordedInputGeneration{
-            .value = candidate.source_generation,
-            .found = true,
-        };
-      }
+  for (std::size_t index = 0; index < derivation.input_resolutions.size();
+       ++index) {
+    const memix::ResolvedViewInputResolution &candidate =
+        derivation.input_resolutions.at(index);
+    if (!used_input_resolutions.at(index)
+        && candidate.locator == input.locator
+        && candidate.version.kind == input.version.kind
+        && candidate.version.value == input.version.value) {
+      used_input_resolutions.at(index) = true;
+      return RecordedInputGeneration{
+          .value = candidate.source_generation,
+          .found = true,
+      };
     }
-    return {};
   }
-
   return {};
 }
 
@@ -5131,63 +4967,21 @@ replace_generation_tree(const fs::path &temp, const fs::path &generation,
     return std::unexpected(aside.error());
   }
 
-  // Older macOS versions require write permission on a directory itself to
-  // rename it, even within the same parent. Only thaw the roots, never links
-  // into the immutable store or files within either tree.
-  const memix::FsVoid writable = fs::apply_writable_directory_permissions(temp);
-  if (!writable) {
-    return view_error(writable.error());
-  }
-  if (is_directory) {
-    const memix::FsVoid previous_writable = fs::permissions(
-        generation, fs::perms::owner_write, fs::perm_options::add);
-    if (!previous_writable) {
-      return view_error(previous_writable.error());
-    }
-  }
-
   const memix::FsVoid moved_aside = fs::rename(generation, *aside);
-  const auto restore_previous =
-      [&](memix::ViewError error) -> ViewResult<bool> {
-    if (moved_aside) {
-      const memix::FsVoid restored = fs::rename(*aside, generation);
-      if (!restored) {
-        error.message = std::format("{}; additionally failed to restore "
-                                    "generation: {}; recover it from `{}`",
-                                    error.message, restored.error().message,
-                                    aside->string());
-        return std::unexpected(std::move(error));
-      }
-    }
-    if (is_directory) {
-      const memix::FsVoid restored =
-          fs::permissions(generation, status.permissions());
-      if (!restored) {
-        error.message = std::format(
-            "{}; additionally failed to restore generation permissions: {}",
-            error.message, restored.error().message);
-      }
-    }
-    return std::unexpected(std::move(error));
-  };
   if (!moved_aside) {
-    return restore_previous(view_error_from_fs(moved_aside.error()));
+    return view_error(moved_aside.error());
   }
   const memix::FsVoid installed = fs::rename(temp, generation);
   if (!installed) {
-    return restore_previous(view_error_from_fs(installed.error()));
-  }
-  const memix::FsVoid frozen =
-      fs::apply_read_only_directory_permissions(generation);
-  if (!frozen) {
-    const memix::FsVoid withdrawn = fs::rename(generation, temp);
-    if (!withdrawn) {
-      return view_error(std::format(
-          "{}; additionally failed to withdraw replacement generation: {}; "
-          "recover the previous generation from `{}`",
-          frozen.error().message, withdrawn.error().message, aside->string()));
+    memix::ViewError error = view_error_from_fs(installed.error());
+    const memix::FsVoid restored = fs::rename(*aside, generation);
+    if (!restored) {
+      error.message = std::format("{}; additionally failed to restore "
+                                  "generation: {}; recover it from `{}`",
+                                  error.message, restored.error().message,
+                                  aside->string());
     }
-    return restore_previous(view_error_from_fs(frozen.error()));
+    return std::unexpected(std::move(error));
   }
   remove_tree_best_effort(*aside);
   return true;
@@ -5543,18 +5337,6 @@ catalog_entries(const std::vector<memix::ResolvedViewFile> &files,
 namespace memix {
 
 ViewResult<AuthoredViewExpression>
-ViewService::parse_expression(std::string_view expression_or_sources) const {
-  const std::string trimmed = trim_copy(expression_or_sources);
-  if (trimmed.empty()) {
-    return AuthoredViewExpression{};
-  }
-  if (trimmed.front() == '{') {
-    return parse_expression_json(trimmed);
-  }
-  return expression_from_sources(split_source_list(trimmed));
-}
-
-ViewResult<AuthoredViewExpression>
 ViewService::expression_from_sources(std::vector<std::string> sources,
                                      ViewTargetKind target) const {
   std::vector<AuthoredViewInput> inputs;
@@ -5589,9 +5371,6 @@ ViewService::lower_to_ir(const AuthoredViewExpression &expression) const {
   }
   ViewIr ir;
   ir.target.kind = expression.target;
-  if (expression.target == ViewTargetKind::ContextPack) {
-    ir.target.format = "markdown";
-  }
   auto inputs = lower_authored_inputs(expression.inputs);
   if (!inputs)
     return std::unexpected(inputs.error());
@@ -5794,18 +5573,6 @@ ViewService::define_composition(std::vector<ViewEnvironmentBinding> bindings,
           .name = options.name ? std::optional<std::string_view>{*options.name}
                                : std::nullopt,
       });
-}
-
-ViewResult<QuestDefinition>
-ViewService::define_quest(const AuthoredViewExpression &expression,
-                          std::string_view intent,
-                          std::string_view name) const {
-  const QuestDefinitionOptions options{
-      .intent =
-          intent.empty() ? std::nullopt : std::optional<std::string>{intent},
-      .name = name.empty() ? std::nullopt : std::optional<std::string>{name},
-  };
-  return define_quest(expression, options);
 }
 
 ViewResult<QuestDefinition>
@@ -6034,10 +5801,8 @@ ViewService::quest_freshness(std::string_view quest_prefix) const {
       .inputs = {},
       .stale = false,
   };
-  std::vector<bool> used_input_resolutions;
-  if (derivation->input_resolutions.has_value()) {
-    used_input_resolutions.resize(derivation->input_resolutions->size());
-  }
+  std::vector<bool> used_input_resolutions(
+      derivation->input_resolutions.size());
   for (const ViewIrInput &input : ir->inputs) {
     if (input.kind != ViewInputKind::Context) {
       continue;
@@ -6261,7 +6026,6 @@ ViewService::list_environments() const {
         .id = environment->id,
         .file_count = environment->resolved_files.size(),
         .total_size_bytes = total_size_bytes,
-        .upstream_environment_count = environment->closure.environments.size(),
         .binding_count = environment->bindings.size(),
     });
   }
@@ -6340,21 +6104,6 @@ ViewService::view_ls(ViewReference reference, const fs::path &path) const {
   return view_catalog(std::move(reference),
                       {.path = path == "." ? fs::path{} : path, .depth = 1},
                       true);
-}
-
-ViewResult<std::vector<ViewCatalogEntry>>
-ViewService::environment_tree(std::string_view prefix,
-                              const ViewCatalogOptions &options) const {
-  return view_tree(
-      {.kind = ViewObjectKind::Environment, .id = std::string(prefix)},
-      options);
-}
-
-ViewResult<std::vector<ViewCatalogEntry>>
-ViewService::derivation_tree(std::string_view prefix,
-                             const ViewCatalogOptions &options) const {
-  return view_tree(
-      {.kind = ViewObjectKind::Derivation, .id = std::string(prefix)}, options);
 }
 
 ViewResult<ViewFileContents>
@@ -6847,8 +6596,7 @@ view_environment_json(const ViewEnvironment &environment) {
   auto created = utc_timestamp();
   if (!created)
     return std::unexpected(created.error());
-  const ClosureV2Json closure{
-      .environments = environment.closure.environments,
+  const ClosureJson closure{
       .derivations = environment.closure.derivations,
       .artifacts = environment.closure.artifacts,
       .raw_objects = environment.closure.raw_objects,

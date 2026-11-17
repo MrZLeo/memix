@@ -2,7 +2,7 @@
 
 **Reproducible, versioned memory for AI agents.**
 
-Inspired by Nix, Memix turns rules, documents, and past conversations into reusable context with stable identities. Select the sources once, compose them for a project, and let agents read the result as ordinary files under .memory/.
+Inspired by Nix, Memix turns rules, documents, and past conversations into reusable context with stable identities. Select the sources once, compose them for a project, and let agents read the result as ordinary files under `.memory/`.
 
 ## Get started with your agent
 
@@ -33,18 +33,15 @@ irm https://github.com/MrZLeo/memix/releases/latest/download/install.ps1 | iex
 ```
 
 The installer detects your OS/architecture and asks **two separate `[Y/n]`
-questions**: install the binary, then run skill setup. Press Enter for yes or
-`n` to skip. EOF or an unattended shell never counts as consent.
+questions**: install the binary, then run skill setup. Press Enter for yes or `n` to skip.
 
-Supported releases: Linux x86_64, macOS 26+ arm64, and Windows x86_64. Downloads
-are checked against the same release's `SHA256SUMS` before replacing an existing
-binary. The default destination is `~/.local/bin` (`memix.exe` on Windows).
-Follow the PATH notice if needed; no sudo, PATH edits, or forced skill
-replacement are performed.
+Supported releases: Linux x86_64, macOS 26+ arm64, and Windows x86_64.
+The default destination is `~/.local/bin` (`memix.exe` on Windows).
+Follow the PATH notice if needed.
 
-You can inspect/download [install.sh](install.sh) or [install.ps1](install.ps1)
-first. Their help covers custom directories, pinned releases, agent selection,
-and project scope. Skill setup otherwise uses detected agents and user scope.
+You can inspect/download [install.sh](install.sh) or [install.ps1](install.ps1) first.
+Their help covers custom directories, pinned releases, agent selection, and project scope.
+Skill setup otherwise uses detected agents and user scope.
 
 ### Or ask your agent to help
 
@@ -94,18 +91,8 @@ memix skill remove --agent pi     # remove managed skill files, not memory
 ```
 
 Supported agents: `claude`, `codex`, `opencode`, `pi`, `dsh`, and `opendesk`.
-Repeat `--agent` for multiple agents; omit it from setup to detect config
-directories or programs on `PATH`. Add `--project` to use the nearest
-Git/Jujutsu repository instead of your account; OpenDesk skills are always
-account-scoped. Setup/remove support `--dry-run`; setup/status/remove support
-`--json`.
-
-Codex, OpenCode, and Pi normally share `.agents/skills/memix-cli`; changing that
-path affects all its readers. Agent-home overrides and existing native copies
-are respected. Setup updates managed files but reports foreign conflicts;
-`--force` is an explicit setup-only override for regular files. Remove preserves
-foreign bundles and extra user files. No hooks, settings, or memory Stores are
-changed. See `memix skill --help` for options and the
+Codex, OpenCode, and Pi normally share `.agents/skills/memix-cli`.
+See `memix skill --help` for options and the
 [agent installation guide](AGENT_INSTALL.md) for the handoff and verification.
 
 ## Architecture
@@ -147,9 +134,10 @@ Dotted links connect Quests to selection and composition.
 | **Quest** | Records a selection or composition recipe, searchable intent, result history, and CLI usage receipts. Selection freshness is checked on demand against source generations. |
 | **Profile** | Binds an Environment to a workspace through numbered activations and a movable `current` pointer, supporting explicit upgrades and rollback. |
 
-**Selection and composition are separate.** Two projects can share a Derivation
-but mount it differently. Changing a mount or replacing a Derivation creates a
-new Environment; existing views keep their identities and contents.
+**Selection and composition are separate.**
+Two projects can share a Derivation but mount it differently.
+Changing a mount or replacing a Derivation creates a new Environment
+while existing views keep their identities and contents.
 
 Store updates do not silently change delivered memory. Refresh the selection,
 compose a new Environment, then activate it. A Profile can roll back to a

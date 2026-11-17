@@ -614,7 +614,6 @@ private struct EnvironmentDetail: View {
             ("Composition quest", environment.irHash),
             ("Resolved files", "\(environment.resolvedFiles.count)"),
             ("Bindings", environment.bindings.map { "\($0.mount):\($0.outputRole) ← \($0.derivationID)" }.joined(separator: ", ")),
-            ("Closure environments", "\(environment.closure.environments.count)"),
             ("Closure derivations", "\(environment.closure.derivations.count)"),
             ("Closure artifacts", "\(environment.closure.artifacts.count)"),
             ("Raw objects", "\(environment.closure.rawObjects.count)"),

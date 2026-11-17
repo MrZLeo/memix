@@ -23,8 +23,7 @@
 namespace fs = memix::fs;
 
 static_assert(memix::to_string(memix::ViewTargetKind::FileTree) == "file_tree");
-static_assert(memix::parse_view_target_kind("context_pack")
-              == memix::ViewTargetKind::ContextPack);
+static_assert(!memix::parse_view_target_kind("context_pack"));
 static_assert(memix::to_string(memix::ViewVersionKind::Generation)
               == "generation");
 static_assert(!memix::parse_view_input_kind("environment"));
@@ -155,12 +154,12 @@ TEST_CASE("view expression lowering parses path locators with defaults",
   const memix::ViewService views{memix::Store(directory.path() / "store")};
 
   const memix::ViewResult<memix::AuthoredViewExpression> expression =
-      views.parse_expression(
-          R"({"schema":"memix.view.expr.v2","inputs":[)"
-          R"({"kind":"context","locator":"rules/repo/AGENTS.md"},)"
-          R"({"kind":"context","locator":"chat/task/2026-05-20/@latest"}]})");
+      views.expression_from_sources({
+          "rules/repo/AGENTS.md",
+          "chat/task/2026-05-20/@latest",
+      });
   REQUIRE(expression.has_value());
-  REQUIRE(expression->schema == "memix.view.expr.v2");
+  REQUIRE(expression->schema == "memix.view.expr.v1");
   REQUIRE(expression->target == memix::ViewTargetKind::FileTree);
 
   const memix::ViewResult<memix::ViewIr> ir = views.lower_to_ir(*expression);
@@ -188,52 +187,16 @@ TEST_CASE("view expression lowering parses path locators with defaults",
           != std::string::npos);
 }
 
-TEST_CASE("selection rejects the obsolete Environment-as-input model",
-          "[view]") {
-  TemporaryDirectory directory("typed-expression");
+TEST_CASE("selection expressions reject unsupported schemas", "[view]") {
+  TemporaryDirectory directory("expression-schema");
   const memix::ViewService views{memix::Store(directory.path() / "store")};
-  const auto expression = views.parse_expression(
-      R"({"schema":"memix.view.expr.v2","inputs":[)"
-      R"({"kind":"context","locator":"rules/repo/AGENTS.md"},)"
-      R"({"kind":"environment","environment":"abcd","output":"file_tree",)"
-      R"("mount":"prior"}]})");
-  REQUIRE_FALSE(expression);
-  CHECK(expression.error().message.find("unsupported selection input kind")
-        != std::string::npos);
-}
-
-TEST_CASE("selection expressions reject obsolete and ambiguous JSON",
-          "[view]") {
-  TemporaryDirectory directory("latest-expression");
-  const memix::ViewService views{memix::Store(directory.path() / "store")};
-  const std::vector<std::string> invalid{
-      R"({"schema":"memix.view.expr.v1","sources":[]})",
-      R"({"sources":["rules/a.md"]})",
-      R"({"schema":"memix.view.expr.v2","sources":[]})",
-      R"({"schema":"memix.view.expr.v2","inputs":[],"profile":"ignored"})",
-      R"({"schema":"memix.view.expr.v2","inputs":[],"schema":"memix.view.expr.v2"})",
-      R"({"schema":"memix.view.expr.v2","inputs":[{"kind":"context","locator":"rules/a.md","mount":"ignored"}]})",
-      R"({"schema":"memix.view.expr.v2","inputs":[{"kind":"context","kind":"context","locator":"rules/a.md"}]})",
-  };
-  for (const std::string &json : invalid) {
-    INFO(json);
-    const auto parsed = views.parse_expression(json);
-    REQUIRE_FALSE(parsed);
-    CHECK(parsed.error().kind == memix::ErrorKind::InvalidData);
-  }
-  memix::AuthoredViewExpression obsolete;
-  obsolete.schema = "memix.view.expr.v1";
-  const auto lowered = views.lower_to_ir(obsolete);
+  memix::AuthoredViewExpression unsupported;
+  unsupported.schema = "memix.view.expr.v0";
+  const auto lowered = views.lower_to_ir(unsupported);
   REQUIRE_FALSE(lowered);
+  CHECK(lowered.error().kind == memix::ErrorKind::InvalidData);
   CHECK(lowered.error().message.find("unsupported view expression schema")
         != std::string::npos);
-
-  const auto plain = views.parse_expression(
-      "rules/repo/AGENTS.md,chat/task/2026-05-20/@latest");
-  REQUIRE(plain);
-  CHECK(plain->schema == "memix.view.expr.v2");
-  CHECK(plain->inputs.size() == 2);
-  REQUIRE(views.lower_to_ir(*plain));
 }
 
 TEST_CASE("view expression lowering rejects invalid locators", "[view]") {
@@ -486,7 +449,7 @@ TEST_CASE("view file tree environment records file and directory closure",
 
   const std::string manifest =
       read_file(first->derivations.at(0).manifest_path);
-  REQUIRE(manifest.find("\"schema\":\"memix.view.derivation.v4\"")
+  REQUIRE(manifest.find("\"schema\":\"memix.view.derivation.v1\"")
           != std::string::npos);
   REQUIRE(manifest.find("\"operator_version\":\"select-raw-files-v1\"")
           != std::string::npos);
@@ -500,7 +463,7 @@ TEST_CASE("view file tree environment records file and directory closure",
       first->derivations.at(0).tree_path / "chat" / "task" / "2026-05-20"));
 
   const std::string environment_manifest = read_file(first->manifest_path);
-  REQUIRE(environment_manifest.find("\"schema\":\"memix.view.environment.v3\"")
+  REQUIRE(environment_manifest.find("\"schema\":\"memix.view.environment.v1\"")
           != std::string::npos);
   REQUIRE(environment_manifest.find("\"raw_objects\"") != std::string::npos);
   REQUIRE_FALSE(owner_can_write(first->manifest_path));
@@ -534,10 +497,12 @@ TEST_CASE("view file tree environment records file and directory closure",
   REQUIRE((*environments)[0].total_size_bytes == 25);
 
   const memix::ViewResult<std::vector<memix::ViewCatalogEntry>> catalog =
-      views.environment_tree(first->id, memix::ViewCatalogOptions{
-                                            .path = "chat/task",
-                                            .depth = 2,
-                                        });
+      views.view_tree(
+          {.kind = memix::ViewObjectKind::Environment, .id = first->id},
+          memix::ViewCatalogOptions{
+              .path = "chat/task",
+              .depth = 2,
+          });
   REQUIRE(catalog.has_value());
   REQUIRE(catalog->size() == 4);
   REQUIRE((*catalog)[0].path == fs::path("chat/task"));
@@ -604,7 +569,6 @@ TEST_CASE(
   CHECK(environment->bindings.size() == 3);
   CHECK(environment->derivations.size() == 2);
   CHECK(environment->resolved_files.size() == 3);
-  CHECK(environment->closure.environments.empty());
   CHECK(environment->closure.derivations.size() == 2);
   CHECK(environment->closure.raw_objects.size() == 2);
   REQUIRE(views.list_derivations()->size() == 2);
@@ -644,7 +608,6 @@ TEST_CASE(
   CHECK(found->binding_count == 3);
   CHECK(found->file_count == 3);
   CHECK(found->total_size_bytes == 19);
-  CHECK(found->upstream_environment_count == 0);
 }
 
 TEST_CASE(
@@ -684,7 +647,7 @@ TEST_CASE(
   }
   CHECK_FALSE(views.compose({}));
   CHECK_FALSE(views.compose(
-      {{.mount = {}, .derivation_id = a->id, .output_role = "context_pack"}}));
+      {{.mount = {}, .derivation_id = a->id, .output_role = "unknown_role"}}));
   CHECK_FALSE(views.compose(
       {{.mount = {}, .derivation_id = "missing", .output_role = "file_tree"}}));
   CHECK(views.list_environments()->empty());

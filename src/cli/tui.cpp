@@ -2795,7 +2795,7 @@ ftxui::Element render_list_empty(const ListScreen &screen) {
     break;
   case ListKind::Objects:
     title = "No objects";
-    explanation = "Run memix store ingest to add blobs to this store.";
+    explanation = "Run memix store ingest with --dest to add files to this store.";
     break;
   case ListKind::ViewList:
     title = std::format("No {}s", memix::to_string(screen.view.kind));
@@ -2812,7 +2812,7 @@ ftxui::Element render_list_empty(const ListScreen &screen) {
     break;
   case ListKind::Store:
     title = "Empty store";
-    explanation = "Run memix store ingest to add content.";
+    explanation = "Run memix store ingest with --dest to add content.";
     break;
   }
   lines.push_back(text(title) | bold | color(Color::RedLight));

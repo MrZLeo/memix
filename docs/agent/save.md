@@ -20,9 +20,8 @@ conversation dump.
    memix store cat --type documents --generation <full-generation-id> projects/example/decisions.md
    ```
 
-`--dest` is relative within the type. Each ingest retains other logical entries.
-Without `--dest`, ingest creates raw blobs only, not normally retrievable logical
-memory. Never edit Store objects or attachment files.
+`--dest` is required and relative within the type. Each ingest retains other
+logical entries. Never edit Store objects or attachment files.
 
 For an authorized retraction, `memix store rm --type <type> <path>` removes the
 file or subtree from the latest logical tree in a new generation. Blobs, history,

@@ -10,12 +10,10 @@ typedef NS_ENUM(NSInteger, MMXObjectType) {
 
 typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
   MMXViewTargetKindFileTree = 0,
-  MMXViewTargetKindContextPack = 1,
 };
 
 @interface MMXStoredObject : NSObject
 @property(nonatomic, readonly) NSInteger schemaVersion;
-@property(nonatomic, readonly) NSInteger objectVersion;
 @property(nonatomic, readonly) MMXObjectType type;
 @property(nonatomic, copy, readonly) NSString *objectID;
 @property(nonatomic, copy, readonly) NSString *hashAlgorithm;
@@ -60,7 +58,6 @@ typedef NS_ENUM(NSInteger, MMXViewTargetKind) {
 @property(nonatomic, copy, readonly) NSArray<NSString *> *derivations;
 @property(nonatomic, copy, readonly) NSArray<NSString *> *artifacts;
 @property(nonatomic, copy, readonly) NSArray<NSString *> *rawObjects;
-@property(nonatomic, copy, readonly) NSArray<NSString *> *environments;
 @end
 
 @interface MMXViewDerivation : NSObject

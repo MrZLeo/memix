@@ -48,8 +48,6 @@ extension MMXViewTargetKind {
         switch self {
         case .fileTree:
             return "File Tree"
-        case .contextPack:
-            return "Context Pack"
         @unknown default:
             return "Unknown"
         }

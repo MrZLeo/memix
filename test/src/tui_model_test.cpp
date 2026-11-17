@@ -334,7 +334,6 @@ TEST_CASE("generation hub and provenance formatting remain stable",
           "[tui-model]") {
   const memix::ContextGeneration generation{
       .schema_version = 1,
-      .object_version = 1,
       .type = memix::MemoryObjectType::Rules,
       .id = "0123456789abcdef",
       .root_tree = "tree",

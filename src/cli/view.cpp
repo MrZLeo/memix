@@ -70,7 +70,6 @@ struct ViewCliOptions {
   fs::path tree_path;
   std::string cat_reference;
   fs::path cat_path;
-  std::string target_name = "file_tree";
   std::string quest_kind = "selection";
   std::string object_kind = "environment";
   std::string show_reference;
@@ -102,7 +101,6 @@ struct ViewEnvironmentInfoJson {
   std::size_t binding_count = 0;
   std::size_t file_count = 0;
   std::uintmax_t size_bytes = 0;
-  std::size_t upstream_environment_count = 0;
 };
 
 struct ViewCatalogEntryJson {
@@ -212,9 +210,6 @@ void tag_invoke([[maybe_unused]] simdjson::serialize_tag tag, Builder &builder,
   builder.template append_key_value<"file_count">(environment.file_count);
   builder.append_comma();
   builder.template append_key_value<"size_bytes">(environment.size_bytes);
-  builder.append_comma();
-  builder.template append_key_value<"upstream_environment_count">(
-      environment.upstream_environment_count);
   builder.end_object();
 }
 
@@ -399,17 +394,6 @@ make_service(const ViewCliOptions &options) {
   return memix::ViewService(memix::Store(*root));
 }
 
-memix::cli_detail::Result<memix::ViewTargetKind>
-require_selection_target(std::string_view target_name) {
-  const std::optional<memix::ViewTargetKind> target =
-      memix::parse_view_target_kind(target_name);
-  if (!target.has_value() || *target != memix::ViewTargetKind::FileTree) {
-    return memix::cli_detail::unexpected_error(std::format(
-        "unsupported selection target `{}`; expected file_tree", target_name));
-  }
-  return *target;
-}
-
 template <typename Values>
 memix::cli_detail::VoidResult print_json(const Values &values) {
   simdjson::builder::string_builder builder;
@@ -448,13 +432,12 @@ QuestInfoJson quest_info_json_for(const memix::QuestInfo &info) {
 
 memix::cli_detail::Result<memix::AuthoredViewExpression>
 expression_from_cli(const memix::ViewService &service,
-                    const ViewCliOptions &options,
-                    memix::ViewTargetKind target) {
+                    const ViewCliOptions &options) {
   if (!options.mounts.empty()) {
     return memix::cli_detail::unexpected_error(
         "--mount requires a composition, not a selection");
   }
-  auto expression = service.expression_from_sources(options.sources, target);
+  auto expression = service.expression_from_sources(options.sources);
   if (!expression)
     return memix::cli_detail::unexpected_error(expression.error());
   return std::move(*expression);
@@ -582,7 +565,6 @@ memix::cli_detail::VoidResult run_list(const ViewCliOptions &options) {
                 .binding_count = info.binding_count,
                 .file_count = info.file_count,
                 .size_bytes = info.total_size_bytes,
-                .upstream_environment_count = info.upstream_environment_count,
             };
           })
         | std::ranges::to<std::vector>();
@@ -780,10 +762,7 @@ run_materialization(const ViewCliOptions &options) {
         },
         options.materialization_json);
   }
-  auto target = require_selection_target(options.target_name);
-  if (!target)
-    return std::unexpected(target.error());
-  auto expression = expression_from_cli(*service, options, *target);
+  auto expression = expression_from_cli(*service, options);
   if (!expression)
     return std::unexpected(expression.error());
   auto result = service->select(*expression, metadata);
@@ -820,8 +799,7 @@ memix::cli_detail::VoidResult run_define(const ViewCliOptions &options) {
       return std::unexpected(bindings.error());
     definition = service->define_composition(std::move(*bindings), metadata);
   } else if (options.quest_kind == "selection") {
-    auto expression =
-        expression_from_cli(*service, options, memix::ViewTargetKind::FileTree);
+    auto expression = expression_from_cli(*service, options);
     if (!expression)
       return std::unexpected(expression.error());
     definition = service->define_quest(*expression, metadata);
@@ -1380,12 +1358,6 @@ void add_quest_metadata(Argum::Parser &parser, ViewCliOptions &options) {
 
 void add_select_command(Argum::Parser &parser, ViewCliOptions &options) {
   add_view_inputs(parser, options);
-  parser.add(Argum::Option("--target")
-                 .argName("TEXT")
-                 .help("Selection target. Only raw file_tree is supported.")
-                 .handler([&options](std::string_view value) {
-                   options.target_name = value;
-                 }));
   add_quest_metadata(parser, options);
   parser.add(Argum::Option("--json")
                  .help("Emit a typed Derivation resolution as JSON.")

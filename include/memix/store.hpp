@@ -119,7 +119,6 @@ StoreResult<fs::path> default_store_root();
 
 struct StoredObject {
   int schema_version = 1;
-  int object_version = 1;
   MemoryObjectType type = MemoryObjectType::Rules;
   std::string id;
   std::string hash_algorithm = "sha256";
@@ -148,7 +147,6 @@ struct ContextTreeEntry {
 
 struct ContextTree {
   int schema_version = 1;
-  int object_version = 1;
   MemoryObjectType type = MemoryObjectType::Rules;
   std::string id;
   std::vector<ContextTreeEntry> entries;
@@ -157,7 +155,6 @@ struct ContextTree {
 
 struct ContextGeneration {
   int schema_version = 1;
-  int object_version = 1;
   MemoryObjectType type = MemoryObjectType::Rules;
   std::string id;
   std::string root_tree;
@@ -234,9 +231,6 @@ public:
   explicit Store(fs::path root) : root_(std::move(root)) {}
 
   [[nodiscard]] const fs::path &root() const noexcept { return root_; }
-
-  [[nodiscard]] StoreResult<IngestResult>
-  ingest(MemoryObjectType type, const fs::path &source_path) const;
 
   [[nodiscard]] StoreResult<IngestResult>
   ingest_blob(MemoryObjectType type, const fs::path &source_path) const;

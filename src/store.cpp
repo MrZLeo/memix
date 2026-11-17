@@ -187,8 +187,6 @@ StoreResult<std::string> metadata_json_for(const memix::StoredObject &object) {
   builder.start_object();
   builder.append_key_value<"schema_version">(object.schema_version);
   builder.append_comma();
-  builder.append_key_value<"object_version">(object.object_version);
-  builder.append_comma();
   builder.append_key_value<"type">(memix::to_string(object.type));
   builder.append_comma();
   builder.append_key_value<"id">(object.id);
@@ -225,8 +223,6 @@ context_tree_json_for(memix::MemoryObjectType type,
   builder.start_object();
   builder.append_key_value<"schema_version">(1);
   builder.append_comma();
-  builder.append_key_value<"object_version">(1);
-  builder.append_comma();
   builder.append_key_value<"kind">(kContextTreeKind);
   builder.append_comma();
   builder.append_key_value<"type">(memix::to_string(type));
@@ -249,8 +245,6 @@ context_generation_json_for(ContextGenerationJsonRequest request) {
   simdjson::builder::string_builder builder;
   builder.start_object();
   builder.append_key_value<"schema_version">(1);
-  builder.append_comma();
-  builder.append_key_value<"object_version">(1);
   builder.append_comma();
   builder.append_key_value<"kind">(kContextGenerationKind);
   builder.append_comma();
@@ -322,24 +316,19 @@ require_memory_object_type(const JsonObjectReader &fields,
       });
 }
 
-StoreVoid validate_optional_memory_object_type(const JsonObjectReader &fields,
+StoreVoid validate_required_memory_object_type(const JsonObjectReader &fields,
                                                std::string_view key,
                                                memix::MemoryObjectType type,
                                                std::string_view subject) {
-  memix::detail::CommonResult<std::optional<std::string>> optional_type =
-      fields.optional_string(key);
-  if (!optional_type) {
-    return store_error(std::move(optional_type.error()));
+  const StoreResult<std::string> type_text = require_string(fields, key);
+  if (!type_text) {
+    return std::unexpected(type_text.error());
   }
-  if (!optional_type->has_value()) {
-    return {};
-  }
-  const std::string &type_text = **optional_type;
   const std::optional<memix::MemoryObjectType> parsed_type =
-      memix::parse_memory_object_type(type_text);
+      memix::parse_memory_object_type(*type_text);
   if (!parsed_type.has_value()) {
     return store_error(
-        std::format("{} has unsupported type `{}`", subject, type_text));
+        std::format("{} has unsupported type `{}`", subject, *type_text));
   }
   if (*parsed_type != type) {
     return store_error(
@@ -507,12 +496,6 @@ metadata_object_from_fields(const JsonObjectReader &fields,
   }
   object.schema_version = *schema_version;
 
-  const StoreResult<int> object_version = require_int(fields, "object_version");
-  if (!object_version) {
-    return std::unexpected(object_version.error());
-  }
-  object.object_version = *object_version;
-
   const StoreResult<memix::MemoryObjectType> type =
       require_memory_object_type(fields, "type");
   if (!type) {
@@ -574,9 +557,6 @@ StoreVoid validate_metadata_object(const memix::StoredObject &object,
                                    memix::MemoryObjectType dir_type) {
   if (object.schema_version != 1) {
     return store_error("metadata schema_version is not supported");
-  }
-  if (object.object_version != 1) {
-    return store_error("metadata object_version is not supported");
   }
   if (object.type != dir_type) {
     return store_error("metadata type does not match its store directory");
@@ -1258,12 +1238,6 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
   }
   tree.schema_version = *schema_version;
 
-  const StoreResult<int> object_version = require_int(fields, "object_version");
-  if (!object_version) {
-    return std::unexpected(object_version.error());
-  }
-  tree.object_version = *object_version;
-
   const StoreResult<std::string> kind = require_string(fields, "kind");
   if (!kind) {
     return std::unexpected(kind.error());
@@ -1272,15 +1246,14 @@ read_context_tree_object(const fs::path &root, memix::MemoryObjectType type,
     return store_error(
         std::format("context tree has unsupported kind `{}`", *kind));
   }
-  const StoreVoid type_valid = validate_optional_memory_object_type(
+  const StoreVoid type_valid = validate_required_memory_object_type(
       fields, "type", type, "context tree");
   if (!type_valid) {
     return std::unexpected(type_valid.error());
   }
 
-  if (tree.schema_version != 1 || tree.object_version != 1) {
-    return store_error(
-        "context tree schema or object version is not supported");
+  if (tree.schema_version != 1) {
+    return store_error("context tree schema_version is not supported");
   }
 
   const StoreResult<simdjson::dom::array> entries =
@@ -1379,12 +1352,6 @@ read_context_generation_object(const fs::path &root,
   }
   generation.schema_version = *schema_version;
 
-  const StoreResult<int> object_version = require_int(fields, "object_version");
-  if (!object_version) {
-    return std::unexpected(object_version.error());
-  }
-  generation.object_version = *object_version;
-
   const StoreResult<std::string> kind = require_string(fields, "kind");
   if (!kind) {
     return std::unexpected(kind.error());
@@ -1393,14 +1360,13 @@ read_context_generation_object(const fs::path &root,
     return store_error(
         std::format("context generation has unsupported kind `{}`", *kind));
   }
-  const StoreVoid type_valid = validate_optional_memory_object_type(
+  const StoreVoid type_valid = validate_required_memory_object_type(
       fields, "type", type, "context generation");
   if (!type_valid) {
     return std::unexpected(type_valid.error());
   }
-  if (generation.schema_version != 1 || generation.object_version != 1) {
-    return store_error(
-        "context generation schema or object version is not supported");
+  if (generation.schema_version != 1) {
+    return store_error("context generation schema_version is not supported");
   }
 
   const StoreResult<std::string> root_tree =
@@ -2273,21 +2239,6 @@ StoreVoid publish_projection(const fs::path &staged, const fs::path &latest,
     return std::unexpected(old_status.error());
   }
   const bool exists = old_status->type() != fs::file_type::not_found;
-#ifdef __APPLE__
-  // macOS 14 requires writable roots when renaming directories. Descendants
-  // stay frozen; restore both root modes after the exchange (or its failure).
-  const auto writable = fs::apply_writable_directory_permissions(staged);
-  if (!writable) {
-    return store_error(writable.error());
-  }
-  if (old_status->type() == fs::file_type::directory) {
-    const auto old_writable =
-        fs::permissions(latest, fs::perms::owner_write, fs::perm_options::add);
-    if (!old_writable) {
-      return store_error(old_writable.error());
-    }
-  }
-#endif
   StoreVoid installed;
   if (!exists) {
     const auto moved = fs::rename(staged, latest);
@@ -2306,21 +2257,6 @@ StoreVoid publish_projection(const fs::path &staged, const fs::path &latest,
 #endif
   }
   published = installed.has_value();
-#ifdef __APPLE__
-  const auto frozen =
-      fs::apply_read_only_directory_permissions(published ? latest : staged);
-  const auto old_frozen = old_status->type() == fs::file_type::directory
-                            ? fs::permissions(published ? staged : latest,
-                                              old_status->permissions())
-                            : memix::FsVoid{};
-  if (!frozen || !old_frozen) {
-    const auto &error = !frozen ? frozen.error() : old_frozen.error();
-    return store_error(std::format(
-        "{}failed to restore projection root permissions: {}",
-        installed ? "projection published; " : installed.error().message + "; ",
-        error.message));
-  }
-#endif
   return installed;
 }
 
@@ -2527,11 +2463,6 @@ StoreResult<fs::path> default_store_root() {
 
 StoreResult<std::string> metadata_json(const StoredObject &object) {
   return metadata_json_for(object);
-}
-
-StoreResult<IngestResult>
-Store::ingest(MemoryObjectType type, const fs::path &source_path) const {
-  return ingest_blob(type, source_path);
 }
 
 StoreResult<IngestResult>

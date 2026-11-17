@@ -15,7 +15,7 @@
 
 namespace memix {
 
-enum class ViewTargetKind : std::uint8_t { FileTree, ContextPack };
+enum class ViewTargetKind : std::uint8_t { FileTree };
 enum class ViewVersionKind : std::uint8_t { Ref, Generation };
 enum class ActivationMode : std::uint8_t { Link, Copy };
 enum class ViewInputKind : std::uint8_t { Context };
@@ -59,10 +59,6 @@ inline constexpr std::array kViewTargetKindTokens{
     ViewTargetKindToken{
         .value = ViewTargetKind::FileTree,
         .token = "file_tree",
-    },
-    ViewTargetKindToken{
-        .value = ViewTargetKind::ContextPack,
-        .token = "context_pack",
     },
 };
 
@@ -141,7 +137,7 @@ struct AuthoredViewInput {
 };
 
 struct AuthoredViewExpression {
-  std::string schema = "memix.view.expr.v2";
+  std::string schema = "memix.view.expr.v1";
   ViewTargetKind target = ViewTargetKind::FileTree;
   std::vector<AuthoredViewInput> inputs;
 };
@@ -204,7 +200,6 @@ struct ViewEnvironmentClosure {
   std::vector<std::string> derivations;
   std::vector<std::string> artifacts;
   std::vector<std::string> raw_objects;
-  std::vector<std::string> environments;
 };
 
 struct ViewDerivation {
@@ -218,9 +213,9 @@ struct ViewDerivation {
   bool inserted = false;
   // Published selections contain one entry for every context input,
   // including inputs that resolved no files.
-  std::optional<std::vector<ResolvedViewInputResolution>> input_resolutions;
+  std::vector<ResolvedViewInputResolution> input_resolutions;
   // Frozen instructions, included in identity; never refilled from the catalog.
-  std::optional<std::string> runtime_quest;
+  std::string runtime_quest;
   ViewIr recipe;
 };
 
@@ -264,7 +259,6 @@ struct ViewEnvironmentInfo {
   std::string id;
   std::size_t file_count = 0;
   std::uintmax_t total_size_bytes = 0;
-  std::size_t upstream_environment_count = 0;
   std::size_t binding_count = 0;
 };
 
@@ -411,9 +405,6 @@ public:
 
   [[nodiscard]] const Store &store() const noexcept { return store_; }
 
-  [[nodiscard]] ViewResult<AuthoredViewExpression>
-  parse_expression(std::string_view expression_or_sources) const;
-
   [[nodiscard]] ViewResult<AuthoredViewExpression> expression_from_sources(
       std::vector<std::string> sources,
       ViewTargetKind target = ViewTargetKind::FileTree) const;
@@ -445,10 +436,6 @@ public:
   resolve_derivation(std::string_view derivation_prefix) const;
 
   [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
-  derivation_tree(std::string_view derivation_prefix,
-                  const ViewCatalogOptions &options = {}) const;
-
-  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
   view_tree(ViewReference reference,
             const ViewCatalogOptions &options = {}) const;
 
@@ -461,11 +448,7 @@ public:
 
   [[nodiscard]] ViewResult<QuestDefinition>
   define_quest(const AuthoredViewExpression &expression,
-               std::string_view intent, std::string_view name) const;
-
-  [[nodiscard]] ViewResult<QuestDefinition>
-  define_quest(const AuthoredViewExpression &expression,
-               const QuestDefinitionOptions &options) const;
+               const QuestDefinitionOptions &options = {}) const;
 
   [[nodiscard]] ViewResult<std::vector<QuestInfo>> list_quests() const;
 
@@ -490,10 +473,6 @@ public:
 
   [[nodiscard]] ViewResult<std::vector<ViewEnvironmentInfo>>
   list_environments() const;
-
-  [[nodiscard]] ViewResult<std::vector<ViewCatalogEntry>>
-  environment_tree(std::string_view environment_prefix,
-                   const ViewCatalogOptions &options = {}) const;
 
   [[nodiscard]] ViewResult<ViewActivation>
   activate(std::string_view environment_prefix,

@@ -397,7 +397,8 @@ TEST_CASE("ingest stores a regular file as immutable metadata and content",
   write_file(source, "abc");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Documents, source);
+  const auto result =
+      store.ingest_blob(memix::MemoryObjectType::Documents, source);
   REQUIRE(result.has_value());
 
   const std::string expected_hash =
@@ -418,7 +419,7 @@ TEST_CASE("ingest stores a regular file as immutable metadata and content",
 
   const std::string metadata = read_file(object_dir / "metadata.json");
   REQUIRE(metadata.find("\"schema_version\":1") != std::string::npos);
-  REQUIRE(metadata.find("\"object_version\":1") != std::string::npos);
+  REQUIRE(metadata.find("\"object_version\"") == std::string::npos);
   REQUIRE(metadata.find("\"type\":\"documents\"") != std::string::npos);
   REQUIRE(metadata.find("\"filename\":\"document.md\"") != std::string::npos);
   REQUIRE(metadata.find(source.string()) == std::string::npos);
@@ -431,7 +432,7 @@ TEST_CASE("generic ingest stores rule blobs without a logical destination",
   write_file(source, "rules");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Rules, source);
+  const auto result = store.ingest_blob(memix::MemoryObjectType::Rules, source);
   REQUIRE(result.has_value());
 
   REQUIRE(result->inserted);
@@ -446,7 +447,7 @@ TEST_CASE("ingest uses SHA-256 for empty files", "[store]") {
   write_file(source, "");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Chat, source);
+  const auto result = store.ingest_blob(memix::MemoryObjectType::Chat, source);
   REQUIRE(result.has_value());
 
   REQUIRE(result->object.id
@@ -462,11 +463,11 @@ TEST_CASE("duplicate ingest in the same type returns the existing object",
   write_file(source, "{\"messages\":[]}");
 
   const memix::Store store(directory.path() / "store");
-  const auto first = store.ingest(memix::MemoryObjectType::Chat, source);
+  const auto first = store.ingest_blob(memix::MemoryObjectType::Chat, source);
   REQUIRE(first.has_value());
   const std::string first_metadata =
       read_file(first->object.object_dir / "metadata.json");
-  const auto second = store.ingest(memix::MemoryObjectType::Chat, source);
+  const auto second = store.ingest_blob(memix::MemoryObjectType::Chat, source);
   REQUIRE(second.has_value());
   const std::string second_metadata =
       read_file(second->object.object_dir / "metadata.json");
@@ -1338,7 +1339,7 @@ TEST_CASE("the same content can exist independently across object types",
       .message = "add memory",
   });
   const auto documents =
-      store.ingest(memix::MemoryObjectType::Documents, source);
+      store.ingest_blob(memix::MemoryObjectType::Documents, source);
   REQUIRE(rules.has_value());
   REQUIRE(documents.has_value());
 
@@ -1362,7 +1363,8 @@ TEST_CASE("list supports deterministic ordering and type filters", "[store]") {
   write_file(chat_source, "chat");
 
   const memix::Store store(directory.path() / "store");
-  const auto chat = store.ingest(memix::MemoryObjectType::Chat, chat_source);
+  const auto chat =
+      store.ingest_blob(memix::MemoryObjectType::Chat, chat_source);
   const auto rules = store.ingest_file({
       .type = memix::MemoryObjectType::Rules,
       .source_path = rules_source,
@@ -1392,7 +1394,7 @@ TEST_CASE("ingest rejects directories", "[store]") {
   const memix::Store store(directory.path() / "store");
 
   const auto result =
-      store.ingest(memix::MemoryObjectType::Documents, directory.path());
+      store.ingest_blob(memix::MemoryObjectType::Documents, directory.path());
   REQUIRE_FALSE(result.has_value());
 }
 
@@ -1402,7 +1404,8 @@ TEST_CASE("list fails loudly when content is missing", "[store]") {
   write_file(source, "<p>hello</p>");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Documents, source);
+  const auto result =
+      store.ingest_blob(memix::MemoryObjectType::Documents, source);
   REQUIRE(result.has_value());
   make_object_mutable_for_corruption(result->object.object_dir);
   REQUIRE(fs::remove(result->object.object_dir / "object").value_or(false));
@@ -1417,7 +1420,8 @@ TEST_CASE("list fails loudly when content hash does not match metadata",
   write_file(source, "abc");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Documents, source);
+  const auto result =
+      store.ingest_blob(memix::MemoryObjectType::Documents, source);
   REQUIRE(result.has_value());
   make_object_mutable_for_corruption(result->object.object_dir);
   write_file(result->object.object_dir / "object", "xyz");
@@ -1431,7 +1435,8 @@ TEST_CASE("list fails loudly when metadata is invalid", "[store]") {
   write_file(source, "<p>hello</p>");
 
   const memix::Store store(directory.path() / "store");
-  const auto result = store.ingest(memix::MemoryObjectType::Documents, source);
+  const auto result =
+      store.ingest_blob(memix::MemoryObjectType::Documents, source);
   REQUIRE(result.has_value());
   make_object_mutable_for_corruption(result->object.object_dir);
   write_file(result->object.object_dir / "metadata.json", "{not json");
@@ -1501,7 +1506,7 @@ TEST_CASE("context ingests maintain a read-only hardlink projection",
           == "carried memory\n");
 
   const auto blob_only =
-      store.ingest(memix::MemoryObjectType::Documents, blob_only_source);
+      store.ingest_blob(memix::MemoryObjectType::Documents, blob_only_source);
   REQUIRE(blob_only);
   REQUIRE_FALSE(
       path_exists(store.root() / "latest" / "documents" / "untracked.md"));

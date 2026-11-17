@@ -159,8 +159,6 @@ MMXViewTargetKind MMXViewTargetKindFromMemory(memix::ViewTargetKind target) {
   switch (target) {
   case memix::ViewTargetKind::FileTree:
     return MMXViewTargetKindFileTree;
-  case memix::ViewTargetKind::ContextPack:
-    return MMXViewTargetKindContextPack;
   }
 }
 
@@ -169,8 +167,6 @@ MMXViewTargetKindFromBridge(MMXViewTargetKind target) {
   switch (target) {
   case MMXViewTargetKindFileTree:
     return memix::ViewTargetKind::FileTree;
-  case MMXViewTargetKindContextPack:
-    return memix::ViewTargetKind::ContextPack;
   }
   return std::nullopt;
 }
@@ -253,7 +249,6 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
 
 @interface MMXStoredObject ()
 @property(nonatomic, readwrite) NSInteger schemaVersion;
-@property(nonatomic, readwrite) NSInteger objectVersion;
 @property(nonatomic, readwrite) MMXObjectType type;
 @property(nonatomic, copy, readwrite) NSString *objectID;
 @property(nonatomic, copy, readwrite) NSString *hashAlgorithm;
@@ -313,7 +308,6 @@ fs::path MMXViewEnvironmentsDirectory(const fs::path &root) {
 @property(nonatomic, copy, readwrite) NSArray<NSString *> *derivations;
 @property(nonatomic, copy, readwrite) NSArray<NSString *> *artifacts;
 @property(nonatomic, copy, readwrite) NSArray<NSString *> *rawObjects;
-@property(nonatomic, copy, readwrite) NSArray<NSString *> *environments;
 @end
 
 @implementation MMXViewEnvironmentClosure
@@ -365,7 +359,6 @@ namespace {
 MMXStoredObject *MMXWrapStoredObject(const memix::StoredObject &object) {
   MMXStoredObject *const wrapped = [[MMXStoredObject alloc] init];
   wrapped.schemaVersion = object.schema_version;
-  wrapped.objectVersion = object.object_version;
   wrapped.type = MMXObjectTypeFromMemory(object.type);
   wrapped.objectID = MMXString(object.id);
   wrapped.hashAlgorithm = MMXString(object.hash_algorithm);
@@ -436,7 +429,6 @@ MMXWrapViewEnvironmentClosure(const memix::ViewEnvironmentClosure &closure) {
   wrapped.derivations = MMXStringArray(closure.derivations);
   wrapped.artifacts = MMXStringArray(closure.artifacts);
   wrapped.rawObjects = MMXStringArray(closure.raw_objects);
-  wrapped.environments = MMXStringArray(closure.environments);
   return wrapped;
 }
 

@@ -36,7 +36,6 @@ constexpr int kTypeColumnWidth = 11;
 constexpr int kIdColumnWidth = 14;
 constexpr int kSizeColumnWidth = 10;
 constexpr int kTimestampColumnWidth = 21;
-constexpr int kContextPathColumnWidth = 24;
 constexpr std::uintmax_t kSizeUnitBaseBytes = 1024;
 constexpr double kSizeUnitBase = 1024.0;
 constexpr std::size_t kJsonIndentSpaces = 2;
@@ -49,9 +48,6 @@ enum class StoreCommand : std::uint8_t {
   Tree,
   Expose,
   Rm,
-  Rules,
-  RulesCat,
-  RulesTree,
 };
 
 struct StoreCliOptions {
@@ -138,21 +134,6 @@ void print_table(const std::vector<memix::StoredObject> &objects) {
                  kIdColumnWidth, size, kSizeColumnWidth, object.created_at,
                  kTimestampColumnWidth, object.filename);
   }
-}
-
-void print_context_tree_table(const std::vector<memix::StoreFile> &files) {
-  memix::cli_detail::print_path_id_table(
-      files,
-      memix::cli_detail::PathIdTableLayout{
-          .minimum_path_width = kContextPathColumnWidth,
-          .id_column_width = kIdColumnWidth,
-      },
-      [](const memix::StoreFile &file) {
-        return file.context_path.generic_string();
-      },
-      [](const memix::StoreFile &file) -> std::string_view {
-        return file.blob.id;
-      });
 }
 
 struct StoreCatalogEntryJson {
@@ -397,9 +378,13 @@ run_ingest(const StoreCliOptions &options,
     return memix::cli_detail::unexpected_error(
         "ingest requires --type with an object type");
   }
-  if (options.ingest_paths.empty()) {
+  if (options.ingest_context_dest.empty()) {
     return memix::cli_detail::unexpected_error(
-        "ingest expects one or more source paths");
+        "ingest requires --dest with a logical destination path");
+  }
+  if (options.ingest_paths.size() != 1) {
+    return memix::cli_detail::unexpected_error(
+        "ingest expects exactly one source path");
   }
 
   const memix::cli_detail::Result<memix::MemoryObjectType> type =
@@ -412,48 +397,23 @@ run_ingest(const StoreCliOptions &options,
     return std::unexpected(store.error());
   }
 
-  if (!options.ingest_context_dest.empty()) {
-    if (options.ingest_paths.size() != 1) {
-      return memix::cli_detail::unexpected_error(
-          "ingest with --dest expects exactly one source path");
-    }
-
-    const std::expected<memix::FileIngestResult, memix::StoreError> result =
-        store->ingest_file({
-            .type = *type,
-            .source_path = options.ingest_paths.front(),
-            .context_path = options.ingest_context_dest,
-            .message = options.ingest_message,
-        });
-    if (!result) {
-      return memix::cli_detail::unexpected_error(result.error());
-    }
-    logger->info("{} type={} id={} filename={} path={} generation={}",
-                 result->blob.inserted ? "ingested" : "exists",
-                 memix::to_string(result->blob.object.type),
-                 result->blob.object.id, result->blob.object.filename,
-                 result->context_path.generic_string(), result->generation.id);
-    if (result->projection_warning.has_value()) {
-      logger->warn("{}", *result->projection_warning);
-    }
-    return {};
+  const std::expected<memix::FileIngestResult, memix::StoreError> result =
+      store->ingest_file({
+          .type = *type,
+          .source_path = options.ingest_paths.front(),
+          .context_path = options.ingest_context_dest,
+          .message = options.ingest_message,
+      });
+  if (!result) {
+    return memix::cli_detail::unexpected_error(result.error());
   }
-
-  if (!options.ingest_message.empty()) {
-    return memix::cli_detail::unexpected_error(
-        "--message is only valid when ingest uses --dest");
-  }
-
-  for (const auto &path : options.ingest_paths) {
-    const std::expected<memix::IngestResult, memix::StoreError> result =
-        store->ingest(*type, path);
-    if (!result) {
-      return memix::cli_detail::unexpected_error(result.error());
-    }
-    logger->info("{} type={} id={} filename={}",
-                 result->inserted ? "ingested" : "exists",
-                 memix::to_string(result->object.type), result->object.id,
-                 result->object.filename);
+  logger->info("{} type={} id={} filename={} path={} generation={}",
+               result->blob.inserted ? "ingested" : "exists",
+               memix::to_string(result->blob.object.type),
+               result->blob.object.id, result->blob.object.filename,
+               result->context_path.generic_string(), result->generation.id);
+  if (result->projection_warning.has_value()) {
+    logger->warn("{}", *result->projection_warning);
   }
   return {};
 }
@@ -564,24 +524,6 @@ memix::cli_detail::VoidResult run_tree(const StoreCliOptions &options) {
   if (!store) {
     return std::unexpected(store.error());
   }
-  const bool legacy_output = !options.tree_all
-                          && options.tree_path.empty()
-                          && !options.tree_depth.has_value()
-                          && !options.tree_json;
-  if (legacy_output) {
-    if (!type->has_value()) {
-      return memix::cli_detail::unexpected_error(
-          "tree requires --type with an object type");
-    }
-    const std::expected<std::vector<memix::StoreFile>, memix::StoreError>
-        files = store->list_files(type->value(),
-                                  optional_generation(options.tree_generation));
-    if (!files) {
-      return memix::cli_detail::unexpected_error(files.error());
-    }
-    print_context_tree_table(*files);
-    return {};
-  }
 
   const std::expected<std::vector<memix::StoreCatalogEntry>, memix::StoreError>
       entries = store->catalog(memix::StoreCatalogOptions{
@@ -624,7 +566,7 @@ void add_ingest_command(Argum::Parser &parser, StoreCliOptions &options) {
             options.ingest_type_name = value;
           }));
   parser.add(Argum::Positional("path")
-                 .help("Source path(s) to ingest into the store.")
+                 .help("Source file path to ingest into the store.")
                  .occurs(Argum::zeroOrMoreTimes)
                  .handler([&options](std::string_view value) {
                    options.ingest_paths.emplace_back(value);
@@ -639,7 +581,7 @@ void add_ingest_command(Argum::Parser &parser, StoreCliOptions &options) {
           }));
   parser.add(Argum::Option("--message")
                  .argName("TEXT")
-                 .help("Context generation message. Only valid with --dest.")
+                 .help("Context generation message.")
                  .handler([&options](std::string_view value) {
                    options.ingest_message = value;
                  }));
@@ -737,54 +679,11 @@ void add_expose_command(Argum::Parser &parser, StoreCliOptions &options) {
                  .handler([&options] { options.expose_json = true; }));
 }
 
-void add_rules_cat_command(Argum::Parser &parser, StoreCliOptions &options) {
-  options.cat_type_name =
-      std::string(memix::to_string(memix::MemoryObjectType::Rules));
-  parser.add(Argum::Positional("rule-path")
-                 .help("Logical path inside the rules tree.")
-                 .occurs(Argum::neverOrOnce)
-                 .handler([&options](std::string_view value) {
-                   options.cat_path = fs::path(value);
-                 }));
-  add_generation_option(parser, options.cat_generation,
-                        "Generation id. Defaults to rules/latest.");
-}
-
-void add_rules_tree_command(Argum::Parser &parser, StoreCliOptions &options) {
-  options.tree_type_name =
-      std::string(memix::to_string(memix::MemoryObjectType::Rules));
-  add_generation_option(parser, options.tree_generation,
-                        "Generation id. Defaults to rules/latest.");
-}
-
-void add_rules_commands(Argum::Parser &parser, StoreCliOptions &options) {
-  options.command = StoreCommand::Rules;
-  parser.addSubCommand(
-      Argum::Positional("rules-command")
-          .occurs(Argum::neverOrOnce)
-          .help("Rules command: cat or tree.")
-          .handler([&parser,
-                    &options](std::string_view value) -> Argum::Expected<void> {
-            if (value == "cat") {
-              options.command = StoreCommand::RulesCat;
-              add_rules_cat_command(parser, options);
-              return {};
-            }
-            if (value == "tree") {
-              options.command = StoreCommand::RulesTree;
-              add_rules_tree_command(parser, options);
-              return {};
-            }
-            return memix::cli_detail::argum_validation_error(std::format(
-                "unsupported rules command `{}`; expected cat|tree", value));
-          }));
-}
-
 void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
   parser.addSubCommand(
       Argum::Positional("subcommand")
           .occurs(Argum::neverOrOnce)
-          .help("Subcommand: list, ingest, cat, tree, expose, rm, or rules.")
+          .help("Subcommand: list, ingest, cat, tree, expose, or rm.")
           .handler([&parser,
                     &options](std::string_view value) -> Argum::Expected<void> {
             if (value == "list") {
@@ -817,13 +716,9 @@ void add_commands(Argum::Parser &parser, StoreCliOptions &options) {
               add_rm_command(parser, options);
               return {};
             }
-            if (value == "rules") {
-              add_rules_commands(parser, options);
-              return {};
-            }
             return memix::cli_detail::argum_validation_error(
                 std::format("unsupported command `{}`; expected "
-                            "list|ingest|cat|tree|expose|rm|rules",
+                            "list|ingest|cat|tree|expose|rm",
                             value));
           }));
 }
@@ -884,32 +779,6 @@ void print_rm_help(std::string_view program_name) {
   std::print("{}", parser.formatHelp(std::format("{} rm", program_name)));
 }
 
-void print_rules_help(std::string_view program_name) {
-  Argum::Parser parser;
-  StoreCliOptions options;
-  memix::cli_detail::add_common_options(parser, options.common);
-  add_rules_commands(parser, options);
-  std::print("{}", parser.formatHelp(std::format("{} rules", program_name)));
-}
-
-void print_rules_cat_help(std::string_view program_name) {
-  Argum::Parser parser;
-  StoreCliOptions options;
-  memix::cli_detail::add_common_options(parser, options.common);
-  add_rules_cat_command(parser, options);
-  std::print("{}",
-             parser.formatHelp(std::format("{} rules cat", program_name)));
-}
-
-void print_rules_tree_help(std::string_view program_name) {
-  Argum::Parser parser;
-  StoreCliOptions options;
-  memix::cli_detail::add_common_options(parser, options.common);
-  add_rules_tree_command(parser, options);
-  std::print("{}",
-             parser.formatHelp(std::format("{} rules tree", program_name)));
-}
-
 void print_selected_help(StoreCommand command, std::string_view program_name) {
   switch (command) {
   case StoreCommand::List:
@@ -930,15 +799,6 @@ void print_selected_help(StoreCommand command, std::string_view program_name) {
   case StoreCommand::Rm:
     print_rm_help(program_name);
     return;
-  case StoreCommand::Rules:
-    print_rules_help(program_name);
-    return;
-  case StoreCommand::RulesCat:
-    print_rules_cat_help(program_name);
-    return;
-  case StoreCommand::RulesTree:
-    print_rules_tree_help(program_name);
-    return;
   case StoreCommand::None:
     print_root_help(program_name);
     return;
@@ -954,18 +814,13 @@ dispatch(const StoreCliOptions &options,
   case StoreCommand::Ingest:
     return run_ingest(options, logger);
   case StoreCommand::Cat:
-  case StoreCommand::RulesCat:
     return run_cat(options);
   case StoreCommand::Tree:
-  case StoreCommand::RulesTree:
     return run_tree(options);
   case StoreCommand::Expose:
     return run_expose(options);
   case StoreCommand::Rm:
     return run_rm(options, logger);
-  case StoreCommand::Rules:
-    return memix::cli_detail::unexpected_error(
-        "rules requires a subcommand: cat|tree");
   case StoreCommand::None:
     return memix::cli_detail::unexpected_error("a subcommand is required");
   }

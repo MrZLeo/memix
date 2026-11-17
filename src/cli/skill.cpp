@@ -18,6 +18,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <print>
 #include <ranges>
 #include <sstream>
@@ -55,7 +56,7 @@ struct Options {
 struct Harness {
   std::string id;
   bool detected = false;
-  std::vector<fs::path> paths;
+  std::optional<fs::path> path;
 };
 
 struct Target {
@@ -197,26 +198,6 @@ Result<fs::path> project_root() {
   }
 }
 
-std::vector<fs::path>
-skill_paths(const fs::path &primary, const fs::path &native_skills) {
-  std::vector<fs::path> paths{primary / "memix-cli"};
-  if (primary == native_skills) {
-    return paths;
-  }
-  const auto legacy = native_skills / "memix-cli";
-  const auto type = entry_type(legacy);
-  if (!type || *type != fs::file_type::not_found) {
-    // Reconcile existing native copies instead of creating a shadowed shared
-    // installation. Unknown legacy files still need --force.
-    const auto primary_type = entry_type(paths.front());
-    if (primary_type && *primary_type == fs::file_type::not_found) {
-      paths.clear();
-    }
-    paths.push_back(legacy);
-  }
-  return paths;
-}
-
 Result<std::vector<Harness>> harnesses(const Options &options) {
   const auto home = home_path(!options.project);
   if (!home) {
@@ -298,21 +279,21 @@ Result<std::vector<Harness>> harnesses(const Options &options) {
       result.push_back({
           .id = std::string(definition.id),
           .detected = false,
-          .paths = {},
+          .path = std::nullopt,
       });
       continue;
     }
     const bool shared =
         definition.shared
         && (options.project || environment(definition.variable).empty());
-    const auto native_skills = native / definition.skill_root;
-    const auto primary = shared ? *root / ".agents/skills" : native_skills;
+    const auto primary =
+        shared ? *root / ".agents/skills" : native / definition.skill_root;
     Harness harness{
         .id = std::string(definition.id),
         .detected = (!home->empty() && directory_exists(*config))
                  || (options.project && directory_exists(native))
                  || executable_found(definition.id),
-        .paths = skill_paths(primary, native_skills),
+        .path = primary / "memix-cli",
     };
     result.push_back(std::move(harness));
   }
@@ -615,22 +596,20 @@ targets(const std::vector<Harness> &agents, const Options &options) {
     const bool selected = options.agents.empty()
                             ? (options.command != "setup" || agent.detected)
                             : std::ranges::contains(options.agents, agent.id);
-    if (!selected) {
+    if (!selected || !agent.path.has_value()) {
       continue;
     }
-    for (const auto &path : agent.paths) {
-      // Resolve the parent only: never hide a symlink at the skill itself.
-      const auto parent = fs::weakly_canonical(path.parent_path());
-      if (!parent) {
-        return unexpected_error(parent.error());
-      }
-      const auto destination = *parent / path.filename();
-      const auto found = std::ranges::find(result, destination, &Target::path);
-      if (found == result.end()) {
-        result.push_back({.path = destination, .harnesses = {agent.id}});
-      } else {
-        found->harnesses.push_back(agent.id);
-      }
+    // Resolve the parent only: never hide a symlink at the skill itself.
+    const auto parent = fs::weakly_canonical(agent.path->parent_path());
+    if (!parent) {
+      return unexpected_error(parent.error());
+    }
+    const auto destination = *parent / agent.path->filename();
+    const auto found = std::ranges::find(result, destination, &Target::path);
+    if (found == result.end()) {
+      result.push_back({.path = destination, .harnesses = {agent.id}});
+    } else {
+      found->harnesses.push_back(agent.id);
     }
   }
   return result;
@@ -917,21 +896,17 @@ bool append_harness(simdjson::builder::string_builder &builder,
   builder.append("items");
   builder.append_colon();
   builder.start_array();
-  for (std::size_t index = 0; index < agent.paths.size(); ++index) {
-    if (index != 0) {
-      builder.append_comma();
-    }
-    const auto state = inspect(agent.paths[index]);
-    append_item(builder, agent.paths[index], state);
+  if (agent.path.has_value()) {
+    const auto state = inspect(*agent.path);
+    append_item(builder, *agent.path, state);
     if (!json) {
       const auto detail = state.state == "unreadable"
                             ? state.reason
-                            : display_path(agent.paths[index], home);
+                            : display_path(*agent.path, home);
       std::println("  {:<5}  {:<11}  {}", "skill", state.state, detail);
       needs_setup =
-          needs_setup
-          || (agent.detected
-              && (state.state == "missing" || state.state == "outdated"));
+          agent.detected
+          && (state.state == "missing" || state.state == "outdated");
     }
   }
   builder.end_array();

@@ -552,49 +552,36 @@ TEST_CASE("skill diagnoses unsupported scope and arguments before writing",
   REQUIRE_FALSE(path_exists(sandbox.shared()));
 }
 
-TEST_CASE("skill protects foreign and legacy copies unless force is explicit",
+TEST_CASE("skill protects foreign copies unless force is explicit",
           "[skill][cli]") {
   Sandbox sandbox;
-  const auto native = sandbox.home / ".pi/agent/skills/memix-cli";
-  write(native / "SKILL.md", "old unmarked skill\n");
-  write(native / "notes.txt", "keep me\n");
+  const auto skill_dir = sandbox.shared();
+  write(skill_dir / "SKILL.md", "unmarked skill\n");
+  write(skill_dir / "notes.txt", "keep me\n");
   const auto conflict = sandbox.run({"setup", "--agent", "pi", "--json"});
   REQUIRE(conflict.status != 0);
   REQUIRE(conflict.output.contains("\"change\":\"conflict\""));
-  REQUIRE(read(native / "SKILL.md") == "old unmarked skill\n");
+  REQUIRE(read(skill_dir / "SKILL.md") == "unmarked skill\n");
   succeeds(sandbox.run({"remove", "--agent", "pi"}));
-  REQUIRE(path_exists(native / "SKILL.md"));
+  REQUIRE(path_exists(skill_dir / "SKILL.md"));
   succeeds(sandbox.run({"setup", "--agent", "pi", "--force", "--dry-run"}));
-  REQUIRE(read(native / "SKILL.md") == "old unmarked skill\n");
+  REQUIRE(read(skill_dir / "SKILL.md") == "unmarked skill\n");
   succeeds(sandbox.run({"setup", "--agent", "pi", "--force"}));
-  REQUIRE(read(native / "SKILL.md").contains("memix skill show"));
-  REQUIRE_FALSE(path_exists(sandbox.shared()));
-  REQUIRE(read(native / "notes.txt") == "keep me\n");
-  const auto original = read(native / "SKILL.md");
-  write(native / "SKILL.md", original + "local edit\n");
+  REQUIRE(read(skill_dir / "SKILL.md").contains("memix skill show"));
+  REQUIRE(read(skill_dir / "notes.txt") == "keep me\n");
+  const auto original = read(skill_dir / "SKILL.md");
+  write(skill_dir / "SKILL.md", original + "local edit\n");
   const auto outdated = sandbox.run({"status", "--agent", "pi", "--json"});
   succeeds(outdated);
   REQUIRE(outdated.output.contains("\"state\":\"outdated\""));
   succeeds(sandbox.run({"setup", "--agent", "pi"}));
-  REQUIRE(read(native / "SKILL.md") == original);
-  write(native / "agents/extra.yaml", "also keep me\n");
+  REQUIRE(read(skill_dir / "SKILL.md") == original);
+  write(skill_dir / "agents/extra.yaml", "also keep me\n");
   succeeds(sandbox.run({"remove", "--agent", "pi"}));
-  REQUIRE_FALSE(path_exists(native / "SKILL.md"));
-  REQUIRE_FALSE(path_exists(native / "agents/openai.yaml"));
-  REQUIRE(read(native / "notes.txt") == "keep me\n");
-  REQUIRE(read(native / "agents/extra.yaml") == "also keep me\n");
-}
-
-TEST_CASE("skill reconciles shared and native managed copies", "[skill][cli]") {
-  Sandbox sandbox;
-  succeeds(sandbox.run({"setup", "--agent", "pi"}));
-  const auto native = sandbox.home / ".pi/agent/skills/memix-cli";
-  write(native / "SKILL.md", read(sandbox.shared() / "SKILL.md"));
-  write(native / "agents/openai.yaml",
-        read(sandbox.shared() / "agents/openai.yaml"));
-  succeeds(sandbox.run({"remove", "--agent", "pi", "--json"}));
-  REQUIRE_FALSE(path_exists(sandbox.shared()));
-  REQUIRE_FALSE(path_exists(native));
+  REQUIRE_FALSE(path_exists(skill_dir / "SKILL.md"));
+  REQUIRE_FALSE(path_exists(skill_dir / "agents/openai.yaml"));
+  REQUIRE(read(skill_dir / "notes.txt") == "keep me\n");
+  REQUIRE(read(skill_dir / "agents/extra.yaml") == "also keep me\n");
 }
 
 TEST_CASE("skill repairs partial bundles but protects foreign metadata",

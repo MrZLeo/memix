@@ -313,7 +313,8 @@ TEST_CASE("quest definition persists canonical IR and updates annotations",
       views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
   REQUIRE(expression);
 
-  const auto first = views.define_quest(*expression, "Repository guidance", "");
+  const auto first = views.define_quest(
+      *expression, {.intent = "Repository guidance", .name = {}});
   REQUIRE(first);
   REQUIRE_FALSE(first->existed);
   const fs::path ir_path = first->quest_dir / "ir.json";
@@ -329,8 +330,8 @@ TEST_CASE("quest definition persists canonical IR and updates annotations",
   const std::string created_at = initial.created_at;
   REQUIRE_FALSE(created_at.empty());
 
-  const auto second =
-      views.define_quest(*expression, "Updated guidance", "repo rules");
+  const auto second = views.define_quest(
+      *expression, {.intent = "Updated guidance", .name = "repo rules"});
   REQUIRE(second);
   REQUIRE(second->existed);
   const auto updated_quests = views.list_quests();
@@ -341,7 +342,7 @@ TEST_CASE("quest definition persists canonical IR and updates annotations",
   REQUIRE(updated.name == "repo rules");
   REQUIRE(updated.created_at == created_at);
 
-  const auto omitted = views.define_quest(*expression, "", "");
+  const auto omitted = views.define_quest(*expression);
   REQUIRE(omitted);
   const auto preserved_quests = views.list_quests();
   REQUIRE(preserved_quests);
@@ -487,8 +488,8 @@ TEST_CASE("quest resolution and freshness follow refs but preserve pins",
   const auto unresolved_expression =
       views.expression_from_sources({"rules/repo/OTHER.md@latest"});
   REQUIRE(unresolved_expression);
-  const auto unresolved =
-      views.define_quest(*unresolved_expression, "not built", "");
+  const auto unresolved = views.define_quest(
+      *unresolved_expression, {.intent = "not built", .name = {}});
   REQUIRE(unresolved);
   const auto no_resolution = views.quest_freshness(unresolved->ir_hash);
   REQUIRE_FALSE(no_resolution);
@@ -514,8 +515,7 @@ TEST_CASE("freshness retains overlapping pinned and ref inputs", "[quest]") {
   const auto environment = views.select(*expression);
   REQUIRE(environment);
   REQUIRE(environment->resolved_files.size() == 1);
-  REQUIRE(environment->input_resolutions.has_value());
-  REQUIRE(environment->input_resolutions->size() == 2);
+  REQUIRE(environment->input_resolutions.size() == 2);
   const std::string manifest = read_file(environment->manifest_path);
   REQUIRE(manifest.contains(R"("input_resolutions":[)"));
 
@@ -569,9 +569,8 @@ TEST_CASE("freshness records optional inputs that resolve no files",
   const auto derivation = views.build_ir(ir);
   REQUIRE(derivation);
   REQUIRE(derivation->resolved_files.empty());
-  REQUIRE(derivation->input_resolutions.has_value());
-  REQUIRE(derivation->input_resolutions->size() == 1);
-  REQUIRE(derivation->input_resolutions->front().locator
+  REQUIRE(derivation->input_resolutions.size() == 1);
+  REQUIRE(derivation->input_resolutions.front().locator
           == "rules/repo/missing.md@latest");
   const std::string manifest = read_file(derivation->manifest_path);
   REQUIRE(manifest.contains(R"("resolved_inputs":[])"));
@@ -629,16 +628,16 @@ TEST_CASE("quest finding combines semantic and structural lookup", "[quest]") {
   REQUIRE(unicode_expression);
   REQUIRE(rules_shared_expression);
   REQUIRE(documents_shared_expression);
-  const auto file =
-      views.define_quest(*file_expression, "Repository Release Rules", "");
-  const auto recursive =
-      views.define_quest(*directory_expression, "Task conversation", "");
-  const auto unicode = views.define_quest(*unicode_expression,
-                                          "记忆 WorkFlow context", "unicode");
-  const auto rules_shared =
-      views.define_quest(*rules_shared_expression, "rules shared", "");
-  const auto documents_shared =
-      views.define_quest(*documents_shared_expression, "documents shared", "");
+  const auto file = views.define_quest(
+      *file_expression, {.intent = "Repository Release Rules", .name = {}});
+  const auto recursive = views.define_quest(
+      *directory_expression, {.intent = "Task conversation", .name = {}});
+  const auto unicode = views.define_quest(
+      *unicode_expression, {.intent = "记忆 WorkFlow context", .name = "unicode"});
+  const auto rules_shared = views.define_quest(
+      *rules_shared_expression, {.intent = "rules shared", .name = {}});
+  const auto documents_shared = views.define_quest(
+      *documents_shared_expression, {.intent = "documents shared", .name = {}});
   REQUIRE(file);
   REQUIRE(recursive);
   REQUIRE(unicode);
@@ -715,8 +714,8 @@ TEST_CASE("quest finding enriches only metadata matches", "[quest]") {
                                              .intent = "needle metadata",
                                              .name = "matching",
                                          });
-  const auto excluded =
-      views.define_quest(*excluded_expression, "unrelated metadata", "");
+  const auto excluded = views.define_quest(
+      *excluded_expression, {.intent = "unrelated metadata", .name = {}});
   REQUIRE(matching);
   REQUIRE(excluded);
   const auto read =
@@ -761,9 +760,9 @@ TEST_CASE(
   REQUIRE(fs::permissions(d.manifest_path, fs::perms::owner_all));
   write_file(d.manifest_path, changed);
   REQUIRE(f.views.resolve_derivation(d.id));
-  changed.replace(changed.find("memix.view.derivation.v4"),
-                  std::string_view("memix.view.derivation.v4").size(),
-                  "memix.view.derivation.v3");
+  changed.replace(changed.find("memix.view.derivation.v1"),
+                  std::string_view("memix.view.derivation.v1").size(),
+                  "memix.view.derivation.v0");
   write_file(d.manifest_path, changed);
   CHECK_FALSE(f.views.resolve_derivation(d.id));
   CHECK_FALSE(f.views.select(f.expression));
@@ -803,7 +802,7 @@ TEST_CASE("quest prefixes reject invalid and ambiguous values", "[quest]") {
     const auto expression = views.expression_from_sources(
         {std::format("rules/repo/file-{}.md@latest", index)});
     REQUIRE(expression);
-    const auto definition = views.define_quest(*expression, "", "");
+    const auto definition = views.define_quest(*expression);
     REQUIRE(definition);
     ids_by_first_digit[definition->ir_hash.front()].push_back(
         definition->ir_hash);
@@ -832,7 +831,8 @@ TEST_CASE("quest listing tolerates absent history but rejects bad metadata",
   const auto expression =
       views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
   REQUIRE(expression);
-  const auto definition = views.define_quest(*expression, "metadata", "");
+  const auto definition =
+      views.define_quest(*expression, {.intent = "metadata", .name = {}});
   REQUIRE(definition);
   const auto without_history = views.list_quests();
   REQUIRE(without_history);
@@ -862,7 +862,8 @@ TEST_CASE("quest resolution rejects tampered persisted IR", "[quest]") {
   const auto expression =
       views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
   REQUIRE(expression);
-  const auto definition = views.define_quest(*expression, "metadata", "");
+  const auto definition =
+      views.define_quest(*expression, {.intent = "metadata", .name = {}});
   REQUIRE(definition);
 
   const fs::path ir_path = definition->quest_dir / "ir.json";
@@ -910,7 +911,7 @@ TEST_CASE(
   const auto lines = jsonl_lines(definition->quest_dir / "history.jsonl");
   REQUIRE(lines.size() == 2);
   for (const auto &line : lines) {
-    CHECK(json_string_field(line, "schema") == "memix.quest.resolution.v2");
+    CHECK(json_string_field(line, "schema") == "memix.quest.resolution.v1");
     CHECK(json_string_field(line, "kind") == "environment");
     CHECK(json_string_field(line, "id") == result->result.id);
     CHECK_FALSE(line.contains("derivation_id"));
@@ -926,16 +927,16 @@ TEST_CASE("cat ls and tree append typed derivation receipts only after success",
   REQUIRE(inspected);
   CHECK(f.views.quest_stats(d.ir_hash)->read_count == 0);
   REQUIRE(f.views.read_output(reference(d), "rules/repo/AGENTS.md"));
-  REQUIRE(f.views.derivation_tree(d.id, {.path = "rules", .depth = 1}));
+  REQUIRE(f.views.view_tree(reference(d), {.path = "rules", .depth = 1}));
   REQUIRE(f.views.view_ls(reference(d), "rules"));
   CHECK_FALSE(f.views.read_output(reference(d), "../escape"));
   CHECK_FALSE(f.views.read_output(reference(d), "rules/missing"));
   CHECK_FALSE(f.views.view_ls(reference(d), "rules/repo/AGENTS.md"));
-  CHECK_FALSE(f.views.derivation_tree(d.id, {.path = "missing", .depth = {}}));
+  CHECK_FALSE(f.views.view_tree(reference(d), {.path = "missing", .depth = {}}));
   const auto lines = jsonl_lines(receipts_path(f.root, d.ir_hash));
   REQUIRE(lines.size() == 3);
   for (const auto &line : lines) {
-    CHECK(json_string_field(line, "schema") == "memix.quest.receipt.v2");
+    CHECK(json_string_field(line, "schema") == "memix.quest.receipt.v1");
     CHECK(json_string_field(line, "kind") == "derivation");
     CHECK(json_string_field(line, "id") == d.id);
     CHECK_FALSE(line.contains("environment_id"));
@@ -963,7 +964,7 @@ TEST_CASE("multi-binding environment consumption belongs only to its "
        {.mount = "b", .derivation_id = second.id, .output_role = "file_tree"}});
   REQUIRE(e);
   REQUIRE(f.views.read_output(reference(*e), "b/rules/repo/AGENTS.md"));
-  REQUIRE(f.views.environment_tree(e->id));
+  REQUIRE(f.views.view_tree(reference(*e)));
   REQUIRE(f.views.view_ls(reference(*e)));
   REQUIRE(f.views.activate(
       e->id, {.profile = "owner", .into = f.directory.path() / "memory"}));
@@ -1112,7 +1113,7 @@ TEST_CASE("quest stats aggregate reads across derivation resolutions",
   QuestFixture f;
   const auto a = f.select();
   REQUIRE(f.views.read_output(reference(a), "rules/repo/AGENTS.md"));
-  REQUIRE(f.views.derivation_tree(a.id));
+  REQUIRE(f.views.view_tree(reference(a)));
   f.update("two\n");
   const auto next = f.views.resolve_quest(a.ir_hash);
   REQUIRE(next);
@@ -1168,7 +1169,7 @@ TEST_CASE(
   REQUIRE(f.views.quest_stats(d.ir_hash)->read_count == 1);
   const auto path = receipts_path(f.root, d.ir_hash);
   const std::string prefix = std::format(
-      R"({{"schema":"memix.quest.receipt.v2","at":"2000-01-01T00:00:00Z","result":{{"kind":"derivation","id":"{}"}})",
+      R"({{"schema":"memix.quest.receipt.v1","at":"2000-01-01T00:00:00Z","result":{{"kind":"derivation","id":"{}"}})",
       d.id);
   const std::vector<std::string> invalid{
       R"({"at":"2000-01-01T00:00:00Z","operation":"cat"})"
@@ -1189,7 +1190,7 @@ TEST_CASE(
           + R"(,"operation":"activate","profile":"p","generation":1,"mode":"link","via":"activate"})"
             "\n",
       std::format(
-          R"({{"schema":"memix.quest.receipt.v2","at":"2000-01-01T00:00:00Z","operation":"cat","result":{{"kind":"environment","id":"{}"}},"path":"rules/repo/AGENTS.md"}})"
+          R"({{"schema":"memix.quest.receipt.v1","at":"2000-01-01T00:00:00Z","operation":"cat","result":{{"kind":"environment","id":"{}"}},"path":"rules/repo/AGENTS.md"}})"
           "\n",
           d.id),
   };
@@ -1315,7 +1316,8 @@ TEST_CASE("concurrent quest definitions atomically publish complete metadata",
   const auto expression =
       views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
   REQUIRE(expression);
-  const auto initial = views.define_quest(*expression, "initial", "initial");
+  const auto initial = views.define_quest(
+      *expression, {.intent = "initial", .name = "initial"});
   REQUIRE(initial);
 
   std::atomic<int> ready = 0;
@@ -1333,8 +1335,9 @@ TEST_CASE("concurrent quest definitions atomically publish complete metadata",
       }
       const memix::ViewService thread_views{memix::Store(store_root)};
       results.at(static_cast<std::size_t>(index)) = thread_views.define_quest(
-          *expression, std::format("intent-{}", index),
-          std::format("name-{}", index));
+          *expression,
+          {.intent = std::format("intent-{}", index),
+           .name = std::format("name-{}", index)});
       completed.fetch_add(1, std::memory_order_acq_rel);
     });
   }
@@ -1393,7 +1396,8 @@ TEST_CASE("concurrent define and annotated build preserve quest metadata and "
   const auto expression =
       views.expression_from_sources({"rules/repo/AGENTS.md@latest"});
   REQUIRE(expression);
-  const auto initial = views.define_quest(*expression, "initial", "initial");
+  const auto initial = views.define_quest(
+      *expression, {.intent = "initial", .name = "initial"});
   REQUIRE(initial);
 
   std::atomic<int> ready = 0;
@@ -1406,8 +1410,8 @@ TEST_CASE("concurrent define and annotated build preserve quest metadata and "
       std::this_thread::yield();
     }
     const memix::ViewService thread_views{memix::Store(store_root)};
-    defined =
-        thread_views.define_quest(*expression, "define-intent", "define-name");
+    defined = thread_views.define_quest(
+        *expression, {.intent = "define-intent", .name = "define-name"});
   });
   std::thread builder([&]() {
     ready.fetch_add(1, std::memory_order_acq_rel);
@@ -1499,7 +1503,7 @@ TEST_CASE("concurrent quest reads append complete receipt lines",
       jsonl_lines(receipts_path(store_root, environment->ir_hash));
   REQUIRE(receipts.size() == static_cast<std::size_t>(reader_count));
   for (const std::string &receipt : receipts) {
-    REQUIRE(json_string_field(receipt, "schema") == "memix.quest.receipt.v2");
+    REQUIRE(json_string_field(receipt, "schema") == "memix.quest.receipt.v1");
     REQUIRE(json_string_field(receipt, "operation") == "cat");
     REQUIRE(json_string_field(receipt, "kind") == "derivation");
     REQUIRE(json_string_field(receipt, "id") == environment->id);
@@ -1571,7 +1575,7 @@ TEST_CASE("concurrent quest builds append complete history lines", "[quest]") {
     const std::size_t end = remaining.find('\n');
     REQUIRE(end != std::string_view::npos);
     const std::string_view line = remaining.substr(0, end);
-    REQUIRE(json_string_field(line, "schema") == "memix.quest.resolution.v2");
+    REQUIRE(json_string_field(line, "schema") == "memix.quest.resolution.v1");
     REQUIRE(json_string_field(line, "kind") == "derivation");
     REQUIRE(json_string_field(line, "id") == derivation_id);
     REQUIRE_FALSE(line.contains("environment_id"));
