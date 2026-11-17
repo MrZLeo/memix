@@ -104,7 +104,7 @@ Codex, OpenCode, and Pi normally share `.agents/skills/memix-cli`; changing that
 path affects all its readers. Agent-home overrides and existing native copies
 are respected. Setup updates managed files but reports foreign conflicts;
 `--force` is an explicit setup-only override for regular files. Remove preserves
-foreign bundles and extra user files. No hooks,settings, or memory Stores are 
+foreign bundles and extra user files. No hooks, settings, or memory Stores are
 changed. See `memix skill --help` for options and the
 [agent installation guide](AGENT_INSTALL.md) for the handoff and verification.
 
