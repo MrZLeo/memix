@@ -36,7 +36,7 @@ main() {
           --version) version=$2 ;;
           --bin-dir) install_dir=$2 ;;
           --agent)
-            case $2 in claude|codex|opencode|pi|dsh) ;; *) die "Unknown agent: $2" ;; esac
+            case $2 in claude|codex|opencode|pi|dsh|opendesk) ;; *) die "Unknown agent: $2" ;; esac
             skill_args+=(--agent "$2") ;;
         esac
         shift 2 ;;

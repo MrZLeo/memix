@@ -3,7 +3,7 @@
 param(
     [string] $Version = 'latest',
     [string] $InstallDir = (Join-Path $HOME '.local/bin'),
-    [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh')]
+    [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh', 'opendesk')]
     [string[]] $Agent = @(),
     [switch] $Project,
     [switch] $Help
@@ -117,7 +117,7 @@ function Invoke-MemixInstaller {
     param(
         [string] $Version = 'latest',
         [string] $InstallDir = (Join-Path $HOME '.local/bin'),
-        [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh')]
+        [ValidateSet('claude', 'codex', 'opencode', 'pi', 'dsh', 'opendesk')]
         [string[]] $Agent = @(),
         [switch] $Project,
         [switch] $Help

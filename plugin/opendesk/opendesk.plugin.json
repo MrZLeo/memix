@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "memix",
+  "displayName": "Memix",
+  "description": {
+    "en": "Durable, reproducible memory for AI agents",
+    "zh": "面向 AI Agent 的持久化、可复现记忆"
+  },
+  "version": "0.7.0",
+  "entry": "./index.mjs",
+  "apiVersion": 1,
+  "minOpenDeskVersion": "0.4.1",
+  "platforms": ["darwin", "linux", "win32"],
+  "capabilities": ["skill", "hook"],
+  "resources": {
+    "skills": ["./skills/memix-cli"]
+  }
+}

@@ -108,7 +108,8 @@ class InstallerTests(unittest.TestCase):
             if tool:
                 (self.tools / name).symlink_to(tool)
         self.env = dict(os.environ, HOME=str(self.home), PATH=str(self.tools),
-                        CALL_LOG=str(self.log), FIXTURE=str(self.fixture), SETUP_MARKER=str(self.marker))
+                        PYTHONDONTWRITEBYTECODE="1", CALL_LOG=str(self.log),
+                        FIXTURE=str(self.fixture), SETUP_MARKER=str(self.marker))
         for key in list(self.env):
             if key.startswith("FAKE_"):
                 del self.env[key]
@@ -353,7 +354,8 @@ class InstallerTests(unittest.TestCase):
     def test_real_cli_installs_only_inside_sandbox(self):
         self.env["FIXTURE"] = str(Path(os.environ["MEMIX_TEST_BINARY"]).resolve())
         for variable in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR",
-                         "DSH_HOME", "XDG_CONFIG_HOME", "MEMIX_STORE_ROOT"):
+                         "DSH_HOME", "OPENDESK_CONFIG_DIRECTORY", "XDG_CONFIG_HOME",
+                         "MEMIX_STORE_ROOT"):
             self.env.pop(variable, None)
         code, output = self.run_installer(["y", "y"], ["--agent", "pi"])
         self.assertEqual(code, 0, output)
