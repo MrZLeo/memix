@@ -6,7 +6,7 @@
     "en": "Durable, reproducible memory for AI agents",
     "zh": "面向 AI Agent 的持久化、可复现记忆"
   },
-  "version": "0.7.0",
+  "version": "0.8.0",
   "entry": "./index.mjs",
   "apiVersion": 1,
   "minOpenDeskVersion": "0.4.1",
